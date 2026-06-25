@@ -8,3 +8,7 @@ name = "EvmAbi"
 [[lean_exe]]
 name = "abi-lean"
 root = "Main"
+
+[[lean_exe]]
+name = "abi-lean-test"
+root = "EvmAbi.Test"

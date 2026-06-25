@@ -99,14 +99,19 @@ def natToBytes (v : Nat) : ByteArray :=
 def uint256ToBytes (v : Nat) : ByteArray :=
   padLeft (natToBytes v) 32
 
-/-- Encode a signed `Int` with `bits` bits as a 32-byte big-endian two's complement -/
+/-- Encode a signed `Int` with `bits` bits as a 32-byte big-endian two's complement.
+    Sign-extends: negative values padded with 0xFF, non-negative with 0x00. -/
 def intToBytes (v : Int) (bits : Nat) : ByteArray :=
   if bits = 0 then zeros 32 else
     let pow2 := 2 ^ bits
     let unsigned : Nat :=
       if h : v ≥ 0 then v.toNat
       else ((pow2 : Int) + v).toNat
-    padLeft (natToBytes unsigned) 32
+    if v ≥ 0 then
+      padLeft (natToBytes unsigned) 32
+    else
+      let raw := natToBytes unsigned
+      ByteArray.mk (Array.mk (List.replicate (32 - raw.size) 0xFF)) ++ raw
 
 /-- Decode big-endian bytes to a `Nat` -/
 def bytesToNat (b : ByteArray) : Nat :=
