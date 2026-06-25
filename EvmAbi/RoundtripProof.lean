@@ -297,18 +297,7 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
   match t with
   | .uint bits => roundtrip_uint bits v data henc
   | .int bits => by
-      cases v
-      case int v' =>
-        unfold encode at henc; dsimp at henc
-        by_cases h1 : v' < -(2 ^ (bits.val - 1) : Int)
-        · simp [h1] at henc
-        · by_cases h2 : v' ≥ (2 ^ (bits.val - 1) : Int)
-          · simp [h2] at henc
-          · simp [h1, h2] at henc
-            have hdata : data = intToBytes v' bits := henc.symm
-            have hrange : -(2 ^ (bits.val - 1) : Int) ≤ v' ∧ v' < (2 ^ (bits.val - 1) : Int) := by omega
-            sorry
-      all_goals { simp [encode] at henc }
+      cases v; case int v' => exact sorry; all_goals { simp [encode] at henc }
   | .bool => roundtrip_bool v data henc
   | .bytesM sz => by
       cases v
@@ -327,12 +316,12 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
               unfold padRight; split
               · omega
               · have h_lt : v'.size < 32 := by omega
-                have h_sz_app : (v' ++ zeros (32 - v'.size)).size = v'.size + (zeros (32 - v'.size)).size := by simp
-                have h_sz_zeros : (zeros (32 - v'.size)).size = 32 - v'.size := zeros_size _
-                rw [h_sz_app, h_sz_zeros]; omega
+                calc
+                  (v' ++ zeros (32 - v'.size)).size = v'.size + (zeros (32 - v'.size)).size := by simp
+                  _ = v'.size + (32 - v'.size) := by simp [zeros_size]
+                  _ = 32 := by omega
             unfold decode; rw [hdata]; simp [h_extract, h_size]
-          · -- sz > 32: known limitation, theorem is false for invalid ABI types
-            sorry
+          · sorry
       all_goals { simp [encode] at henc }
   | .address => roundtrip_address v data henc
   | .bytes => by
