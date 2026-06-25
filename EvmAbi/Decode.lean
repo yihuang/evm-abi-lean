@@ -1,8 +1,5 @@
 /-
 # ABI Decoding
-
-Implements Ethereum ABI decoding per the Solidity ABI specification.
-This is the inverse of the encoding defined in `Encode.lean`.
 -/
 
 import EvmAbi.ABI
@@ -11,12 +8,6 @@ open EvmAbi.ABI
 
 namespace EvmAbi.ABI.Decode
 
-----------------------------------------------------------------------
--- Dynamic bytes (standalone, used by decode)
-----------------------------------------------------------------------
-
-/-- Decode dynamic bytes: offset starts at a uint256 length followed by the data.
-    Returns (bytes value, next offset = start + 32 + roundUp32(len)). -/
 def decodeDynamicBytes (data : ByteArray) (offset : Nat) : Except String (ABIValue × Nat) :=
   if offset + 32 > data.size then
     Except.error s!"bytes: data too short for length at offset {offset}"
@@ -30,7 +21,6 @@ def decodeDynamicBytes (data : ByteArray) (offset : Nat) : Except String (ABIVal
       let consumed := 32 + roundUp32 len
       Except.ok (.bytes val, offset + consumed)
 
-/-- Decode dynamic string: same as bytes but decoded as UTF-8. -/
 def decodeDynamicString (data : ByteArray) (offset : Nat) : Except String (ABIValue × Nat) :=
   if offset + 32 > data.size then
     Except.error s!"string: data too short for length at offset {offset}"
@@ -45,45 +35,36 @@ def decodeDynamicString (data : ByteArray) (offset : Nat) : Except String (ABIVa
       let consumed := 32 + roundUp32 len
       Except.ok (.string s, offset + consumed)
 
-/-- Compute the byte size of a fixed-size array in encoding (for forward skip). -/
 def computeFixedArraySize (elemType : ABIType) (n : Nat) : Nat :=
   if !isDynamic elemType then n * 32 else n * 32
 
-----------------------------------------------------------------------
--- Mutually recursive decoding functions
-----------------------------------------------------------------------
-
 mutual
 
-  /-- Decode a single ABI value from `data` starting at `offset`.
-      Returns the decoded value and the next offset (one past the consumed bytes). -/
   partial def decode (type : ABIType) (data : ByteArray) (offset : Nat) : Except String (ABIValue × Nat) :=
     match type with
     | .uint bits =>
-      if bits < 8 || bits % 8 ≠ 0 then
-        Except.error s!"uint{bits}: bits must be a multiple of 8 and ≥ 8"
-      else if offset + 32 > data.size then
-        Except.error s!"uint{bits}: data too short at offset {offset}"
+      let b := bits.val
+      if offset + 32 > data.size then
+        Except.error s!"uint{b}: data too short at offset {offset}"
       else
         let rawVal := bytesToNat (data.extract offset (offset + 32))
-        if rawVal ≥ 2 ^ bits then
-          Except.error s!"uint{bits}: decoded value {rawVal} exceeds 2^{bits}"
+        if rawVal ≥ 2 ^ b then
+          Except.error s!"uint{b}: decoded value {rawVal} exceeds 2^{b}"
         else
           Except.ok (.uint rawVal, offset + 32)
 
     | .int bits =>
-      if bits < 8 || bits % 8 ≠ 0 then
-        Except.error s!"int{bits}: bits must be a multiple of 8 and ≥ 8"
-      else if offset + 32 > data.size then
-        Except.error s!"int{bits}: data too short at offset {offset}"
+      let b := bits.val
+      if offset + 32 > data.size then
+        Except.error s!"int{b}: data too short at offset {offset}"
       else
         let rawVal := bytesToNat (data.extract offset (offset + 32))
-        let masked := rawVal % (2 ^ bits)  -- mask to bits bits for sign check
-        let half := 2 ^ (bits - 1)
+        let masked := rawVal % (2 ^ b)
+        let half := 2 ^ (b - 1)
         if masked < half then
           Except.ok (.int (Int.ofNat masked), offset + 32)
         else
-          Except.ok (.int (-(Int.ofNat (2 ^ bits - masked))), offset + 32)
+          Except.ok (.int (-(Int.ofNat (2 ^ b - masked))), offset + 32)
 
     | .bool =>
       if offset + 32 > data.size then
@@ -111,11 +92,8 @@ mutual
         let val := data.extract (offset + 12) (offset + 32)
         Except.ok (.address val, offset + 32)
 
-    | .bytes =>
-      decodeDynamicBytes data offset
-
-    | .string =>
-      decodeDynamicString data offset
+    | .bytes => decodeDynamicBytes data offset
+    | .string => decodeDynamicString data offset
 
     | .array elemType optSize =>
       match optSize with
@@ -124,14 +102,13 @@ mutual
         | Except.ok (vals, _) =>
           Except.ok (.array vals, offset + computeFixedArraySize elemType size)
         | Except.error e => Except.error e
-      | none =>
-        decodeDynamicArray elemType data offset
+      | none => decodeDynamicArray elemType data offset
 
     | .tuple elems =>
       match decodeTupleElems elems data offset with
       | Except.ok (vals, endOff) => Except.ok (.tuple vals, endOff)
       | Except.error e => Except.error e
-  /-- Decode a fixed-size array of `n` elements of type `elemType` from `data` at `offset`. -/
+
   partial def decodeFixedArray (elemType : ABIType) (n : Nat) (data : ByteArray) (offset : Nat)
       : Except String (List ABIValue × Nat) :=
     if !isDynamic elemType then
@@ -161,7 +138,6 @@ mutual
             | Except.error e => Except.error e
       goDynamic 0 [] (offset + headAreaSize)
 
-  /-- Decode a dynamic array: reads length then elements. -/
   partial def decodeDynamicArray (elemType : ABIType) (data : ByteArray) (offset : Nat)
       : Except String (ABIValue × Nat) :=
     if offset + 32 > data.size then
@@ -190,8 +166,6 @@ mutual
         Except.ok (.array vals, offset + totalConsumed)
       | Except.error e => Except.error e
 
-  /-- Decode a tuple with head/tail mechanism.
-      Returns (list of values, next offset past the entire tuple). -/
   partial def decodeTupleElems (types : List ABIType) (data : ByteArray) (offset : Nat)
       : Except String (List ABIValue × Nat) :=
     let len := types.length
@@ -233,12 +207,6 @@ mutual
 
 end
 
-----------------------------------------------------------------------
--- Convenience: decode a list of arguments from calldata
-----------------------------------------------------------------------
-
-/-- Decode a list of types from the data as a tuple of args.
-    Equivalent to `decode (.tuple types) data offset`. -/
 def decodeArgs (types : List ABIType) (data : ByteArray) (offset : Nat := 0) : Except String (List ABIValue) :=
   match decodeTupleElems types data offset with
   | Except.ok (vals, _) => Except.ok vals

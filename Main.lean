@@ -31,7 +31,7 @@ def main : IO Unit := do
 
   -- ── Static types ──
   IO.println "1) Static uint256 encoding:"
-  tryEncode (.uint 256) (.uint 42)
+  tryEncode (.uint .w256) (.uint 42)
 
   IO.println "\n2) Bool encoding:"
   tryEncode .bool (.bool true)
@@ -48,31 +48,31 @@ def main : IO Unit := do
 
   -- ── Arrays ──
   IO.println "\n6) Fixed array uint256[3]:"
-  tryEncode (.array (.uint 256) (some 3))
+  tryEncode (.array (.uint .w256) (some 3))
     (.array [.uint 1, .uint 2, .uint 3])
 
   IO.println "\n7) Dynamic array uint256[]:"
-  tryEncode (.array (.uint 256) none)
+  tryEncode (.array (.uint .w256) none)
     (.array [.uint 10, .uint 20])
 
   -- ── Tuples ──
   IO.println "\n8) Tuple (uint256, address, bool):"
-  tryEncode (.tuple [.uint 256, .address, .bool])
+  tryEncode (.tuple [.uint .w256, .address, .bool])
     (.tuple [.uint 123, .address (bytes (List.replicate 20 0xAB)), .bool false])
 
   -- ── Roundtrip: encode then decode ──
   IO.println "\n9) Roundtrip uint256(42):"
-  match encode (.uint 256) (.uint 42) with
+  match encode (.uint .w256) (.uint 42) with
   | Except.ok encoded =>
     IO.println s!"  encoded = {bytesToHex encoded}"
-    match decode (.uint 256) encoded 0 with
+    match decode (.uint .w256) encoded 0 with
     | Except.ok (decoded, _) =>
       IO.println s!"  decoded = {decoded}"
     | Except.error e => IO.println s!"  decode error: {e}"
   | Except.error e => IO.println s!"  encode error: {e}"
 
   IO.println "\n10) Roundtrip tuple (uint256, bytes):"
-  let tupleType := .tuple [.uint 256, .bytes]
+  let tupleType := .tuple [.uint .w256, .bytes]
   let tupleVal := .tuple [.uint 999, .bytes (bytes [0xDE, 0xAD, 0xBE, 0xEF])]
   match encode tupleType tupleVal with
   | Except.ok enc2 =>
