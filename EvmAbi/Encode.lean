@@ -51,7 +51,7 @@ mutual
     | .string, .string v =>
       let utf8 := v.toUTF8
       Except.ok (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size))
-    | .array elemType size, .array vals =>
+    | .array elemType _size, .array vals =>
       if !isDynamic elemType then encodeFixedArrayStatic elemType vals ByteArray.empty
       else encodeFixedArrayDynamic elemType vals
     | .tuple elems, .tuple vals =>

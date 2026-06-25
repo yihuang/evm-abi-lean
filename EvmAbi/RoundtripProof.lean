@@ -206,7 +206,7 @@ theorem padLeft_extract_address (b : ByteArray) (h20 : b.size = 20) : (padLeft b
   have hpad : padLeft b 32 = zeros 12 ++ b := by
     unfold padLeft
     have h_not : ¬ 32 ≤ b.size := by omega
-    simp [h20, h_not]
+    simp [h20]
   rw [hpad]
   apply ByteArray.ext
   apply Array.ext
@@ -407,7 +407,7 @@ theorem fromUTF8!_toUTF8 (s : String) : String.fromUTF8! (s.toUTF8) = s := by
   calc
     String.fromUTF8 (s.toUTF8) h_valid = String.ofByteArray (s.toUTF8) h_valid := rfl
     _ = String.ofByteArray (s.toByteArray) s.isValidUTF8 := by
-      simp [h_eq_byte, h_eq_valid]
+      rw [h_eq_byte, h_eq_valid]
     _ = s := rfl
 
 theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .string (ABIValue.string v') = Except.ok data) :
@@ -514,7 +514,7 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
   | .array elemType sizeOpt => by
       cases v
       case array vals =>
-        unfold encode at henc; simp [encode] at henc
+        unfold encode at henc; simp at henc
         by_cases h_dyn : isDynamic elemType
         · sorry
         · sorry

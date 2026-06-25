@@ -224,7 +224,7 @@ mutual
             | let total := List.foldl (fun acc t => acc + abiSize t) 0 types
               have h_mem : types.get ⟨i, hi⟩ ∈ types := by
                 have := List.getElem_mem (l := types) (n := i) (h := hi)
-                simpa using this
+                exact this
               have h_sz_le : abiSize (types.get ⟨i, hi⟩) ≤ total :=
                 mem_foldl_le (types.get ⟨i, hi⟩) types h_mem
               by_cases h_lt : abiSize (types.get ⟨i, hi⟩) < total
