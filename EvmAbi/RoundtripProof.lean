@@ -342,7 +342,7 @@ theorem roundtrip_int (bits : BitSize) (v' : Int) (data : ByteArray) (henc : enc
         have hsize32 : (intToBytes v' bits).size = 32 := by
           calc
             (intToBytes v' bits).size = (uint256ToBytes v'.toNat).size := by
-              simp [intToBytes, hv_nonneg]
+              simp [intToBytes, uint256ToBytes, hv_nonneg]
             _ = 32 := uint256ToBytes_size v'.toNat (natToBytes_size_bound v'.toNat hv_lt_256)
         have h_self : (intToBytes v' bits).extract 0 32 = intToBytes v' bits := by
           rw [← hsize32, extract_self]
@@ -352,19 +352,18 @@ theorem roundtrip_int (bits : BitSize) (v' : Int) (data : ByteArray) (henc : enc
           calc
             bytesToNat (intToBytes v' bits) % 2 ^ bits.val
                 = bytesToNat (uint256ToBytes v'.toNat) % 2 ^ bits.val := by
-              simp [intToBytes, hv_nonneg]
+              simp [intToBytes, uint256ToBytes, hv_nonneg]
             _ = v'.toNat % 2 ^ bits.val := by
               rw [bytesToNat_uint256ToBytes v'.toNat hv_lt_256]
             _ = v'.toNat := by
-              have : v'.toNat < 2 ^ bits.val := by
-                have : v'.toNat < 2 ^ (bits.val - 1) := hv_lt_nat
+              have h_lt_pow : v'.toNat < 2 ^ bits.val := by
+                have h_pow : 2 ^ (bits.val - 1) ≤ 2 ^ bits.val :=
+                  Nat.pow_le_pow_right (by decide) (Nat.sub_le bits.val 1)
                 omega
-              omega
+              exact Nat.mod_eq_of_lt h_lt_pow
         unfold decode; rw [hdata]
-        have hb : bits.val = bits.val := rfl
-        simp [hsize32, h_val, hb]
-        have h_half : v'.toNat < 2 ^ (bits.val - 1) := hv_lt_nat
-        simp [h_half]
+        simp [hsize32, h_val, hv_lt_nat]
+        omega
       · sorry
 theorem roundtrip_bytes_full (v' : ByteArray) (data : ByteArray) (henc : encode .bytes (ABIValue.bytes v') = Except.ok data) :
     decode .bytes data 0 = Except.ok (ABIValue.bytes v', data.size) := by
@@ -388,7 +387,14 @@ theorem roundtrip_bytes_full (v' : ByteArray) (data : ByteArray) (henc : encode 
     have h_extract_val : data.extract 32 (32 + v'.size) = v' := by
       rw [hdata, roundtrip_bytes_val v' hv256]
     unfold decode; rw [hdata]; unfold decodeDynamicBytes
-    simp [ha_sz, h_pad_sz, h_len, h_extract_val]
+    have h_size : (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).size = 32 + roundUp32 v'.size := by
+      simp [ha_sz, h_pad_sz]
+    have h1 : ¬ (32 > 32 + roundUp32 v'.size) := by omega
+    have h_len' : bytesToNat ((uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract 0 32) = v'.size := by
+      simpa [hdata] using h_len
+    have h_extract_val' : (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract 32 (32 + v'.size) = v' := by
+      simpa [hdata] using h_extract_val
+    simp [h_size, h1, h_len', h_extract_val', h_roundUp_ge]
   · sorry
 theorem fromUTF8!_toUTF8 (s : String) : String.fromUTF8! (s.toUTF8) = s := by
   have h_valid : (s.toUTF8).IsValidUTF8 := by
@@ -429,7 +435,15 @@ theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .s
     unfold decode; rw [hdata]; unfold decodeDynamicString
     have h_from_utf8 : String.fromUTF8! utf8 = v' := by
       dsimp [utf8]; exact fromUTF8!_toUTF8 v'
-    simp [ha_sz, h_pad_sz, h_len, h_extract_val, h_from_utf8]
+    have h_size : (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size)).size = 32 + roundUp32 utf8.size := by
+      simp [ha_sz, h_pad_sz]
+    have h1 : ¬ (32 > 32 + roundUp32 utf8.size) := by omega
+    have h2 : ¬ (32 + utf8.size > 32 + roundUp32 utf8.size) := by omega
+    have h_len' : bytesToNat ((uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size)).extract 0 32) = utf8.size := by
+      simpa [hdata] using h_len
+    have h_extract_val' : (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size)).extract 32 (32 + utf8.size) = utf8 := by
+      simpa [hdata] using h_extract_val
+    simp [h_size, h1, h_len', h_extract_val', h_from_utf8, h_roundUp_ge]
   · sorry
 theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data) :
     decode t data 0 = Except.ok (v, data.size) :=
