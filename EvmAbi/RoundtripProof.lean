@@ -292,12 +292,159 @@ theorem roundtrip_address (v : ABIValue) (data : ByteArray) (henc : encode .addr
   case array vals => simp [encode] at henc
   case tuple vals => simp [encode] at henc
 
+theorem padRight_extract_self (b : ByteArray) (n : Nat) (h : b.size ≤ n) : (padRight b n).extract 0 b.size = b := by
+  unfold padRight; split
+  · exact extract_self b
+  · exact extract_first_n b (zeros (n - b.size))
+
+theorem extract_after_suffix (a b : ByteArray) (k : Nat) : (a ++ b).extract a.size (a.size + k) = b.extract 0 k := by
+  apply ByteArray.ext; simp
+
+theorem roundtrip_bytes_val (v' : ByteArray) (hv256 : v'.size < 2 ^ 256) :
+    (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract 32 (32 + v'.size) = v' := by
+  have ha_sz : (uint256ToBytes v'.size).size = 32 :=
+    uint256ToBytes_size v'.size (natToBytes_size_bound v'.size hv256)
+  have h_val_sz : v'.size ≤ roundUp32 v'.size := by
+    have : roundUp32 v'.size = ((v'.size + 31) / 32) * 32 := rfl; omega
+  have h_sub : (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract
+    (uint256ToBytes v'.size).size ((uint256ToBytes v'.size).size + v'.size) = 
+    (padRight v' (roundUp32 v'.size)).extract 0 v'.size :=
+    extract_after_suffix (uint256ToBytes v'.size) (padRight v' (roundUp32 v'.size)) v'.size
+  calc
+    (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract 32 (32 + v'.size)
+        = (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract
+            (uint256ToBytes v'.size).size ((uint256ToBytes v'.size).size + v'.size) := by simp [ha_sz]
+    _ = (padRight v' (roundUp32 v'.size)).extract 0 v'.size := h_sub
+    _ = v' := padRight_extract_self v' (roundUp32 v'.size) h_val_sz
+
+theorem roundtrip_int (bits : BitSize) (v' : Int) (data : ByteArray) (henc : encode (.int bits) (ABIValue.int v') = Except.ok data) :
+    decode (.int bits) data 0 = Except.ok (ABIValue.int v', data.size) := by
+  unfold encode at henc; dsimp at henc
+  by_cases h1 : v' < -(2 ^ (bits.val - 1) : Int)
+  · simp [h1] at henc
+  · by_cases h2 : v' ≥ (2 ^ (bits.val - 1) : Int)
+    · simp [h2] at henc
+    · simp [h1, h2] at henc
+      have hdata : data = intToBytes v' bits := henc.symm
+      have hrange : -(2 ^ (bits.val - 1) : Int) ≤ v' ∧ v' < (2 ^ (bits.val - 1) : Int) := by omega
+      have hbits256 : bits.val ≤ 256 := by cases bits <;> decide
+      by_cases hv_nonneg : v' ≥ 0
+      · have hv_lt_nat : v'.toNat < 2 ^ (bits.val - 1) := by
+          apply Int.ofNat_lt.mp
+          calc
+            (v'.toNat : Int) = v' := by rw [Int.toNat_of_nonneg hv_nonneg]
+            _ < (2 ^ (bits.val - 1) : Int) := hrange.2
+        have hv_lt_256 : v'.toNat < 2 ^ 256 := by
+          have : v'.toNat < 2 ^ (bits.val - 1) := hv_lt_nat
+          have h_pow : 2 ^ (bits.val - 1) ≤ 2 ^ 256 :=
+            Nat.pow_le_pow_right (by omega) (by omega)
+          omega
+        have hsize32 : (intToBytes v' bits).size = 32 := by
+          calc
+            (intToBytes v' bits).size = (uint256ToBytes v'.toNat).size := by
+              simp [intToBytes, hv_nonneg]
+            _ = 32 := uint256ToBytes_size v'.toNat (natToBytes_size_bound v'.toNat hv_lt_256)
+        have h_self : (intToBytes v' bits).extract 0 32 = intToBytes v' bits := by
+          rw [← hsize32, extract_self]
+
+        have h_val : bytesToNat ((intToBytes v' bits).extract 0 32) % 2 ^ bits.val = v'.toNat := by
+          rw [h_self]
+          calc
+            bytesToNat (intToBytes v' bits) % 2 ^ bits.val
+                = bytesToNat (uint256ToBytes v'.toNat) % 2 ^ bits.val := by
+              simp [intToBytes, hv_nonneg]
+            _ = v'.toNat % 2 ^ bits.val := by
+              rw [bytesToNat_uint256ToBytes v'.toNat hv_lt_256]
+            _ = v'.toNat := by
+              have : v'.toNat < 2 ^ bits.val := by
+                have : v'.toNat < 2 ^ (bits.val - 1) := hv_lt_nat
+                omega
+              omega
+        unfold decode; rw [hdata]
+        have hb : bits.val = bits.val := rfl
+        simp [hsize32, h_val, hb]
+        have h_half : v'.toNat < 2 ^ (bits.val - 1) := hv_lt_nat
+        simp [h_half]
+      · sorry
+theorem roundtrip_bytes_full (v' : ByteArray) (data : ByteArray) (henc : encode .bytes (ABIValue.bytes v') = Except.ok data) :
+    decode .bytes data 0 = Except.ok (ABIValue.bytes v', data.size) := by
+  simp [encode] at henc
+  have hdata : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size) := henc.symm
+  by_cases hv256 : v'.size < 2 ^ 256
+  · have ha_sz : (uint256ToBytes v'.size).size = 32 :=
+      uint256ToBytes_size v'.size (natToBytes_size_bound v'.size hv256)
+    have h_roundUp_ge : v'.size ≤ roundUp32 v'.size := by
+      have : roundUp32 v'.size = ((v'.size + 31) / 32) * 32 := rfl
+      omega
+    have h_pad_sz : (padRight v' (roundUp32 v'.size)).size = roundUp32 v'.size := by
+      unfold padRight; split
+      · omega
+      · simp [zeros_size]; omega
+    have h_extract_len : data.extract 0 32 = uint256ToBytes v'.size := by
+      rw [hdata, ← ha_sz]
+      exact extract_first_n (uint256ToBytes v'.size) (padRight v' (roundUp32 v'.size))
+    have h_len : bytesToNat (data.extract 0 32) = v'.size := by
+      rw [h_extract_len, bytesToNat_uint256ToBytes v'.size hv256]
+    have h_extract_val : data.extract 32 (32 + v'.size) = v' := by
+      rw [hdata, roundtrip_bytes_val v' hv256]
+    unfold decode; rw [hdata]; unfold decodeDynamicBytes
+    simp [ha_sz, h_pad_sz, h_len, h_extract_val]
+  · sorry
+theorem fromUTF8!_toUTF8 (s : String) : String.fromUTF8! (s.toUTF8) = s := by
+  have h_valid : (s.toUTF8).IsValidUTF8 := by
+    refine ByteArray.IsValidUTF8.intro (s.toList) ?_
+    simp
+  unfold String.fromUTF8!
+  rw [dif_pos h_valid]
+  have h_eq_byte : s.toUTF8 = s.toByteArray := by simp
+  have h_eq_valid : h_valid = s.isValidUTF8 := Subsingleton.elim _ _
+  calc
+    String.fromUTF8 (s.toUTF8) h_valid = String.ofByteArray (s.toUTF8) h_valid := rfl
+    _ = String.ofByteArray (s.toByteArray) s.isValidUTF8 := by
+      simp [h_eq_byte, h_eq_valid]
+    _ = s := rfl
+
+theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .string (ABIValue.string v') = Except.ok data) :
+    decode .string data 0 = Except.ok (ABIValue.string v', data.size) := by
+  simp [encode] at henc
+  let utf8 := v'.toUTF8
+  have hdata : data = uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size) := henc.symm
+  by_cases huv256 : utf8.size < 2 ^ 256
+  · have ha_sz : (uint256ToBytes utf8.size).size = 32 :=
+      uint256ToBytes_size utf8.size (natToBytes_size_bound utf8.size huv256)
+    have h_roundUp_ge : utf8.size ≤ roundUp32 utf8.size := by
+      have : roundUp32 utf8.size = ((utf8.size + 31) / 32) * 32 := rfl
+      omega
+    have h_pad_sz : (padRight utf8 (roundUp32 utf8.size)).size = roundUp32 utf8.size := by
+      unfold padRight; split
+      · omega
+      · simp [zeros_size]; omega
+    have h_extract_len : data.extract 0 32 = uint256ToBytes utf8.size := by
+      rw [hdata, ← ha_sz]
+      exact extract_first_n (uint256ToBytes utf8.size) (padRight utf8 (roundUp32 utf8.size))
+    have h_len : bytesToNat (data.extract 0 32) = utf8.size := by
+      rw [h_extract_len, bytesToNat_uint256ToBytes utf8.size huv256]
+    have h_extract_val : data.extract 32 (32 + utf8.size) = utf8 := by
+      rw [hdata, roundtrip_bytes_val utf8 huv256]
+    unfold decode; rw [hdata]; unfold decodeDynamicString
+    have h_from_utf8 : String.fromUTF8! utf8 = v' := by
+      dsimp [utf8]; exact fromUTF8!_toUTF8 v'
+    simp [ha_sz, h_pad_sz, h_len, h_extract_val, h_from_utf8]
+  · sorry
 theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data) :
     decode t data 0 = Except.ok (v, data.size) :=
   match t with
   | .uint bits => roundtrip_uint bits v data henc
   | .int bits => by
-      cases v; case int v' => exact sorry; all_goals { simp [encode] at henc }
+      cases v
+      case int v' => exact roundtrip_int bits v' data henc
+      case uint v' => simp [encode] at henc
+      case bool v' => simp [encode] at henc
+      case bytes v' => simp [encode] at henc
+      case string v' => simp [encode] at henc
+      case address v' => simp [encode] at henc
+      case array _ => simp [encode] at henc
+      case tuple _ => simp [encode] at henc
   | .bool => roundtrip_bool v data henc
   | .bytesM sz => by
       cases v
@@ -322,13 +469,59 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
                   _ = 32 := by omega
             unfold decode; rw [hdata]; simp [h_extract, h_size]
           · sorry
-      all_goals { simp [encode] at henc }
+      case uint v' => simp [encode] at henc
+      case int v' => simp [encode] at henc
+      case bool v' => simp [encode] at henc
+      case string v' => simp [encode] at henc
+      case address v' => simp [encode] at henc
+      case array _ => simp [encode] at henc
+      case tuple _ => simp [encode] at henc
   | .address => roundtrip_address v data henc
   | .bytes => by
-      cases v; case bytes v' => exact sorry; all_goals { simp [encode] at henc }
+      cases v
+      case bytes v' => exact roundtrip_bytes_full v' data henc
+      case uint v' => simp [encode] at henc
+      case int v' => simp [encode] at henc
+      case bool v' => simp [encode] at henc
+      case string v' => simp [encode] at henc
+      case address v' => simp [encode] at henc
+      case array _ => simp [encode] at henc
+      case tuple _ => simp [encode] at henc
   | .string => by
-      cases v; case string v' => exact sorry; all_goals { simp [encode] at henc }
-  | .array _ _ => by
-      cases v; case array _ => exact sorry; all_goals { simp [encode] at henc }
-  | .tuple _ => by
-      cases v; case tuple _ => exact sorry; all_goals { simp [encode] at henc }
+      cases v
+      case string v' => exact roundtrip_string_full v' data henc
+      case uint v' => simp [encode] at henc
+      case int v' => simp [encode] at henc
+      case bool v' => simp [encode] at henc
+      case bytes v' => simp [encode] at henc
+      case address v' => simp [encode] at henc
+      case array _ => simp [encode] at henc
+      case tuple _ => simp [encode] at henc
+  | .array elemType sizeOpt => by
+      cases v
+      case array vals =>
+        unfold encode at henc; simp [encode] at henc
+        by_cases h_dyn : isDynamic elemType
+        · sorry
+        · sorry
+      case uint v' => simp [encode] at henc
+      case int v' => simp [encode] at henc
+      case bool v' => simp [encode] at henc
+      case bytes v' => simp [encode] at henc
+      case string v' => simp [encode] at henc
+      case address v' => simp [encode] at henc
+      case tuple _ => simp [encode] at henc
+  | .tuple elems => by
+      cases v
+      case tuple vals =>
+        unfold encode at henc; dsimp at henc
+        by_cases hl : elems.length ≠ vals.length
+        · simp [hl] at henc
+        · sorry
+      case uint v' => simp [encode] at henc
+      case int v' => simp [encode] at henc
+      case bool v' => simp [encode] at henc
+      case bytes v' => simp [encode] at henc
+      case string v' => simp [encode] at henc
+      case address v' => simp [encode] at henc
+      case array _ => simp [encode] at henc
