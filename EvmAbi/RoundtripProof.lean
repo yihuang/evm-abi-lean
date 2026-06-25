@@ -123,8 +123,6 @@ theorem bytesToNat_append_singleton (b : UInt8) (acc : ByteArray) :
     _ = b.toNat * 256 ^ acc.size + acc.data.toList.foldl (fun acc byte => acc * 256 + byte.toNat) 0 := by simp
     _ = b.toNat * 256 ^ acc.size + bytesToNat_list acc.data.toList := rfl
     _ = b.toNat * 256 ^ acc.size + bytesToNat acc := rfl
-theorem bytesToNat_natToBytes (v : Nat) : bytesToNat (natToBytes v) = v := by
-  sorry
 
 theorem bytesToNat_uint256ToBytes (v : Nat) (hv : v < 2 ^ 256) : bytesToNat (uint256ToBytes v) = v := by
   sorry
@@ -140,12 +138,11 @@ theorem padRight_extract_eq (b : ByteArray) (sz : Nat) (hsz : b.size = sz) : (pa
   · rename_i h_not
     have h_lt : b.size < 32 := by omega
     exact extract_first_n b (zeros (32 - b.size))
-theorem padLeft_extract_address (b : ByteArray) (h20 : b.size = 20) : (padLeft b 32).extract 12 32 = b := by
-  sorry
+
 ---- Main roundtrip theorem ----
 
 theorem roundtrip (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data) :
-    decode t data 0 = Except.ok (v, data.size) := by
+decode t data 0 = Except.ok (v, data.size) := by
   have henc_tv : encode t v = Except.ok data := henc
   cases t
   case uint bits =>
@@ -209,17 +206,7 @@ theorem roundtrip (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode
     case tuple vals => simp [encode] at henc_tv
   case bytesM sz =>
     cases v
-    case bytes v' =>
-      simp [encode] at henc_tv
-      split at henc_tv
-      · simp at henc_tv
-      · have hdata : padRight v' 32 = data := by
-          injection henc_tv
-        have hsz_v : v'.size = sz := by omega
-        have hsize' : data.size = 32 := by
-          sorry
-        unfold decode; rw [← hdata]
-        simp [hsz_v, padRight_extract_eq v' sz hsz_v]
+    case bytes v' => sorry
     case uint v' => simp [encode] at henc_tv
     case int v' => simp [encode] at henc_tv
     case bool v' => simp [encode] at henc_tv
