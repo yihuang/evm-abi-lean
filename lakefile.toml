@@ -1,0 +1,10 @@
+name = "abi-lean"
+version = "0.1.0"
+defaultTargets = ["abi-lean"]
+
+[[lean_lib]]
+name = "AbiLean"
+
+[[lean_exe]]
+name = "abi-lean"
+root = "Main"
