@@ -3,7 +3,7 @@ version = "0.1.0"
 defaultTargets = ["abi-lean"]
 
 [[lean_lib]]
-name = "AbiLean"
+name = "EvmAbi"
 
 [[lean_exe]]
 name = "abi-lean"
