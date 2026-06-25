@@ -130,8 +130,11 @@ def intToBytes (v : Int) (bits : BitSize) : ByteArray :=
     let raw := natToBytes unsigned
     ByteArray.mk (Array.mk (List.replicate (32 - raw.size) 0xFF)) ++ raw
 
+def bytesToNat_list : List UInt8 → Nat :=
+  List.foldl (λ acc b => acc * 256 + b.toNat) 0
+
 def bytesToNat (b : ByteArray) : Nat :=
-  b.foldl (fun acc byte => acc * 256 + byte.toNat) 0
+  bytesToNat_list b.data.toList
 
 def bytesToInt (b : ByteArray) (bits : BitSize) : Except String Int :=
   let bv := bits.val

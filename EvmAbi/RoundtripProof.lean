@@ -5,10 +5,10 @@
 import EvmAbi.ABI
 import EvmAbi.Encode
 import EvmAbi.Decode
+
 open EvmAbi.ABI
 open EvmAbi.ABI.Encode
 open EvmAbi.ABI.Decode
-
 set_option linter.unusedVariables false
 
 def mkSingleton (b : UInt8) : ByteArray := { data := Array.mk [b] }
@@ -93,15 +93,36 @@ theorem natToBytes_size_bound (v : Nat) (hv : v < 2 ^ 256) : (natToBytes v).size
       simpa using size_go v ByteArray.empty
     rw [h_sz]; exact numBytes_bound v hv
 
-/-! ## Foundational lemmas (currently unproven) -/
+/-! ## Foundational lemmas -/
+
+theorem list_foldl_shift (xs : List UInt8) (x : Nat) :
+    xs.foldl (fun acc byte => acc * 256 + byte.toNat) x = x * 256 ^ xs.length + xs.foldl (fun acc byte => acc * 256 + byte.toNat) 0 := by
+  induction xs generalizing x with
+  | nil => simp
+  | cons h t ih =>
+    simp
+    rw [ih (x * 256 + h.toNat), ih (h.toNat)]
+    rw [Nat.add_mul, Nat.pow_succ]
+    have h : x * 256 * (256 ^ t.length) = x * ((256 ^ t.length) * 256) := by
+      calc
+        x * 256 * (256 ^ t.length) = x * (256 * (256 ^ t.length)) := by simp [Nat.mul_assoc]
+        _ = x * ((256 ^ t.length) * 256) := by simp [Nat.mul_comm 256 (256 ^ t.length)]
+    rw [h]
+    omega
 
 theorem bytesToNat_append_singleton (b : UInt8) (acc : ByteArray) :
     bytesToNat (mkSingleton b ++ acc) = b.toNat * 256 ^ acc.size + bytesToNat acc := by
-  sorry
-
-theorem pad_const (k : Nat) : bytesToNat (zeros k ++ (natToBytes v)) = bytesToNat (natToBytes v) := by
-  sorry
-
+  calc
+    bytesToNat (mkSingleton b ++ acc) = bytesToNat_list ((mkSingleton b ++ acc).data.toList) := rfl
+    _ = bytesToNat_list ((mkSingleton b).data.toList ++ acc.data.toList) := by rw [ByteArray.toList_data_append]
+    _ = bytesToNat_list (b :: acc.data.toList) := by simp [mkSingleton]
+    _ = acc.data.toList.foldl (fun acc byte => acc * 256 + byte.toNat) (b.toNat) := by
+      simp [bytesToNat_list]
+    _ = b.toNat * 256 ^ acc.data.toList.length + acc.data.toList.foldl (fun acc byte => acc * 256 + byte.toNat) 0 :=
+      list_foldl_shift (acc.data.toList) (b.toNat)
+    _ = b.toNat * 256 ^ acc.size + acc.data.toList.foldl (fun acc byte => acc * 256 + byte.toNat) 0 := by simp
+    _ = b.toNat * 256 ^ acc.size + bytesToNat_list acc.data.toList := rfl
+    _ = b.toNat * 256 ^ acc.size + bytesToNat acc := rfl
 theorem bytesToNat_natToBytes (v : Nat) : bytesToNat (natToBytes v) = v := by
   sorry
 
@@ -119,10 +140,8 @@ theorem padRight_extract_eq (b : ByteArray) (sz : Nat) (hsz : b.size = sz) : (pa
   · rename_i h_not
     have h_lt : b.size < 32 := by omega
     exact extract_first_n b (zeros (32 - b.size))
-
 theorem padLeft_extract_address (b : ByteArray) (h20 : b.size = 20) : (padLeft b 32).extract 12 32 = b := by
   sorry
-
 ---- Main roundtrip theorem ----
 
 theorem roundtrip (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data) :
@@ -190,7 +209,17 @@ theorem roundtrip (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode
     case tuple vals => simp [encode] at henc_tv
   case bytesM sz =>
     cases v
-    case bytes v' => sorry
+    case bytes v' =>
+      simp [encode] at henc_tv
+      split at henc_tv
+      · simp at henc_tv
+      · have hdata : padRight v' 32 = data := by
+          injection henc_tv
+        have hsz_v : v'.size = sz := by omega
+        have hsize' : data.size = 32 := by
+          sorry
+        unfold decode; rw [← hdata]
+        simp [hsz_v, padRight_extract_eq v' sz hsz_v]
     case uint v' => simp [encode] at henc_tv
     case int v' => simp [encode] at henc_tv
     case bool v' => simp [encode] at henc_tv
