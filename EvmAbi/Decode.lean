@@ -78,11 +78,12 @@ mutual
         Except.error s!"int{bits}: data too short at offset {offset}"
       else
         let rawVal := bytesToNat (data.extract offset (offset + 32))
+        let masked := rawVal % (2 ^ bits)  -- mask to bits bits for sign check
         let half := 2 ^ (bits - 1)
-        if rawVal < half then
-          Except.ok (.int (Int.ofNat rawVal), offset + 32)
+        if masked < half then
+          Except.ok (.int (Int.ofNat masked), offset + 32)
         else
-          Except.ok (.int (-(Int.ofNat (2 ^ bits - rawVal))), offset + 32)
+          Except.ok (.int (-(Int.ofNat (2 ^ bits - masked))), offset + 32)
 
     | .bool =>
       if offset + 32 > data.size then
