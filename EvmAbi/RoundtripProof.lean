@@ -407,9 +407,10 @@ theorem fromUTF8!_toUTF8 (s : String) : String.fromUTF8! (s.toUTF8) = s := by
   calc
     String.fromUTF8 (s.toUTF8) h_valid = String.ofByteArray (s.toUTF8) h_valid := rfl
     _ = String.ofByteArray (s.toByteArray) s.isValidUTF8 := by
-      rw [h_eq_byte, h_eq_valid]
+      cases h_eq_byte
+      apply congrArg (String.ofByteArray (s.toByteArray))
+      exact Subsingleton.elim _ _
     _ = s := rfl
-
 theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .string (ABIValue.string v') = Except.ok data) :
     decode .string data 0 = Except.ok (ABIValue.string v', data.size) := by
   simp [encode] at henc

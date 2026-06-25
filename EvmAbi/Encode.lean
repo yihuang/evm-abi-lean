@@ -51,7 +51,7 @@ mutual
     | .string, .string v =>
       let utf8 := v.toUTF8
       Except.ok (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size))
-    | .array elemType _size, .array vals =>
+    | .array elemType sz, .array vals =>
       if !isDynamic elemType then encodeFixedArrayStatic elemType vals ByteArray.empty
       else encodeFixedArrayDynamic elemType vals
     | .tuple elems, .tuple vals =>
@@ -61,8 +61,8 @@ mutual
     | _, _ => Except.error s!"type/value mismatch"
     termination_by (abiSize type, 0, 0)
     decreasing_by
-      · apply Prod.Lex.left; exact abiSize_lt_array elemType size
-      · apply Prod.Lex.left; exact abiSize_lt_array elemType size
+      · apply Prod.Lex.left; exact abiSize_lt_array elemType sz
+      · apply Prod.Lex.left; exact abiSize_lt_array elemType sz
       · have h_map : List.map Prod.fst (List.zip elems vals) = elems :=
           List.map_fst_zip (by omega : elems.length ≤ vals.length)
         have h_lt : List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst (List.zip elems vals)) <
