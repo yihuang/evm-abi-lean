@@ -1,13 +1,9 @@
 name = "abi-lean"
 version = "0.1.0"
-defaultTargets = ["abi-lean"]
+defaultTargets = ["EvmAbi"]
 
 [[lean_lib]]
 name = "EvmAbi"
-
-[[lean_exe]]
-name = "abi-lean"
-root = "Main"
 
 [[lean_exe]]
 name = "abi-lean-test"
