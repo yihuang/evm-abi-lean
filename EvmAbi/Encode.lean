@@ -30,18 +30,18 @@ mutual
 
   def encode (type : ABIType) (value : ABIValue) : Except String ByteArray :=
     match type, value with
-    | .uint bits, .uint v =>
-      let b := bits.val
+    | .uint byteLen _, .uint v =>
+      let b := byteLen * 8
       if v ≥ 2 ^ b then Except.error s!"uint{b}: value {v} exceeds 2^{b}"
       else Except.ok (uint256ToBytes v)
-    | .int bits, .int v =>
-      let b := bits.val
+    | .int byteLen _, .int v =>
+      let b := byteLen * 8
       let half := 2 ^ (b - 1)
       if v < -(half : Int) || v ≥ (half : Int) then
         Except.error s!"int{b}: value {v} out of range [{-half}, {half - 1}]"
-      else Except.ok (intToBytes v bits)
+      else Except.ok (intToBytes v byteLen)
     | .bool, .bool v => Except.ok (uint256ToBytes (if v then 1 else 0))
-    | .bytesM sz, .bytes v =>
+    | .bytesM sz _, .bytes v =>
       if v.size ≠ sz then Except.error s!"bytes{sz}: expected {sz} bytes, got {v.size}"
       else Except.ok (padRight v 32)
     | .address, .address v =>

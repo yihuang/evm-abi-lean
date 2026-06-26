@@ -2,23 +2,15 @@
 # ABI (Application Binary Interface) Core Types
 -/
 
-inductive BitSize : Type where
-  | w8 | w16 | w32 | w64 | w128 | w256
-  deriving Repr, BEq, DecidableEq
-
-def BitSize.val : BitSize → Nat
-  | .w8 => 8 | .w16 => 16 | .w32 => 32
-  | .w64 => 64 | .w128 => 128 | .w256 => 256
-
 namespace EvmAbi.ABI
 
 open Nat
 
 inductive ABIType : Type where
-  | uint (bits : BitSize)
-  | int (bits : BitSize)
+  | uint (byteLen : Nat) (h : byteLen ≤ 32)
+  | int (byteLen : Nat) (h : byteLen ≤ 32)
   | bool
-  | bytesM (size : Nat)
+  | bytesM (size : Nat) (h : size ≤ 32)
   | address
   | bytes
   | string
@@ -41,10 +33,10 @@ instance : ToString ABIType where
   toString t := (repr t).pretty 0
 
 def abiSize : ABIType → Nat
-  | .uint _ => 1
-  | .int _ => 1
+  | .uint _ _ => 1
+  | .int _ _ => 1
   | .bool => 1
-  | .bytesM _ => 1
+  | .bytesM _ _ => 1
   | .address => 1
   | .bytes => 1
   | .string => 1
@@ -118,8 +110,8 @@ def natToBytes (v : Nat) : ByteArray :=
 def uint256ToBytes (v : Nat) : ByteArray :=
   padLeft (natToBytes v) 32
 
-def intToBytes (v : Int) (bits : BitSize) : ByteArray :=
-  let b := bits.val
+def intToBytes (v : Int) (byteLen : Nat) : ByteArray :=
+  let b := byteLen * 8
   let pow2 := 2 ^ b
   let unsigned : Nat :=
     if v ≥ 0 then v.toNat
@@ -136,8 +128,8 @@ def bytesToNat_list : List UInt8 → Nat :=
 def bytesToNat (b : ByteArray) : Nat :=
   bytesToNat_list b.data.toList
 
-def bytesToInt (b : ByteArray) (bits : BitSize) : Except String Int :=
-  let bv := bits.val
+def bytesToInt (b : ByteArray) (byteLen : Nat) : Except String Int :=
+  let bv := byteLen * 8
   let unsigned := bytesToNat b
   let pow2_m1 := 2 ^ (bv - 1)
   let pow2 := 2 ^ bv
@@ -163,8 +155,8 @@ def isTuple : ABIType → Bool
 def headSize (type : ABIType) : Nat :=
   if isDynamic type then 32 else
     match type with
-    | .uint _ | .int _ | .bool | .address => 32
-    | .bytesM _ => 32
+    | .uint _ _ | .int _ _ | .bool | .address => 32
+    | .bytesM _ _ => 32
     | .array elem (some n) => n * headSize elem
     | .tuple [] => 0
     | .tuple (e :: es) => headSize e + headSize (.tuple es)
