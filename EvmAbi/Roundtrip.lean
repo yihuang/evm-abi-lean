@@ -338,12 +338,11 @@ theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .s
     simp [h_size, h1, h_len', h_extract_val', h_from_utf8, h_roundUp_ge]
   · simp at henc
 
-/-- For non-dynamic atomic types, encode always produces exactly 32 bytes.
-    Note: only valid for ATOMIC types (uint, int, bool, bytesM, address).
-    Array/tuple types handled by separate lemmas. -/
-theorem encode_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data)
-    (h_nondyn : !isDynamic t) : data.size = 32 := by
-  have h_non_dyn : isDynamic t = false := by simpa using h_nondyn
+/-- For ATOMIC non-dynamic types, encode always produces exactly 32 bytes.
+    This theorem is FALSE for arrays and tuples (e.g., uint[4] encodes to 128 bytes),
+    so callers must provide h_atomic: isAtomic t. -/
+theorem encode_atomic_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data)
+    (h_nondyn : isDynamic t = false) (h_atomic : isAtomic t) : data.size = 32 := by
   cases t
   case uint s =>
     cases v
@@ -430,6 +429,7 @@ theorem encode_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray) (henc
     case array v' => unfold encode at henc; simp at henc
     case tuple v' => unfold encode at henc; simp at henc
   case bool =>
+    unfold isAtomic at h_atomic; simp at h_atomic
     cases v
     case bool b =>
       unfold encode at henc; simp at henc
@@ -468,6 +468,7 @@ theorem encode_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray) (henc
     case array v' => unfold encode at henc; simp at henc
     case tuple v' => unfold encode at henc; simp at henc
   case address =>
+    unfold isAtomic at h_atomic; simp at h_atomic
     cases v
     case address b =>
       unfold encode at henc
@@ -486,34 +487,35 @@ theorem encode_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray) (henc
     case string v' => unfold encode at henc; simp at henc
     case array v' => unfold encode at henc; simp at henc
     case tuple v' => unfold encode at henc; simp at henc
-  case bytes => unfold isDynamic at h_non_dyn; simp at h_non_dyn
-  case string => unfold isDynamic at h_non_dyn; simp at h_non_dyn
-  case array _ _ => 
-    sorry
-  case tuple _ => 
-    sorry
+  case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
+  case string => unfold isDynamic at h_nondyn; simp at h_nondyn
+  case array _ _ =>
+    unfold isAtomic at h_atomic; simp at h_atomic
+  case tuple _ =>
+    unfold isAtomic at h_atomic; simp at h_atomic
 
 /-! ## Static array encoding size -/
 
-/-- Size of static encoding with arbitrary accumulator. -/
+/-- Size of static encoding with arbitrary accumulator.
+    Only valid for ATOMIC element types (encodes to 32 bytes each). -/
 theorem encodeFixedArrayStatic_size_gen (elemType : ABIType) (vals : List ABIValue) (acc enc : ByteArray)
     (henc : encodeFixedArrayStatic elemType vals acc = Except.ok enc)
-    (h_nondyn : !isDynamic elemType) : enc.size = acc.size + vals.length * 32 := by
-  revert acc enc henc h_nondyn
+    (h_nondyn : isDynamic elemType = false) (h_atomic : isAtomic elemType) : enc.size = acc.size + vals.length * 32 := by
+  revert acc enc henc h_nondyn h_atomic
   induction vals with
   | nil =>
-    intro acc enc henc _
+    intro acc enc henc _ _
     simp [encodeFixedArrayStatic] at henc
     subst henc; simp
   | cons v rest ih =>
-    intro acc enc henc h_nondyn
+    intro acc enc henc h_nondyn h_atomic
     simp [encodeFixedArrayStatic] at henc
     cases henc_v : encode elemType v
     · simp [henc_v] at henc
     · rename_i enc_v
       simp [henc_v] at henc
-      have h_sz_v : enc_v.size = 32 := encode_nondyn_size elemType v enc_v henc_v h_nondyn
-      have h_rest := ih (acc ++ enc_v) enc henc h_nondyn
+      have h_sz_v : enc_v.size = 32 := encode_atomic_nondyn_size elemType v enc_v henc_v h_nondyn h_atomic
+      have h_rest := ih (acc ++ enc_v) enc henc h_nondyn h_atomic
       rw [h_rest]
       have h_acc_size : (acc ++ enc_v).size = acc.size + 32 := by
         simp [h_sz_v]
@@ -522,11 +524,11 @@ theorem encodeFixedArrayStatic_size_gen (elemType : ABIType) (vals : List ABIVal
       omega
 
 /-- Size of static encoding starting from empty.
-    Corollary of encodeFixedArrayStatic_size_gen. -/
+    Corollary of encodeFixedArrayStatic_size_gen. Only valid for atomic element types. -/
 theorem encodeFixedArrayStatic_size (elemType : ABIType) (vals : List ABIValue) (enc : ByteArray)
     (henc : encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok enc)
-    (h_nondyn : !isDynamic elemType) : enc.size = vals.length * 32 := by
-  have h := encodeFixedArrayStatic_size_gen elemType vals ByteArray.empty enc henc h_nondyn
+    (h_nondyn : isDynamic elemType = false) (h_atomic : isAtomic elemType) : enc.size = vals.length * 32 := by
+  have h := encodeFixedArrayStatic_size_gen elemType vals ByteArray.empty enc henc h_nondyn h_atomic
   simp at h; exact h
 
 /-- Shift the start index of goStatic by one: running from (n+1) at (i+1) with the same offset

@@ -167,6 +167,10 @@ def isTuple : ABIType → Bool
   | .tuple _ => true
   | _ => false
 
+def isAtomic : ABIType → Bool
+  | .array _ _ | .tuple _ | .bytes | .string => false
+  | _ => true
+
 def headSize (type : ABIType) : Nat :=
   if isDynamic type then 32 else
     match type with
