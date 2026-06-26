@@ -528,6 +528,40 @@ theorem encodeFixedArrayStatic_size (elemType : ABIType) (vals : List ABIValue) 
     (h_nondyn : !isDynamic elemType) : enc.size = vals.length * 32 := by
   have h := encodeFixedArrayStatic_size_gen elemType vals ByteArray.empty enc henc h_nondyn
   simp at h; exact h
+
+/-- Shift the start index of goStatic by one: running from (n+1) at (i+1) with the same offset
+    is equivalent to running from n at i. The termination measure (n-i) is the same. -/
+theorem goStatic_shift_one (elemType : ABIType) (data : ByteArray) (n i off : Nat) (acc : List ABIValue) :
+    decodeFixedArray_goStatic elemType (n+1) data (i+1) off acc =
+    decodeFixedArray_goStatic elemType n data i off acc :=
+by
+  have h_all : ∀ (k : Nat), ∀ (n i off : Nat) (acc : List ABIValue), n - i = k →
+      decodeFixedArray_goStatic elemType (n+1) data (i+1) off acc =
+      decodeFixedArray_goStatic elemType n data i off acc := by
+    intro k
+    refine Nat.strongRecOn k ?_
+    intro m IH n i off acc hm
+    by_cases h : i ≥ n
+    · have h' : i+1 ≥ n+1 := by omega
+      simp [decodeFixedArray_goStatic, h, h']
+    · have h_not_ge : ¬ i ≥ n := by omega
+      have h_not_ge' : ¬ i+1 ≥ n+1 := by omega
+      rw [decodeFixedArray_goStatic, decodeFixedArray_goStatic]
+      rw [if_neg h_not_ge, if_neg h_not_ge']
+      cases h_dec : decode elemType data off
+      · rfl
+      · rename_i p; rcases p with ⟨v, newOff⟩
+        simp
+        have hm' : n - (i+1) < m := by
+          have hpos : n - i > 0 := by
+            have : i < n := by omega
+            omega
+          rw [hm] at hpos
+          omega
+        have h_IH := IH (n - (i+1)) hm' n (i+1) newOff (v :: acc) rfl
+        exact h_IH
+  exact h_all (n - i) n i off acc rfl
+
 theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data) :
     decode t data 0 = Except.ok (v, data.size) :=
   match t with
