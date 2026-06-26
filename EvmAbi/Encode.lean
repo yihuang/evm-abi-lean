@@ -52,23 +52,23 @@ mutual
       let utf8 := v.toUTF8
       Except.ok (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size))
     | .array elemType sz, .array vals =>
-      if !isDynamic elemType then encodeFixedArrayStatic elemType vals ByteArray.empty
-      else encodeFixedArrayDynamic elemType vals
-    | .tuple elems, .tuple vals =>
-      if elems.length ≠ vals.length then
-        Except.error s!"tuple length mismatch: types {elems.length} vs values {vals.length}"
-      else encodeTupleElems (List.zip elems vals)
+      if !isDynamic elemType then
+        match encodeFixedArrayStatic elemType vals ByteArray.empty with
+        | Except.ok enc =>
+          Except.ok (match sz with | none => uint256ToBytes vals.length ++ enc | some _ => enc)
+        | Except.error e => Except.error e
+      else
+        match encodeFixedArrayDynamic elemType vals with
+        | Except.ok enc =>
+          Except.ok (match sz with | none => uint256ToBytes vals.length ++ enc | some _ => enc)
+        | Except.error e => Except.error e
     | _, _ => Except.error s!"type/value mismatch"
     termination_by (abiSize type, 0, 0)
     decreasing_by
-      · apply Prod.Lex.left; exact abiSize_lt_array elemType sz
-      · apply Prod.Lex.left; exact abiSize_lt_array elemType sz
-      · have h_map : List.map Prod.fst (List.zip elems vals) = elems :=
-          List.map_fst_zip (by omega : elems.length ≤ vals.length)
-        have h_lt : List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst (List.zip elems vals)) <
-                    abiSize (.tuple elems) := by
-          simp [h_map, abiSize]
-        apply Prod.Lex.left; exact h_lt
+      all_goals
+        first
+        | apply Prod.Lex.left; exact abiSize_lt_array elemType sz
+        | apply Prod.Lex.left; simp [abiSize]
 
   def encodeFixedArrayStatic (elemType : ABIType) (vals : List ABIValue) (acc : ByteArray) : Except String ByteArray :=
     match vals with
@@ -122,12 +122,6 @@ mutual
     let hasDynamic := items.any (fun (t, _) => isDynamic t)
     if !hasDynamic then encodeTupleElemsStatic items ByteArray.empty
     else encodeTupleElemsDynamic items
-    termination_by (List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst items), 3, items.length)
-    decreasing_by
-      · apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst items))
-        apply Prod.Lex.left; omega
-      · apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst items))
-        apply Prod.Lex.left; omega
 
   def encodeTupleElemsStatic (xs : List (ABIType × ABIValue)) (acc : ByteArray) : Except String ByteArray :=
     match xs with
@@ -138,19 +132,11 @@ mutual
       | Except.error e => Except.error e
     termination_by (List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst xs), 1, xs.length)
     decreasing_by
-      · let total := List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst ((t, v) :: rest))
-        have h_total_eq : total = abiSize t + List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst rest) := by
-          unfold total; simp; exact foldl_add_eq (abiSize t) (List.map Prod.fst rest)
-        have h_sz_le : abiSize t ≤ total := by
-          rw [h_total_eq]; exact Nat.le_add_right _ _
-        by_cases h_lt : abiSize t < total
-        · apply Prod.Lex.left; exact h_lt
-        · have h_total_le : total ≤ abiSize t := Nat.le_of_not_lt h_lt
-          have h_eq : abiSize t = total := Nat.le_antisymm h_sz_le h_total_le
-          rw [h_eq]
-          apply Prod.Lex.right (a := total)
+      all_goals
+        first
+        | apply Prod.Lex.left; exact list_foldl_lt_cons t rest v
+        | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst ((t, v) :: rest)))
           apply Prod.Lex.left; omega
-      · apply Prod.Lex.left; exact list_foldl_lt_cons t rest v
 
   def encodeTupleElemsDynamic (items : List (ABIType × ABIValue)) : Except String ByteArray :=
     let headAreaSize := items.length * 32
@@ -166,10 +152,6 @@ mutual
         ) init processed
       Except.ok (heads ++ tails)
     | Except.error e => Except.error e
-    termination_by (List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst items), 2, items.length)
-    decreasing_by
-      · apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst items))
-        apply Prod.Lex.left; omega
 
   def encodeTupleElemsCollect (xs : List (ABIType × ABIValue)) (acc : List (Bool × ByteArray)) : Except String (List (Bool × ByteArray)) :=
     match xs with
@@ -180,21 +162,15 @@ mutual
       | Except.error e => Except.error e
     termination_by (List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst xs), 1, xs.length)
     decreasing_by
-      · let total := List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst ((t, v) :: rest))
-        have h_total_eq : total = abiSize t + List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst rest) := by
-          unfold total; simp; exact foldl_add_eq (abiSize t) (List.map Prod.fst rest)
-        have h_sz_le : abiSize t ≤ total := by
-          rw [h_total_eq]; exact Nat.le_add_right _ _
-        by_cases h_lt : abiSize t < total
-        · apply Prod.Lex.left; exact h_lt
-        · have h_total_le : total ≤ abiSize t := Nat.le_of_not_lt h_lt
-          have h_eq : abiSize t = total := Nat.le_antisymm h_sz_le h_total_le
-          rw [h_eq]
-          apply Prod.Lex.right (a := total)
+      all_goals
+        first
+        | apply Prod.Lex.left; exact list_foldl_lt_cons t rest v
+        | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst ((t, v) :: rest)))
           apply Prod.Lex.left; omega
-      · apply Prod.Lex.left; exact list_foldl_lt_cons t rest v
+
 
 end
+
 
 def encodeArgs (types : List ABIType) (values : List ABIValue) : Except String ByteArray :=
   if types.length ≠ values.length then

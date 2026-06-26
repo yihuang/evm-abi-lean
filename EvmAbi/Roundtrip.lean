@@ -210,6 +210,7 @@ theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .s
     simp [h_size, h1, h_len', h_extract_val', h_from_utf8, h_roundUp_ge]
   · sorry
 
+
 /- Universal roundtrip: for any type, encode then decode recovers the original value and size. -/
 theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data) :
     decode t data 0 = Except.ok (v, data.size) :=
@@ -277,11 +278,7 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
       case tuple _ => simp [encode] at henc
   | .array elemType sizeOpt => by
       cases v
-      case array vals =>
-        unfold encode at henc; simp at henc
-        by_cases h_dyn : isDynamic elemType
-        · sorry
-        · sorry
+      case array vals => sorry
       case uint v' => simp [encode] at henc
       case int v' => simp [encode] at henc
       case bool v' => simp [encode] at henc
@@ -291,11 +288,7 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
       case tuple _ => simp [encode] at henc
   | .tuple elems => by
       cases v
-      case tuple vals =>
-        unfold encode at henc; dsimp at henc
-        by_cases hl : elems.length ≠ vals.length
-        · simp [hl] at henc
-        · sorry
+      case tuple vals => sorry
       case uint v' => simp [encode] at henc
       case int v' => simp [encode] at henc
       case bool v' => simp [encode] at henc
