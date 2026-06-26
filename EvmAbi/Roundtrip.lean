@@ -144,7 +144,127 @@ theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray) (henc : encod
         unfold decode; rw [hdata]
         simp [hsize32, h_val, hv_lt_nat]
         omega
-      · sorry
+      · -- v' < 0
+        let b := s.len * 8
+        have hbpos : 0 < b := by
+          have hpos : 0 < s.len := s.h.left
+          omega
+        have hun_nonneg : 0 ≤ (2 ^ b : Int) + v' := by
+          have h_lb : -(2 ^ (b - 1) : Int) ≤ v' := hrange.1
+          have h_diff : (2 ^ b : Int) - (2 ^ (b - 1) : Int) = (2 ^ (b - 1) : Int) :=
+            two_pow_succ_sub b hbpos
+          omega
+        let unsigned : Nat := ((2 ^ b : Int) + v').toNat
+        have h_unsigned_lt : unsigned < 2 ^ b := by
+          have h_lt : (2 ^ b : Int) + v' < (2 ^ b : Int) := by omega
+          have h_nonneg2 : 0 ≤ (2 ^ b : Int) := two_pow_nonneg b
+          have h_pos2b : 0 < (2 ^ b : Int) := by
+            induction b with
+            | zero => omega
+            | succ b ih =>
+              rw [show (2 : Int) ^ (b+1) = (2 : Int) ^ b * (2 : Int) from rfl]
+              exact Int.mul_pos ih (by omega : 0 < (2 : Int))
+          have h_toNat : ((2 ^ b : Int) + v').toNat < (2 ^ b : Int).toNat :=
+            ((Int.toNat_lt_toNat (h_pos2b : 0 < (2 ^ b : Int))).mpr h_lt)
+          simpa [unsigned, show ((2 ^ b : Int).toNat : Nat) = (2 : Nat) ^ b from two_toNat_eq b]
+            using h_toNat
+        have h_unsigned_ge : 2 ^ (b - 1) ≤ unsigned := by
+          have h_ge : (2 ^ (b - 1) : Int) ≤ (2 ^ b : Int) + v' := by
+            have h_lb : -(2 ^ (b - 1) : Int) ≤ v' := hrange.1
+            have h_diff : (2 ^ b : Int) - (2 ^ (b - 1) : Int) = (2 ^ (b - 1) : Int) :=
+              two_pow_succ_sub b hbpos
+            have h_two_b : (2 ^ b : Int) = 2 * (2 : Int) ^ (b - 1) := by omega
+            omega
+          have h_ge_nat : (2 ^ (b - 1) : Nat) ≤ unsigned := by
+            have h_toNat := Int.toNat_le_toNat h_ge
+            have h_left : ((2 : Int) ^ (b - 1)).toNat = (2 : Nat) ^ (b - 1) :=
+              two_toNat_eq (b - 1)
+            simpa [unsigned, h_left] using h_toNat
+          exact h_ge_nat
+        have h_unsigned_lt_256 : unsigned < 2 ^ 256 := by
+          have : 2 ^ b ≤ 2 ^ 256 :=
+            Nat.pow_le_pow_right (by omega) (by
+              have := s.h.right
+              omega)
+          omega
+        have hv_nonpos : ¬ v' ≥ 0 := by omega
+        have h_raw_sz : (natToBytes unsigned).size = s.len := by
+          apply natToBytes_size_range unsigned s.len (by
+            have := s.h.left
+            exact this)
+          · have : 2 ^ (s.len * 8 - 1) = 2 ^ (b - 1) := by
+              simp [b]
+            rw [this]
+            exact h_unsigned_ge
+          · simpa [b] using h_unsigned_lt
+        have hsize32 : (intToBytes v' s.len).size = 32 :=
+          intToBytes_neg_size v' s.len hv_nonpos
+            (by
+              simpa [b, unsigned] using h_unsigned_lt_256)
+        have h_self : (intToBytes v' s.len).extract 0 32 = intToBytes v' s.len := by
+          rw [← hsize32, extract_self]
+        have h_256_eq_2b : 256 ^ s.len = 2 ^ b := by
+          have h256 : (256 : Nat) = (2 : Nat) ^ 8 := by native_decide
+          calc
+            256 ^ s.len = ((2 : Nat) ^ 8) ^ s.len := by rw [h256]
+            _ = 2 ^ (8 * s.len) := by rw [Nat.pow_mul]
+            _ = 2 ^ (s.len * 8) := by simp [Nat.mul_comm]
+            _ = 2 ^ b := rfl
+        have ha_sz : (ByteArray.mk (Array.mk (List.replicate (32 - s.len) 0xFF))).size = 32 - s.len := by
+          unfold ByteArray.size; simp
+        have h_formula : intToBytes v' s.len = (ByteArray.mk (Array.mk (List.replicate (32 - s.len) 0xFF))) ++ (natToBytes unsigned) := by
+          unfold intToBytes
+          split
+          · exfalso; exact hv_nonpos (by omega)
+          · simp [unsigned, b, h_raw_sz]
+        have h_suffix : (intToBytes v' s.len).extract (32 - s.len) 32 = natToBytes unsigned := by
+          rw [h_formula]
+          have h := extract_after_suffix (ByteArray.mk (Array.mk (List.replicate (32 - s.len) 0xFF))) (natToBytes unsigned) (natToBytes unsigned).size
+          have ha_sz' : ({ data := Array.replicate (32 - s.len) 255 } : ByteArray).size = 32 - s.len := by
+            unfold ByteArray.size; simp
+          have h_add : 32 - s.len + s.len = 32 := by omega
+          have h' : (({ data := Array.replicate (32 - s.len) 255 } : ByteArray) ++ natToBytes unsigned).extract (32 - s.len) 32
+              = (natToBytes unsigned).extract 0 (natToBytes unsigned).size := by
+            simpa [ha_sz', h_add, h_raw_sz] using h
+          calc
+            (({ data := Array.replicate (32 - s.len) 255 } : ByteArray) ++ natToBytes unsigned).extract (32 - s.len) 32
+                = (natToBytes unsigned).extract 0 (natToBytes unsigned).size := h'
+            _ = natToBytes unsigned := extract_self (natToBytes unsigned)
+        have h_masked : bytesToNat ((intToBytes v' s.len).extract 0 32) % (2 ^ b) = unsigned := by
+          rw [h_self, h_formula, bytesToNat_append_general (ByteArray.mk (Array.mk (List.replicate (32 - s.len) 0xFF))) (natToBytes unsigned), h_raw_sz,
+            bytesToNat_natToBytes unsigned, h_256_eq_2b]
+          have h_mod : (bytesToNat (ByteArray.mk (Array.mk (List.replicate (32 - s.len) 0xFF))) * (2 ^ b) + unsigned) % (2 ^ b) = unsigned := by
+            simp [Nat.add_mod, Nat.mod_eq_of_lt h_unsigned_lt]
+          exact h_mod
+        have h_ge_half : 2 ^ (b - 1) ≤ bytesToNat ((intToBytes v' s.len).extract 0 32) % (2 ^ b) := by
+          rw [h_masked]
+          exact h_unsigned_ge
+        have h_decode_val : -(Int.ofNat (2 ^ b - unsigned)) = v' := by
+          have h_unsigned_add : unsigned + (-v').toNat = 2 ^ b := by
+            have ha_nonneg : 0 ≤ (2 ^ b : Int) + v' := hun_nonneg
+            have hb_nonneg : 0 ≤ -v' := by omega
+            calc
+              unsigned + (-v').toNat = ((2 ^ b : Int) + v').toNat + (-v').toNat := rfl
+              _ = (((2 ^ b : Int) + v') + (-v')).toNat := by rw [Int.toNat_add ha_nonneg hb_nonneg]
+              _ = (2 ^ b : Int).toNat := by omega
+              _ = 2 ^ b := by simp [two_toNat_eq b]
+          have h_sub : 2 ^ b - unsigned = (-v').toNat := by omega
+          rw [h_sub]
+          have h_nonneg : 0 ≤ -v' := by omega
+          simp [Int.toNat_of_nonneg h_nonneg]
+        unfold decode; rw [hdata]
+        simp [hsize32]
+        have h_masked' : bytesToNat (intToBytes v' s.len) % 2 ^ (s.len * 8) = unsigned := by
+          simpa [h_self, b] using h_masked
+        have h_not_lt' : ¬ unsigned < 2 ^ (s.len * 8 - 1) := by
+          have : 2 ^ (s.len * 8 - 1) = 2 ^ (b - 1) := by simp [b]
+          rw [this]
+          omega
+        have h_decode_val' : -(Int.ofNat (2 ^ (s.len * 8) - unsigned)) = v' := by
+          simpa [b] using h_decode_val
+        rw [h_self]
+        simp [h_not_lt', h_masked']
+        exact h_decode_val'
 
 /- dynamic bytes encode → decode recovers the original ByteArray. -/
 theorem roundtrip_bytes_full (v' : ByteArray) (data : ByteArray) (henc : encode .bytes (ABIValue.bytes v') = Except.ok data) :
