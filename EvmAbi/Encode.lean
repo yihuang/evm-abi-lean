@@ -47,10 +47,17 @@ mutual
     | .address, .address v =>
       if v.size ≠ 20 then Except.error s!"address: expected 20 bytes, got {v.size}"
       else Except.ok (padLeft v 32)
-    | .bytes, .bytes v => Except.ok (uint256ToBytes v.size ++ padRight v (roundUp32 v.size))
+    | .bytes, .bytes v =>
+      if _ : v.size < 2 ^ 256 then
+        Except.ok (uint256ToBytes v.size ++ padRight v (roundUp32 v.size))
+      else
+        Except.error s!"bytes: data too long ({v.size} bytes)"
     | .string, .string v =>
       let utf8 := v.toUTF8
-      Except.ok (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size))
+      if _ : utf8.size < 2 ^ 256 then
+        Except.ok (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size))
+      else
+        Except.error s!"string: too long ({utf8.size} bytes)"
     | .array elemType sz, .array vals =>
       if !isDynamic elemType then
         match encodeFixedArrayStatic elemType vals ByteArray.empty with

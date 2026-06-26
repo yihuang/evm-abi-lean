@@ -269,10 +269,11 @@ theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray) (henc : encod
 /- dynamic bytes encode → decode recovers the original ByteArray. -/
 theorem roundtrip_bytes_full (v' : ByteArray) (data : ByteArray) (henc : encode .bytes (ABIValue.bytes v') = Except.ok data) :
     decode .bytes data 0 = Except.ok (ABIValue.bytes v', data.size) := by
-  simp [encode] at henc
-  have hdata : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size) := henc.symm
-  by_cases hv256 : v'.size < 2 ^ 256
-  · have ha_sz : (uint256ToBytes v'.size).size = 32 :=
+  simp [encode] at henc; split at henc
+  · rename_i hv256
+    have hdata : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size) := by
+      simpa using henc.symm
+    have ha_sz : (uint256ToBytes v'.size).size = 32 :=
       uint256ToBytes_size v'.size (natToBytes_size_bound v'.size hv256)
     have h_roundUp_ge : v'.size ≤ roundUp32 v'.size := by
       have : roundUp32 v'.size = ((v'.size + 31) / 32) * 32 := rfl
@@ -297,16 +298,17 @@ theorem roundtrip_bytes_full (v' : ByteArray) (data : ByteArray) (henc : encode 
     have h_extract_val' : (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract 32 (32 + v'.size) = v' := by
       simpa [hdata] using h_extract_val
     simp [h_size, h1, h_len', h_extract_val', h_roundUp_ge]
-  · sorry
+  · simp at henc
 
 /- string encode → decode recovers the original String. -/
 theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .string (ABIValue.string v') = Except.ok data) :
     decode .string data 0 = Except.ok (ABIValue.string v', data.size) := by
-  simp [encode] at henc
-  let utf8 := v'.toUTF8
-  have hdata : data = uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size) := henc.symm
-  by_cases huv256 : utf8.size < 2 ^ 256
-  · have ha_sz : (uint256ToBytes utf8.size).size = 32 :=
+  simp [encode] at henc; split at henc
+  · rename_i huv256
+    let utf8 := v'.toUTF8
+    have hdata : data = uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size) := by
+      simpa [utf8] using henc.symm
+    have ha_sz : (uint256ToBytes utf8.size).size = 32 :=
       uint256ToBytes_size utf8.size (natToBytes_size_bound utf8.size huv256)
     have h_roundUp_ge : utf8.size ≤ roundUp32 utf8.size := by
       have : roundUp32 utf8.size = ((utf8.size + 31) / 32) * 32 := rfl
@@ -334,7 +336,7 @@ theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .s
     have h_extract_val' : (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size)).extract 32 (32 + utf8.size) = utf8 := by
       simpa [hdata] using h_extract_val
     simp [h_size, h1, h_len', h_extract_val', h_from_utf8, h_roundUp_ge]
-  · sorry
+  · simp at henc
 
 
 /- Universal roundtrip: for any type, encode then decode recovers the original value and size. -/
