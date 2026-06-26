@@ -97,8 +97,8 @@ mutual
       match _optSize with
       | some size =>
         match decodeFixedArray elemType size data offset with
-        | Except.ok (vals, _) =>
-          Except.ok (.array vals, offset + computeFixedArraySize elemType size)
+        | Except.ok (vals, endOff) =>
+          Except.ok (.array vals, endOff)
         | Except.error e => Except.error e
       | none => decodeDynamicArray elemType data offset
     | .tuple elems =>

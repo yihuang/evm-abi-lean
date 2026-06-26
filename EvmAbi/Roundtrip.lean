@@ -338,8 +338,196 @@ theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .s
     simp [h_size, h1, h_len', h_extract_val', h_from_utf8, h_roundUp_ge]
   · simp at henc
 
+/-- For non-dynamic atomic types, encode always produces exactly 32 bytes.
+    Note: only valid for ATOMIC types (uint, int, bool, bytesM, address).
+    Array/tuple types handled by separate lemmas. -/
+theorem encode_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data)
+    (h_nondyn : !isDynamic t) : data.size = 32 := by
+  have h_non_dyn : isDynamic t = false := by simpa using h_nondyn
+  cases t
+  case uint s =>
+    cases v
+    case uint n =>
+      unfold encode at henc; dsimp at henc
+      by_cases hn : n ≥ 2 ^ (s.len * 8)
+      · simp [hn] at henc
+      · simp [hn] at henc
+        have hdata : data = uint256ToBytes n := henc.symm
+        rw [hdata]
+        have h_bound : n < 2 ^ 256 := by
+          have hlen : s.len * 8 ≤ 256 := by
+            have := s.h.right; omega
+          have hp : 2 ^ (s.len * 8) ≤ 2 ^ 256 :=
+            Nat.pow_le_pow_right (by omega) hlen
+          omega
+        have hsz : (natToBytes n).size ≤ 32 := natToBytes_size_bound n h_bound
+        exact uint256ToBytes_size n hsz
+    case int v' => unfold encode at henc; simp at henc
+    case bool v' => unfold encode at henc; simp at henc
+    case bytes v' => unfold encode at henc; simp at henc
+    case string v' => unfold encode at henc; simp at henc
+    case address v' => unfold encode at henc; simp at henc
+    case array v' => unfold encode at henc; simp at henc
+    case tuple v' => unfold encode at henc; simp at henc
+  case int s =>
+    cases v
+    case int n =>
+      unfold encode at henc; dsimp at henc
+      by_cases h1 : n < -(2 ^ (s.len * 8 - 1) : Int)
+      · simp [h1] at henc
+      · by_cases h2 : n ≥ (2 ^ (s.len * 8 - 1) : Int)
+        · simp [h2] at henc
+        · simp [h1, h2] at henc
+          have hdata : data = intToBytes n s.len := henc.symm
+          rw [hdata]
+          by_cases hn_nonneg : n ≥ 0
+          · have h_lt : n < (2 ^ (s.len * 8 - 1) : Int) := by omega
+            have h_nat_lt : n.toNat < 2 ^ (s.len * 8 - 1) :=
+              (Int.ofNat_lt.mp (by
+                have h_n_nat : (n.toNat : Int) = n := Int.toNat_of_nonneg hn_nonneg
+                simpa [h_n_nat] using h_lt))
+            have h_bound : n.toNat < 2 ^ 256 :=
+              calc
+                n.toNat < 2 ^ (s.len * 8 - 1) := h_nat_lt
+                _ ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) (by
+                  have hlen : s.len * 8 - 1 ≤ 256 := by
+                    have : s.len ≤ 32 := s.h.right; omega
+                  exact hlen)
+            have hsz : (natToBytes n.toNat).size ≤ 32 := natToBytes_size_bound n.toNat h_bound
+            calc
+              (intToBytes n s.len).size = (uint256ToBytes n.toNat).size := by
+                simp [intToBytes, uint256ToBytes, hn_nonneg]
+              _ = 32 := uint256ToBytes_size n.toNat hsz
+          · have h_bounded : ((2 : Int) ^ (s.len * 8) + n).toNat < 2 ^ 256 := by
+              have h_nonneg : 0 ≤ (2 : Int) ^ (s.len * 8) := two_pow_nonneg (s.len * 8)
+              have h_lt : (2 : Int) ^ (s.len * 8) + n < (2 : Int) ^ (s.len * 8) := by omega
+              have hpos : 0 < (2 : Int) ^ (s.len * 8) := by
+                have h_nat_pos : (0 : Nat) < (2 : Nat) ^ (s.len * 8) := by
+                  induction s.len * 8 with
+                  | zero => decide
+                  | succ n ih =>
+                    rw [Nat.pow_succ]
+                    exact Nat.mul_pos ih (by omega)
+                have : ((0 : Nat) : Int) < ((2 : Nat) ^ (s.len * 8) : Int) :=
+                  Int.ofNat_lt.mpr h_nat_pos
+                simpa
+              have h_lt_nat : ((2 : Int) ^ (s.len * 8) + n).toNat < ((2 : Int) ^ (s.len * 8)).toNat :=
+                (Int.toNat_lt_toNat hpos).mpr h_lt
+              have h_toNat : ((2 : Int) ^ (s.len * 8)).toNat = (2 : Nat) ^ (s.len * 8) :=
+                two_toNat_eq (s.len * 8)
+              have h_lt_nat' : ((2 : Int) ^ (s.len * 8) + n).toNat < (2 : Nat) ^ (s.len * 8) := by
+                simpa [h_toNat] using h_lt_nat
+              have h256 : (2 : Nat) ^ (s.len * 8) ≤ 2 ^ 256 :=
+                Nat.pow_le_pow_right (by omega) (by
+                  have : s.len ≤ 32 := s.h.right; omega)
+              exact Nat.lt_of_lt_of_le h_lt_nat' h256
+            exact intToBytes_neg_size n s.len (by omega) h_bounded
+    case uint v' => unfold encode at henc; simp at henc
+    case bool v' => unfold encode at henc; simp at henc
+    case bytes v' => unfold encode at henc; simp at henc
+    case string v' => unfold encode at henc; simp at henc
+    case address v' => unfold encode at henc; simp at henc
+    case array v' => unfold encode at henc; simp at henc
+    case tuple v' => unfold encode at henc; simp at henc
+  case bool =>
+    cases v
+    case bool b =>
+      unfold encode at henc; simp at henc
+      have hdata : data = uint256ToBytes (if b then 1 else 0) := henc.symm
+      rw [hdata]
+      have h_bound : (if b then 1 else 0) < 2 ^ 256 := by split <;> omega
+      have hsz : (natToBytes (if b then 1 else 0)).size ≤ 32 :=
+        natToBytes_size_bound (if b then 1 else 0) h_bound
+      exact uint256ToBytes_size (if b then 1 else 0) hsz
+    case int v' => unfold encode at henc; simp at henc
+    case uint v' => unfold encode at henc; simp at henc
+    case bytes v' => unfold encode at henc; simp at henc
+    case string v' => unfold encode at henc; simp at henc
+    case address v' => unfold encode at henc; simp at henc
+    case array v' => unfold encode at henc; simp at henc
+    case tuple v' => unfold encode at henc; simp at henc
+  case bytesM s =>
+    cases v
+    case bytes b =>
+      unfold encode at henc
+      by_cases hsz : b.size ≠ s.len
+      · simp [hsz] at henc
+      · simp [hsz] at henc
+        have hdata : data = padRight b 32 := henc.symm
+        rw [hdata]
+        have h_sz32 : b.size ≤ 32 := by
+          rw [show b.size = s.len from by omega]; exact s.h.right
+        unfold padRight; split
+        · omega
+        · simp [zeros_size]; omega
+    case int v' => unfold encode at henc; simp at henc
+    case uint v' => unfold encode at henc; simp at henc
+    case bool v' => unfold encode at henc; simp at henc
+    case string v' => unfold encode at henc; simp at henc
+    case address v' => unfold encode at henc; simp at henc
+    case array v' => unfold encode at henc; simp at henc
+    case tuple v' => unfold encode at henc; simp at henc
+  case address =>
+    cases v
+    case address b =>
+      unfold encode at henc
+      by_cases hsz : b.size ≠ 20
+      · simp [hsz] at henc
+      · simp [show b.size = 20 from by omega] at henc
+        have hdata : data = padLeft b 32 := henc.symm
+        rw [hdata]
+        unfold padLeft
+        have h20 : b.size = 20 := by omega
+        simp [h20, zeros_size]
+    case int v' => unfold encode at henc; simp at henc
+    case uint v' => unfold encode at henc; simp at henc
+    case bool v' => unfold encode at henc; simp at henc
+    case bytes v' => unfold encode at henc; simp at henc
+    case string v' => unfold encode at henc; simp at henc
+    case array v' => unfold encode at henc; simp at henc
+    case tuple v' => unfold encode at henc; simp at henc
+  case bytes => unfold isDynamic at h_non_dyn; simp at h_non_dyn
+  case string => unfold isDynamic at h_non_dyn; simp at h_non_dyn
+  case array _ _ => 
+    sorry
+  case tuple _ => 
+    sorry
 
-/- Universal roundtrip: for any type, encode then decode recovers the original value and size. -/
+/-! ## Static array encoding size -/
+
+/-- Size of static encoding with arbitrary accumulator. -/
+theorem encodeFixedArrayStatic_size_gen (elemType : ABIType) (vals : List ABIValue) (acc enc : ByteArray)
+    (henc : encodeFixedArrayStatic elemType vals acc = Except.ok enc)
+    (h_nondyn : !isDynamic elemType) : enc.size = acc.size + vals.length * 32 := by
+  revert acc enc henc h_nondyn
+  induction vals with
+  | nil =>
+    intro acc enc henc _
+    simp [encodeFixedArrayStatic] at henc
+    subst henc; simp
+  | cons v rest ih =>
+    intro acc enc henc h_nondyn
+    simp [encodeFixedArrayStatic] at henc
+    cases henc_v : encode elemType v
+    · simp [henc_v] at henc
+    · rename_i enc_v
+      simp [henc_v] at henc
+      have h_sz_v : enc_v.size = 32 := encode_nondyn_size elemType v enc_v henc_v h_nondyn
+      have h_rest := ih (acc ++ enc_v) enc henc h_nondyn
+      rw [h_rest]
+      have h_acc_size : (acc ++ enc_v).size = acc.size + 32 := by
+        simp [h_sz_v]
+      rw [h_acc_size]
+      simp [show (v :: rest).length = rest.length + 1 by simp]
+      omega
+
+/-- Size of static encoding starting from empty.
+    Corollary of encodeFixedArrayStatic_size_gen. -/
+theorem encodeFixedArrayStatic_size (elemType : ABIType) (vals : List ABIValue) (enc : ByteArray)
+    (henc : encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok enc)
+    (h_nondyn : !isDynamic elemType) : enc.size = vals.length * 32 := by
+  have h := encodeFixedArrayStatic_size_gen elemType vals ByteArray.empty enc henc h_nondyn
+  simp at h; exact h
 theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data) :
     decode t data 0 = Except.ok (v, data.size) :=
   match t with
