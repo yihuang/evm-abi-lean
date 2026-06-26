@@ -113,33 +113,49 @@ mutual
           simp [abiSize]
         apply Prod.Lex.left; exact h_lt
 
+  /-- Iterate decoding static array elements: call decode at each offset, collect values. -/
+  def decodeFixedArray_goStatic (elemType : ABIType) (n : Nat) (data : ByteArray)
+      (i : Nat) (off : Nat) (acc : List ABIValue) : Except String (List ABIValue × Nat) :=
+    if i ≥ n then Except.ok (acc.reverse, off)
+    else
+      match decode elemType data off with
+      | Except.ok (v, newOff) => decodeFixedArray_goStatic elemType n data (i + 1) newOff (v :: acc)
+      | Except.error e => Except.error e
+    termination_by (abiSize elemType, 1, n - i)
+    decreasing_by
+      · apply Prod.Lex.right (a := abiSize elemType)
+        apply Prod.Lex.left; omega
+      · apply Prod.Lex.right (a := abiSize elemType)
+        apply Prod.Lex.right (a := 1); omega
+
+  /-- Iterate decoding dynamic array elements: read head pointers, decode from tails. -/
+  def decodeFixedArray_goDynamic (elemType : ABIType) (n : Nat) (data : ByteArray) (offset : Nat)
+      (i : Nat) (vals : List ABIValue) (maxEnd : Nat) : Except String (List ABIValue × Nat) :=
+    if i ≥ n then Except.ok (vals.reverse, maxEnd)
+    else
+      let headOff := offset + i * 32
+      if headOff + 32 > data.size then
+        Except.error s!"array: data too short for head at offset {headOff}"
+      else
+        let rawOffset := bytesToNat (data.extract headOff (headOff + 32))
+        let tailOff := offset + rawOffset
+        match decode elemType data tailOff with
+        | Except.ok (v, newOff) => decodeFixedArray_goDynamic elemType n data offset (i + 1) (v :: vals) (max newOff maxEnd)
+        | Except.error e => Except.error e
+    termination_by (abiSize elemType, 1, n - i)
+    decreasing_by
+      · apply Prod.Lex.right (a := abiSize elemType)
+        apply Prod.Lex.left; omega
+      · apply Prod.Lex.right (a := abiSize elemType)
+        apply Prod.Lex.right (a := 1); omega
+
   def decodeFixedArray (elemType : ABIType) (n : Nat) (data : ByteArray) (offset : Nat)
       : Except String (List ABIValue × Nat) :=
     if !isDynamic elemType then
-      let rec goStatic (i : Nat) (off : Nat) (acc : List ABIValue) : Except String (List ABIValue × Nat) :=
-        if i ≥ n then Except.ok (acc.reverse, off)
-        else
-          match decode elemType data off with
-          | Except.ok (v, newOff) => goStatic (i + 1) newOff (v :: acc)
-          | Except.error e => Except.error e
-        termination_by (abiSize elemType, 1, n - i)
-      goStatic 0 offset []
+      decodeFixedArray_goStatic elemType n data 0 offset []
     else
       let headAreaSize := n * 32
-      let rec goDynamic (i : Nat) (vals : List ABIValue) (maxEnd : Nat) : Except String (List ABIValue × Nat) :=
-        if i ≥ n then Except.ok (vals.reverse, maxEnd)
-        else
-          let headOff := offset + i * 32
-          if headOff + 32 > data.size then
-            Except.error s!"array: data too short for head at offset {headOff}"
-          else
-            let rawOffset := bytesToNat (data.extract headOff (headOff + 32))
-            let tailOff := offset + rawOffset
-            match decode elemType data tailOff with
-            | Except.ok (v, newOff) => goDynamic (i + 1) (v :: vals) (max newOff maxEnd)
-            | Except.error e => Except.error e
-          termination_by (abiSize elemType, 1, n - i)
-      goDynamic 0 [] (offset + headAreaSize)
+      decodeFixedArray_goDynamic elemType n data offset 0 [] (offset + headAreaSize)
     termination_by (abiSize elemType, 2, n)
 
   def decodeDynamicArray (elemType : ABIType) (data : ByteArray) (offset : Nat)
@@ -171,75 +187,80 @@ mutual
       | Except.error e => Except.error e
     termination_by (abiSize elemType, 3, 0)
 
+  /-- Iterate decoding static tuple elements (all non-dynamic): decode at sequential offsets. -/
+  def decodeTupleElems_goStatic (types : List ABIType) (data : ByteArray) (offset : Nat)
+      (ts : List ABIType) (off : Nat) (acc : List ABIValue) : Except String (List ABIValue × Nat) :=
+    match ts with
+    | [] => Except.ok (acc.reverse, off)
+    | t :: rest =>
+      match decode t data off with
+      | Except.ok (v, newOff) => decodeTupleElems_goStatic types data offset rest newOff (v :: acc)
+      | Except.error e => Except.error e
+    termination_by (List.foldl (fun acc t => acc + abiSize t) 0 ts, 1, ts.length)
+    decreasing_by
+      · let total_fs := List.foldl (fun acc t => acc + abiSize t) 0 (t :: rest)
+        have hmem : t ∈ (t :: rest) := by simp
+        have h_sz_le : abiSize t ≤ total_fs := mem_foldl_le t (t :: rest) hmem
+        by_cases h_lt : abiSize t < total_fs
+        · apply Prod.Lex.left; exact h_lt
+        · have h_total_le : total_fs ≤ abiSize t := Nat.le_of_not_lt h_lt
+          have h_eq : abiSize t = total_fs := Nat.le_antisymm h_sz_le h_total_le
+          rw [h_eq]
+          apply Prod.Lex.right (a := total_fs)
+          apply Prod.Lex.left; omega
+      · apply Prod.Lex.left; exact list_foldl_lt_cons_abi t rest
+
+  /-- Iterate decoding dynamic tuple elements: read head pointers, decode from tails. -/
+  def decodeTupleElems_goDynamic (types : List ABIType) (data : ByteArray) (offset : Nat)
+      (i : Nat) (vals : List ABIValue) (maxEnd : Nat) : Except String (List ABIValue × Nat) :=
+    if h : i ≥ types.length then Except.ok (vals.reverse, maxEnd)
+    else
+      let headOff := offset + i * 32
+      if headOff + 32 > data.size then
+        Except.error s!"tuple: data too short for head at offset {headOff}"
+      else
+        let hi : i < types.length := by omega
+        let t := types.get ⟨i, hi⟩
+        if isDynamic t then
+          let rawOffset := bytesToNat (data.extract headOff (headOff + 32))
+          let tailOff := offset + rawOffset
+          match decode t data tailOff with
+          | Except.ok (v, newOff) => decodeTupleElems_goDynamic types data offset (i + 1) (v :: vals) (max maxEnd newOff)
+          | Except.error e => Except.error e
+        else
+          match decode t data headOff with
+          | Except.ok (v, _) => decodeTupleElems_goDynamic types data offset (i + 1) (v :: vals) maxEnd
+          | Except.error e => Except.error e
+    termination_by (List.foldl (fun acc t => acc + abiSize t) 0 types, 1, types.length - i)
+    decreasing_by
+      all_goals
+        first
+        | let total := List.foldl (fun acc t => acc + abiSize t) 0 types
+          have h_mem : types.get ⟨i, hi⟩ ∈ types := by
+            have := List.getElem_mem (l := types) (n := i) (h := hi)
+            exact this
+          have h_sz_le : abiSize (types.get ⟨i, hi⟩) ≤ total :=
+            mem_foldl_le (types.get ⟨i, hi⟩) types h_mem
+          by_cases h_lt : abiSize (types.get ⟨i, hi⟩) < total
+          · apply Prod.Lex.left; exact h_lt
+          · have h_total_le : total ≤ abiSize (types.get ⟨i, hi⟩) := Nat.le_of_not_lt h_lt
+            have h_eq : abiSize (types.get ⟨i, hi⟩) = total :=
+              Nat.le_antisymm h_sz_le h_total_le
+            rw [h_eq]
+            apply Prod.Lex.right (a := total)
+            apply Prod.Lex.left; omega
+        | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 types)
+          apply Prod.Lex.right (a := 1)
+          omega
+
   def decodeTupleElems (types : List ABIType) (data : ByteArray) (offset : Nat)
       : Except String (List ABIValue × Nat) :=
     let hasDynamic := types.any isDynamic
     if !hasDynamic then
-      let rec goStatic (ts : List ABIType) (off : Nat) (acc : List ABIValue) : Except String (List ABIValue × Nat) :=
-        match ts with
-        | [] => Except.ok (acc.reverse, off)
-        | t :: rest =>
-          match decode t data off with
-          | Except.ok (v, newOff) => goStatic rest newOff (v :: acc)
-          | Except.error e => Except.error e
-        termination_by (List.foldl (fun acc t => acc + abiSize t) 0 ts, 1, ts.length)
-        decreasing_by
-          · let total_fs := List.foldl (fun acc t => acc + abiSize t) 0 (t :: rest)
-            have hmem : t ∈ (t :: rest) := by simp
-            have h_sz_le : abiSize t ≤ total_fs := mem_foldl_le t (t :: rest) hmem
-            by_cases h_lt : abiSize t < total_fs
-            · apply Prod.Lex.left; exact h_lt
-            · have h_total_le : total_fs ≤ abiSize t := Nat.le_of_not_lt h_lt
-              have h_eq : abiSize t = total_fs := Nat.le_antisymm h_sz_le h_total_le
-              rw [h_eq]
-              apply Prod.Lex.right (a := total_fs)
-              apply Prod.Lex.left; omega
-          · apply Prod.Lex.left; exact list_foldl_lt_cons_abi t rest
-      goStatic types offset []
+      decodeTupleElems_goStatic types data offset types offset []
     else
       let headAreaSize := types.length * 32
-      let rec goDynamic (i : Nat) (vals : List ABIValue) (maxEnd : Nat) : Except String (List ABIValue × Nat) :=
-        if h : i ≥ types.length then Except.ok (vals.reverse, maxEnd)
-        else
-          let headOff := offset + i * 32
-          if headOff + 32 > data.size then
-            Except.error s!"tuple: data too short for head at offset {headOff}"
-          else
-            let hi : i < types.length := by omega
-            let t := types.get ⟨i, hi⟩
-            if isDynamic t then
-              let rawOffset := bytesToNat (data.extract headOff (headOff + 32))
-              let tailOff := offset + rawOffset
-              match decode t data tailOff with
-              | Except.ok (v, newOff) => goDynamic (i + 1) (v :: vals) (max maxEnd newOff)
-              | Except.error e => Except.error e
-            else
-              match decode t data headOff with
-              | Except.ok (v, _) => goDynamic (i + 1) (v :: vals) maxEnd
-              | Except.error e => Except.error e
-        termination_by (List.foldl (fun acc t => acc + abiSize t) 0 types, 1, types.length - i)
-        decreasing_by
-          all_goals
-            first
-            | let total := List.foldl (fun acc t => acc + abiSize t) 0 types
-              have h_mem : types.get ⟨i, hi⟩ ∈ types := by
-                have := List.getElem_mem (l := types) (n := i) (h := hi)
-                exact this
-              have h_sz_le : abiSize (types.get ⟨i, hi⟩) ≤ total :=
-                mem_foldl_le (types.get ⟨i, hi⟩) types h_mem
-              by_cases h_lt : abiSize (types.get ⟨i, hi⟩) < total
-              · apply Prod.Lex.left; exact h_lt
-              · have h_total_le : total ≤ abiSize (types.get ⟨i, hi⟩) := Nat.le_of_not_lt h_lt
-                have h_eq : abiSize (types.get ⟨i, hi⟩) = total :=
-                  Nat.le_antisymm h_sz_le h_total_le
-                rw [h_eq]
-                apply Prod.Lex.right (a := total)
-                apply Prod.Lex.left; omega
-            | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 types)
-              apply Prod.Lex.right (a := 1)
-              omega
-
-      goDynamic 0 [] (offset + headAreaSize)
+      decodeTupleElems_goDynamic types data offset 0 [] (offset + headAreaSize)
     termination_by (List.foldl (fun acc t => acc + abiSize t) 0 types, 3, types.length)
 
 end
