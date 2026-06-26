@@ -62,7 +62,11 @@ def countPassed (results : List TestResult) : Nat :=
 
 /-- Assert that encode produces the expected hex string -/
 def assertEncodes (label : String) (t : ABIType) (v : ABIValue) (expectedHex : String) : IO TestResult := do
-  match encode t v with
+  let enc :=
+    match t with
+    | .tuple _ => encodeArgs (match t with | .tuple es => es | _ => []) (match v with | .tuple vs => vs | _ => [])
+    | _ => encode t v
+  match enc with
   | Except.ok enc =>
     let expected := parseHex expectedHex
     if byteArraysEq enc expected then
@@ -74,7 +78,11 @@ def assertEncodes (label : String) (t : ABIType) (v : ABIValue) (expectedHex : S
 
 /-- Assert that encode-decode roundtrip preserves the value -/
 def assertRoundtrip (label : String) (t : ABIType) (v : ABIValue) : IO TestResult := do
-  match encode t v with
+  let enc :=
+    match t with
+    | .tuple _ => encodeArgs (match t with | .tuple es => es | _ => []) (match v with | .tuple vs => vs | _ => [])
+    | _ => encode t v
+  match enc with
   | Except.ok enc =>
     match decode t enc 0 with
     | Except.ok (v', _) =>
@@ -147,38 +155,38 @@ def testFunctionSelectors : List (IO TestResult) := [
 ]
 
 def testStaticTypes : List (IO TestResult) := [
-  assertEncodes "uint256(0)" (.uint 32 (by omega)) (.uint 0 (by omega)) "0x0000000000000000000000000000000000000000000000000000000000000000",
-  assertEncodes "uint256(1)" (.uint 32 (by omega)) (.uint 1 (by omega)) "0x0000000000000000000000000000000000000000000000000000000000000001",
-  assertEncodes "uint256(42)" (.uint 32 (by omega)) (.uint 42 (by omega)) "0x000000000000000000000000000000000000000000000000000000000000002a",
-  assertEncodes "uint256(max)" (.uint 32 (by omega)) (.uint (2^256 - 1)) "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-  assertEncodes "uint8(255)" (.uint 1 (by omega)) (.uint 255 (by omega)) "0x00000000000000000000000000000000000000000000000000000000000000ff",
-  assertEncodes "int256(0)" (.int 32 (by omega)) (.int 0 (by omega)) "0x0000000000000000000000000000000000000000000000000000000000000000",
-  assertEncodes "int256(-1)" (.int 32 (by omega)) (.int (-1)) "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-  assertEncodes "int256(1)" (.int 32 (by omega)) (.int 1 (by omega)) "0x0000000000000000000000000000000000000000000000000000000000000001",
-  assertEncodes "int8(-128)" (.int 1 (by omega)) (.int (-128)) "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff80",
-  assertEncodes "int8(127)" (.int 1 (by omega)) (.int 127 (by omega)) "0x000000000000000000000000000000000000000000000000000000000000007f",
+  assertEncodes "uint256(0)" ((.uint (ByteSize.ofLen 32 (by omega)))) ((.uint 0)) "0x0000000000000000000000000000000000000000000000000000000000000000",
+  assertEncodes "uint256(1)" ((.uint (ByteSize.ofLen 32 (by omega)))) ((.uint 1)) "0x0000000000000000000000000000000000000000000000000000000000000001",
+  assertEncodes "uint256(42)" ((.uint (ByteSize.ofLen 32 (by omega)))) ((.uint 42)) "0x000000000000000000000000000000000000000000000000000000000000002a",
+  assertEncodes "uint256(max)" ((.uint (ByteSize.ofLen 32 (by omega)))) (.uint (2^256 - 1)) "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  assertEncodes "uint8(255)" ((.uint (ByteSize.ofLen 1 (by omega)))) ((.uint 255)) "0x00000000000000000000000000000000000000000000000000000000000000ff",
+  assertEncodes "int256(0)" ((.int (ByteSize.ofLen 32 (by omega)))) ((.int 0)) "0x0000000000000000000000000000000000000000000000000000000000000000",
+  assertEncodes "int256(-1)" ((.int (ByteSize.ofLen 32 (by omega)))) (.int (-1)) "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  assertEncodes "int256(1)" ((.int (ByteSize.ofLen 32 (by omega)))) ((.int 1)) "0x0000000000000000000000000000000000000000000000000000000000000001",
+  assertEncodes "int8(-128)" ((.int (ByteSize.ofLen 1 (by omega)))) (.int (-128)) "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff80",
+  assertEncodes "int8(127)" ((.int (ByteSize.ofLen 1 (by omega)))) ((.int 127)) "0x000000000000000000000000000000000000000000000000000000000000007f",
   assertEncodes "bool(false)" .bool (.bool false) "0x0000000000000000000000000000000000000000000000000000000000000000",
   assertEncodes "bool(true)" .bool (.bool true) "0x0000000000000000000000000000000000000000000000000000000000000001",
   assertEncodes "address" .address (.address (bytes (List.replicate 20 0x42))) "0x0000000000000000000000004242424242424242424242424242424242424242",
-  assertEncodes "bytes1(0xff)" (.bytesM 1 (by omega)) (.bytes (bytes [0xff])) "0xff00000000000000000000000000000000000000000000000000000000000000",
-  assertEncodes "bytes32(all 0x42)" (.bytesM 32 (by omega)) (.bytes (bytes (List.replicate 32 0x42))) "0x4242424242424242424242424242424242424242424242424242424242424242",
+  assertEncodes "bytes1(0xff)" ((.bytesM (ByteSize.ofLen 1 (by omega)))) (.bytes (bytes [0xff])) "0xff00000000000000000000000000000000000000000000000000000000000000",
+  assertEncodes "bytes32(all 0x42)" ((.bytesM (ByteSize.ofLen 32 (by omega)))) (.bytes (bytes (List.replicate 32 0x42))) "0x4242424242424242424242424242424242424242424242424242424242424242",
 ]
 
 def testStaticRoundtrips : List (IO TestResult) := [
-  assertRoundtrip "uint256(0) roundtrip" (.uint 32 (by omega)) (.uint 0 (by omega)),
-  assertRoundtrip "uint256(1) roundtrip" (.uint 32 (by omega)) (.uint 1 (by omega)),
-  assertRoundtrip "uint256(2^128) roundtrip" (.uint 32 (by omega)) (.uint (2^128)),
-  assertRoundtrip "uint8(0) roundtrip" (.uint 1 (by omega)) (.uint 0 (by omega)),
-  assertRoundtrip "uint8(255) roundtrip" (.uint 1 (by omega)) (.uint 255 (by omega)),
-  assertRoundtrip "int256(0) roundtrip" (.int 32 (by omega)) (.int 0 (by omega)),
-  assertRoundtrip "int256(-1) roundtrip" (.int 32 (by omega)) (.int (-1)),
-  assertRoundtrip "int256(-2^255) roundtrip" (.int 32 (by omega)) (.int (-(2^255))),
-  assertRoundtrip "int256(2^255-1) roundtrip" (.int 32 (by omega)) (.int (2^255 - 1)),
+  assertRoundtrip "uint256(0) roundtrip" ((.uint (ByteSize.ofLen 32 (by omega)))) ((.uint 0)),
+  assertRoundtrip "uint256(1) roundtrip" ((.uint (ByteSize.ofLen 32 (by omega)))) ((.uint 1)),
+  assertRoundtrip "uint256(2^128) roundtrip" ((.uint (ByteSize.ofLen 32 (by omega)))) (.uint (2^128)),
+  assertRoundtrip "uint8(0) roundtrip" ((.uint (ByteSize.ofLen 1 (by omega)))) ((.uint 0)),
+  assertRoundtrip "uint8(255) roundtrip" ((.uint (ByteSize.ofLen 1 (by omega)))) ((.uint 255)),
+  assertRoundtrip "int256(0) roundtrip" ((.int (ByteSize.ofLen 32 (by omega)))) ((.int 0)),
+  assertRoundtrip "int256(-1) roundtrip" ((.int (ByteSize.ofLen 32 (by omega)))) (.int (-1)),
+  assertRoundtrip "int256(-2^255) roundtrip" ((.int (ByteSize.ofLen 32 (by omega)))) (.int (-(2^255))),
+  assertRoundtrip "int256(2^255-1) roundtrip" ((.int (ByteSize.ofLen 32 (by omega)))) (.int (2^255 - 1)),
   assertRoundtrip "bool(true) roundtrip" .bool (.bool true),
   assertRoundtrip "bool(false) roundtrip" .bool (.bool false),
   assertRoundtrip "address roundtrip" .address (.address (bytes (List.replicate 20 0xAB))),
-  assertRoundtrip "bytes1 roundtrip" (.bytesM 1 (by omega)) (.bytes (bytes [0x01])),
-  assertRoundtrip "bytes32 roundtrip" (.bytesM 32 (by omega)) (.bytes (bytes (List.replicate 32 0xFF))),
+  assertRoundtrip "bytes1 roundtrip" ((.bytesM (ByteSize.ofLen 1 (by omega)))) (.bytes (bytes [0x01])),
+  assertRoundtrip "bytes32 roundtrip" ((.bytesM (ByteSize.ofLen 32 (by omega)))) (.bytes (bytes (List.replicate 32 0xFF))),
 ]
 
 def testDynamicTypes : List (IO TestResult) := [
@@ -197,54 +205,54 @@ def testDynamicTypes : List (IO TestResult) := [
 ]
 
 def testArrays : List (IO TestResult) := [
-  assertEncodes "uint256[3]([1,2,3])" (.array (.uint 32 (by omega)) (some 3))
-    (.array [.uint 1 (by omega), .uint 2 (by omega), .uint 3])
+  assertEncodes "uint256[3]([1,2,3])" (.array ((.uint (ByteSize.ofLen 32 (by omega)))) (some 3))
+    (.array [.uint 1, (.uint 2), .uint 3])
     "0x000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000003",
-  assertRoundtrip "uint256[3]([1,2,3]) roundtrip" (.array (.uint 32 (by omega)) (some 3))
-    (.array [.uint 1 (by omega), .uint 2 (by omega), .uint 3]),
-  assertEncodes "uint256[]([10,20])" (.array (.uint 32 (by omega)) none)
-    (.array [.uint 10 (by omega), .uint 20])
+  assertRoundtrip "uint256[3]([1,2,3]) roundtrip" (.array ((.uint (ByteSize.ofLen 32 (by omega)))) (some 3))
+    (.array [.uint 1, (.uint 2), .uint 3]),
+  assertEncodes "uint256[]([10,20])" (.array ((.uint (ByteSize.ofLen 32 (by omega)))) none)
+    (.array [(.uint 10), .uint 20])
     "0x0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000014",
-  assertRoundtrip "uint256[]([10,20]) roundtrip" (.array (.uint 32 (by omega)) none)
-    (.array [.uint 10 (by omega), .uint 20]),
-  assertEncodes "uint256[](empty)" (.array (.uint 32 (by omega)) none) (.array [])
+  assertRoundtrip "uint256[]([10,20]) roundtrip" (.array ((.uint (ByteSize.ofLen 32 (by omega)))) none)
+    (.array [(.uint 10), .uint 20]),
+  assertEncodes "uint256[](empty)" (.array ((.uint (ByteSize.ofLen 32 (by omega)))) none) (.array [])
     "0x0000000000000000000000000000000000000000000000000000000000000000",
-  assertRoundtrip "uint256[](empty) roundtrip" (.array (.uint 32 (by omega)) none) (.array []),
+  assertRoundtrip "uint256[](empty) roundtrip" (.array ((.uint (ByteSize.ofLen 32 (by omega)))) none) (.array []),
 ]
 
 def testTuples : List (IO TestResult) := [
   assertRoundtrip "(uint256,address,bool) roundtrip"
-    (.tuple [.uint 32 (by omega), .address, .bool])
-    (.tuple [.uint 123 (by omega), .address (bytes (List.replicate 20 0xAB)), .bool false]),
+    (.tuple [(.uint (ByteSize.ofLen 32 (by omega))), .address, .bool])
+    (.tuple [(.uint 123), .address (bytes (List.replicate 20 0xAB)), .bool false]),
   assertRoundtrip "(uint256,bytes) roundtrip"
-    (.tuple [.uint 32 (by omega), .bytes])
-    (.tuple [.uint 999 (by omega), .bytes (bytes [0xDE, 0xAD, 0xBE, 0xEF])]),
+    (.tuple [(.uint (ByteSize.ofLen 32 (by omega))), .bytes])
+    (.tuple [(.uint 999), .bytes (bytes [0xDE, 0xAD, 0xBE, 0xEF])]),
   assertRoundtrip "(uint256,string,bool) roundtrip"
-    (.tuple [.uint 32 (by omega), .string, .bool])
-    (.tuple [.uint 42 (by omega), .string "hello", .bool true]),
+    (.tuple [(.uint (ByteSize.ofLen 32 (by omega))), .string, .bool])
+    (.tuple [(.uint 42), .string "hello", .bool true]),
   assertEncodes "() empty tuple" (.tuple []) (.tuple []) "0x",
   assertRoundtrip "() empty tuple roundtrip" (.tuple []) (.tuple []),
 ]
 
 def testBazExample : List (IO TestResult) := [
-  assertEncodes "baz(uint32,bool) encode" (.tuple [.uint 4 (by omega), .bool])
-    (.tuple [.uint 69 (by omega), .bool true])
+  assertEncodes "baz(uint32,bool) encode" (.tuple [(.uint (ByteSize.ofLen 4 (by omega))), .bool])
+    (.tuple [(.uint 69), .bool true])
     "0x00000000000000000000000000000000000000000000000000000000000000450000000000000000000000000000000000000000000000000000000000000001",
-  assertRoundtrip "baz(uint32,bool) roundtrip" (.tuple [.uint 4 (by omega), .bool])
-    (.tuple [.uint 69 (by omega), .bool true]),
-  assertDecodes "baz(uint32,bool) decode" (.tuple [.uint 4 (by omega), .bool])
+  assertRoundtrip "baz(uint32,bool) roundtrip" (.tuple [(.uint (ByteSize.ofLen 4 (by omega))), .bool])
+    (.tuple [(.uint 69), .bool true]),
+  assertDecodes "baz(uint32,bool) decode" (.tuple [(.uint (ByteSize.ofLen 4 (by omega))), .bool])
     "0x00000000000000000000000000000000000000000000000000000000000000450000000000000000000000000000000000000000000000000000000000000001"
-    (.tuple [.uint 69 (by omega), .bool true]),
+    (.tuple [(.uint 69), .bool true]),
 ]
 
 def testBarExample : List (IO TestResult) := [
-  assertEncodes "bar(bytes3[2]) encode" (.tuple [.array (.bytesM 3 (by omega)) (some 2)])
+  assertEncodes "bar(bytes3[2]) encode" (.tuple [.array ((.bytesM (ByteSize.ofLen 3 (by omega)))) (some 2)])
     (.tuple [.array [
       .bytes (bytes [0x61, 0x62, 0x63]),
       .bytes (bytes [0x64, 0x65, 0x66])
     ]])
     "0x61626300000000000000000000000000000000000000000000000000000000006465660000000000000000000000000000000000000000000000000000000000",
-  assertRoundtrip "bar(bytes3[2]) roundtrip" (.tuple [.array (.bytesM 3 (by omega)) (some 2)])
+  assertRoundtrip "bar(bytes3[2]) roundtrip" (.tuple [.array ((.bytesM (ByteSize.ofLen 3 (by omega)))) (some 2)])
     (.tuple [.array [
       .bytes (bytes [0x61, 0x62, 0x63]),
       .bytes (bytes [0x64, 0x65, 0x66])
@@ -252,16 +260,16 @@ def testBarExample : List (IO TestResult) := [
 ]
 
 def testSamExample : List (IO TestResult) := [
-  assertEncodes "sam(bytes,bool,uint256[]) encode" (.tuple [.bytes, .bool, .array (.uint 32 (by omega)) none])
-    (.tuple [.bytes (bytes [0x64, 0x61, 0x76, 0x65]), .bool true, .array [.uint 1 (by omega), .uint 2 (by omega), .uint 3]])
+  assertEncodes "sam(bytes,bool,uint256[]) encode" (.tuple [.bytes, .bool, .array ((.uint (ByteSize.ofLen 32 (by omega)))) none])
+    (.tuple [.bytes (bytes [0x64, 0x61, 0x76, 0x65]), .bool true, .array [.uint 1, (.uint 2), .uint 3]])
     "0x0000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000464617665000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000003",
-  assertRoundtrip "sam(bytes,bool,uint256[]) roundtrip" (.tuple [.bytes, .bool, .array (.uint 32 (by omega)) none])
-    (.tuple [.bytes (bytes [0x64, 0x61, 0x76, 0x65]), .bool true, .array [.uint 1 (by omega), .uint 2 (by omega), .uint 3]]),
+  assertRoundtrip "sam(bytes,bool,uint256[]) roundtrip" (.tuple [.bytes, .bool, .array ((.uint (ByteSize.ofLen 32 (by omega)))) none])
+    (.tuple [.bytes (bytes [0x64, 0x61, 0x76, 0x65]), .bool true, .array [.uint 1, (.uint 2), .uint 3]]),
 ]
 
 def testFExample : List (IO TestResult) := [
   assertEncodes "f(uint256,uint32[],bytes10,bytes) encode"
-    (.tuple [.uint 32 (by omega), .array (.uint 4 (by omega)) none, .bytesM 10 (by omega), .bytes])
+    (.tuple [(.uint (ByteSize.ofLen 32 (by omega))), .array ((.uint (ByteSize.ofLen 4 (by omega)))) none, (.bytesM (ByteSize.ofLen 10 (by omega))), .bytes])
     (.tuple [
       .uint 0x123,
       .array [.uint 0x456, .uint 0x789],
@@ -270,7 +278,7 @@ def testFExample : List (IO TestResult) := [
     ])
     "0x00000000000000000000000000000000000000000000000000000000000001230000000000000000000000000000000000000000000000000000000000000080313233343536373839300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000004560000000000000000000000000000000000000000000000000000000000000789000000000000000000000000000000000000000000000000000000000000000d48656c6c6f2c20776f726c642100000000000000000000000000000000000000",
   assertRoundtrip "f(uint256,uint32[],bytes10,bytes) roundtrip"
-    (.tuple [.uint 32 (by omega), .array (.uint 4 (by omega)) none, .bytesM 10 (by omega), .bytes])
+    (.tuple [(.uint (ByteSize.ofLen 32 (by omega))), .array ((.uint (ByteSize.ofLen 4 (by omega)))) none, (.bytesM (ByteSize.ofLen 10 (by omega))), .bytes])
     (.tuple [
       .uint 0x123,
       .array [.uint 0x456, .uint 0x789],
@@ -281,30 +289,30 @@ def testFExample : List (IO TestResult) := [
 
 def testGExample : List (IO TestResult) := [
   assertEncodes "g(uint256[][],string[]) encode"
-    (.tuple [.array (.array (.uint 32 (by omega)) none) none, .array .string none])
+    (.tuple [.array (.array ((.uint (ByteSize.ofLen 32 (by omega)))) none) none, .array .string none])
     (.tuple [
-      .array [.array [.uint 1 (by omega), .uint 2], .array [.uint 3]],
+      .array [.array [(.uint 1), .uint 2], .array [.uint 3]],
       .array [.string "one", .string "two", .string "three"]
     ])
     "0x000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000e000000000000000000000000000000000000000000000000000000000000000036f6e650000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000374776f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000057468726565000000000000000000000000000000000000000000000000000000",
   assertRoundtrip "g(uint256[][],string[]) roundtrip"
-    (.tuple [.array (.array (.uint 32 (by omega)) none) none, .array .string none])
+    (.tuple [.array (.array ((.uint (ByteSize.ofLen 32 (by omega)))) none) none, .array .string none])
     (.tuple [
-      .array [.array [.uint 1 (by omega), .uint 2], .array [.uint 3]],
+      .array [.array [(.uint 1), .uint 2], .array [.uint 3]],
       .array [.string "one", .string "two", .string "three"]
     ]),
 ]
 
 def testErrors : List (IO TestResult) := [
-  assertEncodeError "uint8 overflow" (.uint 1 (by omega)) (.uint 32 (by omega)),
-  assertEncodeError "uint8 overflow (2)" (.uint 1 (by omega)) (.uint 300 (by omega)),
+  assertEncodeError "uint8 overflow" ((.uint (ByteSize.ofLen 1 (by omega)))) (.uint 256),
+  assertEncodeError "uint8 overflow (2)" ((.uint (ByteSize.ofLen 1 (by omega)))) ((.uint 300)),
   assertEncodeError "address wrong size" .address (.address (bytes [0x01])),
-  assertEncodeError "bytesM size mismatch" (.bytesM 4 (by omega)) (.bytes (bytes [0x01, 0x02])),
+  assertEncodeError "bytesM size mismatch" ((.bytesM (ByteSize.ofLen 4 (by omega)))) (.bytes (bytes [0x01, 0x02])),
 ]
 
 def testDecodeErrors : List (IO TestResult) := [
-  assertDecodeError "uint8: data too short" (.uint 1 (by omega)) (bytes []),
-  assertDecodeError "uint8: truncated data" (.uint 1 (by omega)) (bytes [0x00, 0x01]),
+  assertDecodeError "uint8: data too short" ((.uint (ByteSize.ofLen 1 (by omega)))) (bytes []),
+  assertDecodeError "uint8: truncated data" ((.uint (ByteSize.ofLen 1 (by omega)))) (bytes [0x00, 0x01]),
   assertDecodeError "bool: invalid value 2" .bool (parseHex "0x0000000000000000000000000000000000000000000000000000000000000002"),
   assertDecodeError "bytes: truncated data" .bytes (parseHex "0x0000000000000000000000000000000000000000000000000000000000000001"),
 ]

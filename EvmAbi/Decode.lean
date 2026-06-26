@@ -52,8 +52,8 @@ mutual
 
   def decode (type : ABIType) (data : ByteArray) (offset : Nat) : Except String (ABIValue × Nat) :=
     match type with
-    | .uint byteLen _ =>
-      let b := byteLen * 8
+    | .uint s =>
+      let b := s.len * 8
       if offset + 32 > data.size then
         Except.error s!"uint{b}: data too short at offset {offset}"
       else
@@ -61,8 +61,8 @@ mutual
         if rawVal ≥ 2 ^ b then
           Except.error s!"uint{b}: decoded value {rawVal} exceeds 2^{b}"
         else Except.ok (.uint rawVal, offset + 32)
-    | .int byteLen _ =>
-      let b := byteLen * 8
+    | .int s =>
+      let b := s.len * 8
       if offset + 32 > data.size then
         Except.error s!"int{b}: data too short at offset {offset}"
       else
@@ -79,11 +79,11 @@ mutual
         if rawVal = 0 then Except.ok (.bool false, offset + 32)
         else if rawVal = 1 then Except.ok (.bool true, offset + 32)
         else Except.error s!"bool: invalid value {rawVal}, expected 0 or 1"
-    | .bytesM sz _ =>
+    | .bytesM s =>
       if offset + 32 > data.size then
-        Except.error s!"bytes{sz}: data too short at offset {offset}"
+        Except.error s!"bytes{s.len}: data too short at offset {offset}"
       else
-        let val := data.extract offset (offset + sz)
+        let val := data.extract offset (offset + s.len)
         Except.ok (.bytes val, offset + 32)
     | .address =>
       if offset + 32 > data.size then

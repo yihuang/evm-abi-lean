@@ -6,11 +6,26 @@ namespace EvmAbi.ABI
 
 open Nat
 
+
+/-- A validated byte-length in the range (0, 32]. -/
+structure ByteSize where
+  len : Nat
+  h : 0 < len ∧ len ≤ 32
+  deriving Repr, BEq
+
+namespace ByteSize
+
+/-- Smart constructor: call with e.g. `ByteSize.ofLen 32 (by omega)`. -/
+def ofLen (n : Nat) (h : 0 < n ∧ n ≤ 32) : ByteSize :=
+  { len := n, h := h }
+
+end ByteSize
+
 inductive ABIType : Type where
-  | uint (byteLen : Nat) (h : byteLen ≤ 32)
-  | int (byteLen : Nat) (h : byteLen ≤ 32)
+  | uint (s : ByteSize)
+  | int (s : ByteSize)
   | bool
-  | bytesM (size : Nat) (h : size ≤ 32)
+  | bytesM (s : ByteSize)
   | address
   | bytes
   | string
@@ -33,10 +48,10 @@ instance : ToString ABIType where
   toString t := (repr t).pretty 0
 
 def abiSize : ABIType → Nat
-  | .uint _ _ => 1
-  | .int _ _ => 1
+  | .uint _ => 1
+  | .int _ => 1
   | .bool => 1
-  | .bytesM _ _ => 1
+  | .bytesM _ => 1
   | .address => 1
   | .bytes => 1
   | .string => 1
@@ -155,8 +170,8 @@ def isTuple : ABIType → Bool
 def headSize (type : ABIType) : Nat :=
   if isDynamic type then 32 else
     match type with
-    | .uint _ _ | .int _ _ | .bool | .address => 32
-    | .bytesM _ _ => 32
+    | .uint _ | .int _ | .bool | .address => 32
+    | .bytesM _ => 32
     | .array elem (some n) => n * headSize elem
     | .tuple [] => 0
     | .tuple (e :: es) => headSize e + headSize (.tuple es)

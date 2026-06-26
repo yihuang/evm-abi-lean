@@ -72,6 +72,30 @@ theorem numBytes_bound (n : Nat) (hn : n < 2 ^ 256) : numBytes n ≤ 32 := by
   have hn' : n < 256 ^ 32 := by simpa [h256_eq] using hn
   exact numBytes_lt_pow n 32 hn'
 
+/- If n ≥ 256^k then numBytes n ≥ k+1. -/
+theorem numBytes_ge_pow (n : Nat) (k : Nat) (h : 256 ^ k ≤ n) : k + 1 ≤ numBytes n := by
+  induction k generalizing n with
+  | zero =>
+    have hnpos : n ≠ 0 := by
+      intro hzero; subst hzero; simp at h
+    unfold numBytes; simp [hnpos]
+  | succ k ih =>
+    have hnpos : n ≠ 0 := by
+      intro hzero; subst hzero; simp at h
+    unfold numBytes; simp [hnpos]
+    have h_mul : 256 ^ k * 256 ≤ n := by
+      simpa [Nat.pow_succ] using h
+    have h_div : 256 ^ k ≤ n / 256 := by
+      have h' : (256 ^ k * 256) / 256 ≤ n / 256 :=
+        Nat.div_le_div_right h_mul
+      calc
+        256 ^ k = (256 ^ k * 256) / 256 := by
+          symm; exact Nat.mul_div_cancel (256 ^ k) (by decide : 0 < 256)
+        _ ≤ n / 256 := h'
+    have ih' := ih (n / 256) h_div
+    simpa [Nat.add_comm] using Nat.add_le_add_right ih' 1
+
+
 /- Size of the recursive natToBytes accumulator. -/
 theorem size_go (n : Nat) (acc : ByteArray) : (natToBytes.go n acc).size = numBytes n + acc.size := by
   induction n using Nat.strongRecOn generalizing acc with
@@ -94,6 +118,48 @@ theorem size_go (n : Nat) (acc : ByteArray) : (natToBytes.go n acc).size = numBy
         rw [h_sz] at h1
         exact h1
       rw [h_ih']; omega
+
+/- When 2^(8k-1) ≤ n < 2^(8k), natToBytes n has exactly k bytes. -/
+theorem natToBytes_size_range (n : Nat) (k : Nat) (hk : 0 < k) (h_lo : 2 ^ (k * 8 - 1) ≤ n) (h_hi : n < 2 ^ (k * 8)) :
+    (natToBytes n).size = k := by
+  have h_pow_pos : 0 < 2 ^ (k * 8 - 1) :=
+    Nat.pow_pos (by omega : 0 < 2) (n := k * 8 - 1)
+  have h_pos : n > 0 := by omega
+  have h_hi' : n < 256 ^ k := by
+    calc
+      n < 2 ^ (k * 8) := h_hi
+      _ = 2 ^ (8 * k) := by simp [Nat.mul_comm]
+      _ = (2 ^ 8) ^ k := by rw [Nat.pow_mul]
+      _ = 256 ^ k := by
+        have h256 : (2 : Nat) ^ 8 = 256 := by native_decide
+        simp [h256]
+  have h_lo' : 256 ^ (k - 1) ≤ n := by
+    have h_exp_le : 8 * (k - 1) ≤ k * 8 - 1 := by omega
+    have h_pow_le : 2 ^ (8 * (k - 1)) ≤ 2 ^ (k * 8 - 1) :=
+      Nat.pow_le_pow_right (by omega : 0 < 2) h_exp_le
+    calc
+      256 ^ (k - 1) = (2 ^ 8) ^ (k - 1) := by
+        have h256 : (2 : Nat) ^ 8 = 256 := by native_decide
+        simp [h256]
+      _ = 2 ^ (8 * (k - 1)) := by rw [Nat.pow_mul]
+      _ ≤ 2 ^ (k * 8 - 1) := h_pow_le
+      _ ≤ n := h_lo
+  have h_numBytes : numBytes n = k := by
+    apply Nat.le_antisymm
+    · exact numBytes_lt_pow n k h_hi'
+    · have h_ge : k ≤ numBytes n := by
+        have h_nb := numBytes_ge_pow n (k - 1) h_lo'
+        omega
+      exact h_ge
+  calc
+    (natToBytes n).size = (natToBytes.go n ByteArray.empty).size := by
+      unfold natToBytes
+      by_cases hn0 : n = 0
+      · exfalso; omega
+      · simp [hn0]
+    _ = numBytes n + 0 := by rw [size_go, show ByteArray.empty.size = 0 from by decide]
+    _ = numBytes n := by simp
+    _ = k := h_numBytes
 
 /- natToBytes for a value < 2^256 fits in 32 bytes. -/
 theorem natToBytes_size_bound (v : Nat) (hv : v < 2 ^ 256) : (natToBytes v).size ≤ 32 := by
@@ -179,6 +245,12 @@ theorem bytesToNat_natToBytes (v : Nat) : bytesToNat (natToBytes v) = v := by
   · rename_i hzero; subst hzero; unfold bytesToNat bytesToNat_list; simp [zeroByte]
   · have h := bytesToNat_go v ByteArray.empty
     simpa [show (ByteArray.empty : ByteArray).size = 0 from by decide, show bytesToNat (ByteArray.empty : ByteArray) = 0 from by decide] using h
+
+/- bytesToNat distributes over append. -/
+theorem bytesToNat_append_general (a b : ByteArray) : bytesToNat (a ++ b) = bytesToNat a * 256 ^ b.size + bytesToNat b := by
+  unfold bytesToNat bytesToNat_list
+  rw [ByteArray.toList_data_append, List.foldl_append]
+  simpa [bytesToNat_list] using list_foldl_shift (b.data.toList) (bytesToNat_list a.data.toList)
 
 /- Padding zeros on the left does not change the numeric value. -/
 theorem bytesToNat_padLeft (b : ByteArray) (n : Nat) : bytesToNat (padLeft b n) = bytesToNat b := by
@@ -274,3 +346,69 @@ theorem fromUTF8!_toUTF8 (s : String) : String.fromUTF8! (s.toUTF8) = s := by
   simp [h]
   have h_eq : h = s.isValidUTF8 := Subsingleton.elim _ _
   rw [h_eq]; rfl
+
+/- For v' < 0, intToBytes v' byteLen is 32 bytes when the unsigned value fits in 32 bytes. -/
+theorem intToBytes_neg_size (v' : Int) (byteLen : Nat) (hv_nonpos : ¬ v' ≥ 0)
+    (h_bounded : ((2 : Int) ^ (byteLen * 8) + v').toNat < 2 ^ 256) :
+    (intToBytes v' byteLen).size = 32 := by
+  unfold intToBytes; dsimp
+  simp [hv_nonpos]
+  let u := ((2 : Int) ^ (byteLen * 8) + v').toNat
+  have h_sz : (natToBytes u).size ≤ 32 := natToBytes_size_bound u h_bounded
+  have h_sz' : (ByteArray.mk (Array.mk (List.replicate (32 - (natToBytes u).size) 0xFF))).size = 32 - (natToBytes u).size := by
+    unfold ByteArray.size; simp
+  calc
+    (ByteArray.mk (Array.mk (List.replicate (32 - (natToBytes u).size) 0xFF))).size + (natToBytes u).size
+        = (32 - (natToBytes u).size) + (natToBytes u).size := by rw [h_sz']
+    _ = 32 := by omega
+
+/- (2 : Int) ^ b is non-negative for all b. -/
+theorem two_pow_nonneg (b : Nat) : 0 ≤ (2 : Int) ^ b := by
+  induction b with
+  | zero => simp
+  | succ b ih =>
+    have h_eq : (2 : Int) ^ (b+1) = (2 : Int) ^ b * (2 : Int) := rfl
+    rw [h_eq]
+    exact Int.mul_nonneg ih (by omega : 0 ≤ (2 : Int))
+
+/- (2 : Int) ^ b = ((2 : Nat) ^ b : Int). -/
+theorem two_pow_nat_coe (b : Nat) : (2 : Int) ^ b = ((2 : Nat) ^ b : Int) := by
+  induction b with
+  | zero => simp
+  | succ b ih =>
+    calc
+      (2 : Int) ^ (b+1) = (2 : Int) ^ b * (2 : Int) := rfl
+      _ = ((2 : Nat) ^ b : Int) * (2 : Int) := by rw [ih]
+      _ = (((2 : Nat) ^ b * 2 : Nat) : Int) := by simp
+      _ = ((2 : Nat) ^ (b+1) : Int) := by
+        simpa using congrArg (fun n : Nat => (n : Int)) (Nat.pow_succ (2 : Nat) b).symm
+
+/- .toNat of (2 : Int) ^ b equals (2 : Nat) ^ b. -/
+theorem two_toNat_eq (b : Nat) : ((2 : Int) ^ b).toNat = (2 : Nat) ^ b := by
+  induction b with
+  | zero => simp
+  | succ b ih =>
+    have h_nonneg : 0 ≤ (2 : Int) ^ b := two_pow_nonneg b
+    calc
+      ((2 : Int) ^ (b+1)).toNat = (((2 : Int) ^ b) * (2 : Int)).toNat := rfl
+      _ = ((2 : Int) ^ b).toNat * (2 : Int).toNat :=
+        Int.toNat_mul h_nonneg (by omega : 0 ≤ (2 : Int))
+      _ = (2 : Nat) ^ b * 2 := by simp [ih]
+      _ = (2 : Nat) ^ (b+1) := by rw [Nat.pow_succ]
+
+/- 2^b - 2^(b-1) = 2^(b-1) for b > 0 (in ℤ). -/
+theorem two_pow_succ_sub (b : Nat) (hbpos : 0 < b) : (2 : Int) ^ b - (2 : Int) ^ (b - 1) = (2 : Int) ^ (b - 1) := by
+  have h_exp_eq : b = (b - 1) + 1 := by omega
+  have h_nat_eq : (2 : Nat) ^ b = (2 : Nat) ^ (b - 1) * 2 := by
+    calc
+      (2 : Nat) ^ b = (2 : Nat) ^ ((b - 1) + 1) := congrArg (fun n => (2 : Nat) ^ n) h_exp_eq
+      _ = (2 : Nat) ^ (b - 1) * 2 := by rw [Nat.pow_succ]
+  have h_int_cast : ((2 : Nat) ^ b : Int) = (((2 : Nat) ^ (b - 1) * 2 : Nat) : Int) :=
+    congrArg (fun n : Nat => (n : Int)) h_nat_eq
+  calc
+    (2 : Int) ^ b - (2 : Int) ^ (b - 1) = ((2 : Nat) ^ b : Int) - ((2 : Nat) ^ (b - 1) : Int) := by
+      rw [two_pow_nat_coe b, two_pow_nat_coe (b - 1)]
+    _ = (((2 : Nat) ^ (b - 1) * 2 : Nat) : Int) - ((2 : Nat) ^ (b - 1) : Int) := by
+      rw [h_int_cast]
+    _ = ((2 : Nat) ^ (b - 1) : Int) := by omega
+    _ = (2 : Int) ^ (b - 1) := by simp [two_pow_nat_coe]
