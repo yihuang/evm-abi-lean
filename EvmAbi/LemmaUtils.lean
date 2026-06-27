@@ -18,14 +18,7 @@ theorem extract_self (b : ByteArray) : b.extract 0 b.size = b := by
 
 /- zeros k produces exactly k zero bytes. -/
 theorem zeros_size (k : Nat) : (zeros k).size = k := by
-  unfold zeros; induction k with
-  | zero => rfl
-  | succ k ih =>
-    calc
-      (ByteArray.mk (Array.mk (List.replicate (k+1) zeroByte))).size = (Array.mk (List.replicate (k+1) zeroByte)).size := rfl
-      _ = (Array.mk (List.replicate (k+1) zeroByte)).toList.length := rfl
-      _ = (List.replicate (k+1) zeroByte).length := rfl
-      _ = k + 1 := by simp
+  simp [zeros, ByteArray.size]
 
 /- uint256ToBytes v is always 32 bytes when natToBytes v fits in 32 bytes. -/
 theorem uint256ToBytes_size (v : Nat) (hv : (natToBytes v).size ≤ 32) : (uint256ToBytes v).size = 32 := by
