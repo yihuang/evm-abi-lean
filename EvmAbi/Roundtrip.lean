@@ -325,13 +325,7 @@ theorem encode_atomic_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray
           omega
         have hsz : (natToBytes n).size ≤ 32 := natToBytes_size_bound n h_bound
         exact uint256ToBytes_size n hsz
-    case int v' => unfold encode at henc; simp at henc
-    case bool v' => unfold encode at henc; simp at henc
-    case bytes v' => unfold encode at henc; simp at henc
-    case string v' => unfold encode at henc; simp at henc
-    case address v' => unfold encode at henc; simp at henc
-    case array v' => unfold encode at henc; simp at henc
-    case tuple v' => unfold encode at henc; simp at henc
+    all_goals { unfold encode at henc; simp at henc }
   case int s =>
     cases v
     case int n =>
@@ -364,16 +358,7 @@ theorem encode_atomic_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray
           · have h_bounded : ((2 : Int) ^ (s.len * 8) + n).toNat < 2 ^ 256 := by
               have h_nonneg : 0 ≤ (2 : Int) ^ (s.len * 8) := two_pow_nonneg (s.len * 8)
               have h_lt : (2 : Int) ^ (s.len * 8) + n < (2 : Int) ^ (s.len * 8) := by omega
-              have hpos : 0 < (2 : Int) ^ (s.len * 8) := by
-                have h_nat_pos : (0 : Nat) < (2 : Nat) ^ (s.len * 8) := by
-                  induction s.len * 8 with
-                  | zero => decide
-                  | succ n ih =>
-                    rw [Nat.pow_succ]
-                    exact Nat.mul_pos ih (by omega)
-                have : ((0 : Nat) : Int) < ((2 : Nat) ^ (s.len * 8) : Int) :=
-                  Int.ofNat_lt.mpr h_nat_pos
-                simpa
+              have hpos : 0 < (2 : Int) ^ (s.len * 8) := by positivity
               have h_lt_nat : ((2 : Int) ^ (s.len * 8) + n).toNat < ((2 : Int) ^ (s.len * 8)).toNat :=
                 (Int.toNat_lt_toNat hpos).mpr h_lt
               have h_toNat : ((2 : Int) ^ (s.len * 8)).toNat = (2 : Nat) ^ (s.len * 8) :=
@@ -385,13 +370,7 @@ theorem encode_atomic_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray
                   have : s.len ≤ 32 := s.h.right; omega)
               exact Nat.lt_of_lt_of_le h_lt_nat' h256
             exact intToBytes_neg_size n s.len (by omega) h_bounded
-    case uint v' => unfold encode at henc; simp at henc
-    case bool v' => unfold encode at henc; simp at henc
-    case bytes v' => unfold encode at henc; simp at henc
-    case string v' => unfold encode at henc; simp at henc
-    case address v' => unfold encode at henc; simp at henc
-    case array v' => unfold encode at henc; simp at henc
-    case tuple v' => unfold encode at henc; simp at henc
+    all_goals { unfold encode at henc; simp at henc }
   case bool =>
     unfold isAtomic at h_atomic; simp at h_atomic
     cases v
@@ -403,13 +382,7 @@ theorem encode_atomic_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray
       have hsz : (natToBytes (if b then 1 else 0)).size ≤ 32 :=
         natToBytes_size_bound (if b then 1 else 0) h_bound
       exact uint256ToBytes_size (if b then 1 else 0) hsz
-    case int v' => unfold encode at henc; simp at henc
-    case uint v' => unfold encode at henc; simp at henc
-    case bytes v' => unfold encode at henc; simp at henc
-    case string v' => unfold encode at henc; simp at henc
-    case address v' => unfold encode at henc; simp at henc
-    case array v' => unfold encode at henc; simp at henc
-    case tuple v' => unfold encode at henc; simp at henc
+    all_goals { unfold encode at henc; simp at henc }
   case bytesM s =>
     cases v
     case bytes b =>
@@ -424,13 +397,7 @@ theorem encode_atomic_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray
         unfold padRight; split
         · omega
         · simp [zeros_size]; omega
-    case int v' => unfold encode at henc; simp at henc
-    case uint v' => unfold encode at henc; simp at henc
-    case bool v' => unfold encode at henc; simp at henc
-    case string v' => unfold encode at henc; simp at henc
-    case address v' => unfold encode at henc; simp at henc
-    case array v' => unfold encode at henc; simp at henc
-    case tuple v' => unfold encode at henc; simp at henc
+    all_goals { unfold encode at henc; simp at henc }
   case address =>
     unfold isAtomic at h_atomic; simp at h_atomic
     cases v
@@ -444,13 +411,7 @@ theorem encode_atomic_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray
         unfold padLeft
         have h20 : b.size = 20 := by omega
         simp [h20, zeros_size]
-    case int v' => unfold encode at henc; simp at henc
-    case uint v' => unfold encode at henc; simp at henc
-    case bool v' => unfold encode at henc; simp at henc
-    case bytes v' => unfold encode at henc; simp at henc
-    case string v' => unfold encode at henc; simp at henc
-    case array v' => unfold encode at henc; simp at henc
-    case tuple v' => unfold encode at henc; simp at henc
+    all_goals { unfold encode at henc; simp at henc }
   case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
   case string => unfold isDynamic at h_nondyn; simp at h_nondyn
   case array _ _ =>

@@ -17,14 +17,8 @@ theorem tuple_foldl_lt (es : List ABIType) :
 
 theorem list_foldl_lt_cons (t : ABIType) (rest : List (ABIType × ABIValue)) :
     List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst rest) <
-    List.foldl (fun acc t => acc + abiSize t) 0 (t :: List.map Prod.fst rest) := by
-  simp
-  have hpos : 0 < abiSize t := abiSize_pos t
-  have h_eq : List.foldl (fun acc t => acc + abiSize t) (abiSize t) (List.map Prod.fst rest) =
-             abiSize t + List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst rest) :=
-    foldl_add_eq (abiSize t) (List.map Prod.fst rest)
-  rw [h_eq]
-  omega
+    List.foldl (fun acc t => acc + abiSize t) 0 (t :: List.map Prod.fst rest) :=
+  list_foldl_lt_cons_abi t (List.map Prod.fst rest)
 
 mutual
 

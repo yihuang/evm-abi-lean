@@ -102,6 +102,16 @@ theorem abiSize_lt_tuple (t : ABIType) (ts : List ABIType) (h : t ∈ ts) : abiS
   apply Nat.lt_of_le_of_lt hle
   omega
 
+theorem list_foldl_lt_cons_abi (t : ABIType) (rest : List ABIType) :
+    List.foldl (fun acc t => acc + abiSize t) 0 rest <
+    List.foldl (fun acc t => acc + abiSize t) 0 (t :: rest) := by
+  simp
+  have hpos : 0 < abiSize t := by unfold abiSize; split <;> omega
+  have h_eq : List.foldl (fun acc t => acc + abiSize t) (abiSize t) rest =
+             abiSize t + List.foldl (fun acc t => acc + abiSize t) 0 rest :=
+    foldl_add_eq (abiSize t) rest
+  rw [h_eq]; omega
+
 def roundUp32 (n : Nat) : Nat := ((n + 31) / 32) * 32
 
 def zeroByte : UInt8 := 0

@@ -38,15 +38,6 @@ def decodeDynamicString (data : ByteArray) (offset : Nat) : Except String (ABIVa
 def computeFixedArraySize (elemType : ABIType) (n : Nat) : Nat :=
   if !isDynamic elemType then n * 32 else n * 32
 
-theorem list_foldl_lt_cons_abi (t : ABIType) (rest : List ABIType) :
-    List.foldl (fun acc t => acc + abiSize t) 0 rest <
-    List.foldl (fun acc t => acc + abiSize t) 0 (t :: rest) := by
-  simp
-  have hpos : 0 < abiSize t := by unfold abiSize; split <;> omega
-  have h_eq : List.foldl (fun acc t => acc + abiSize t) (abiSize t) rest =
-             abiSize t + List.foldl (fun acc t => acc + abiSize t) 0 rest :=
-    foldl_add_eq (abiSize t) rest
-  rw [h_eq]; omega
 
 mutual
 
