@@ -209,8 +209,8 @@ mutual
         first
         | let total := List.foldl (fun acc t => acc + abiSize t) 0 types
           let t := types.get ⟨i, hi⟩
-          have hm : types.get ⟨i, hi⟩ ∈ types := by
-            simpa using List.getElem_mem (l := types) (h := hi)
+          have hm : types.get ⟨i, hi⟩ ∈ types :=
+            List.getElem_mem (l := types) (h := hi)
           have h_sz_le : abiSize t ≤ total := mem_foldl_le t types hm
           by_cases h_lt : abiSize t < total
           · apply Prod.Lex.left; exact h_lt

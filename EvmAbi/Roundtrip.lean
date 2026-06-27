@@ -7,7 +7,6 @@ import EvmAbi.LemmaUtils
 open EvmAbi.ABI
 open EvmAbi.ABI.Encode
 open EvmAbi.ABI.Decode
-set_option linter.unusedVariables false
 
 
 /- uint256 encode → decode recovers the original value. -/
@@ -34,7 +33,7 @@ theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray) (henc : 
         calc
           bytesToNat ((uint256ToBytes v').extract 0 32) = bytesToNat (uint256ToBytes v') := by
             rw [← hsize32, extract_self]
-          _ = v' := bytesToNat_uint256ToBytes v' hv256
+          _ = v' := bytesToNat_uint256ToBytes v'
       unfold decode; rw [hdata]; simp [hsize32, h_val, hrange]
   case int v' => simp [encode] at henc
   case bool v' => simp [encode] at henc
@@ -58,7 +57,7 @@ theorem roundtrip_bool (v : ABIValue) (data : ByteArray) (henc : encode .bool v 
       calc
         bytesToNat ((uint256ToBytes (if v' then 1 else 0)).extract 0 32) = bytesToNat (uint256ToBytes (if v' then 1 else 0)) := by
           rw [← hsize32, extract_self]
-        _ = (if v' then 1 else 0) := bytesToNat_uint256ToBytes (if v' then 1 else 0) hbits
+        _ = (if v' then 1 else 0) := bytesToNat_uint256ToBytes (if v' then 1 else 0)
     unfold decode; rw [hdata]; simp [hsize32, h_val]; cases v' <;> simp
   case uint v' => simp [encode] at henc
   case int v' => simp [encode] at henc
@@ -120,7 +119,7 @@ private theorem intToBytes_decode_nonneg (s : ByteSize) (v' : Int) (hv_nonneg : 
           = bytesToNat (uint256ToBytes v'.toNat) % 2 ^ (s.len * 8) := by
         simp [intToBytes, uint256ToBytes, hv_nonneg]
       _ = v'.toNat % 2 ^ (s.len * 8) := by
-        rw [bytesToNat_uint256ToBytes v'.toNat hv_lt_256]
+        rw [bytesToNat_uint256ToBytes v'.toNat]
       _ = v'.toNat := by
         have h_lt_pow : v'.toNat < 2 ^ (s.len * 8) := by
           have h_pow : 2 ^ (s.len * 8 - 1) ≤ 2 ^ (s.len * 8) :=
@@ -253,7 +252,7 @@ lemma dynamicRoundtrip_preamble (b : ByteArray) (hb256 : b.size < 2 ^ 256) :
   have h_size : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size := by
     simp [ha_sz, h_pad_sz]
   have h_len : bytesToNat ((uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 0 32) = b.size := by
-    rw [← ha_sz, extract_first_n, bytesToNat_uint256ToBytes b.size hb256]
+    rw [← ha_sz, extract_first_n, bytesToNat_uint256ToBytes b.size]
   have h_extract_val : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 32 (32 + b.size) = b :=
     roundtrip_bytes_val b hb256
   exact ⟨ha_sz, h_pad_sz, h_roundUp_ge, h_size, h_len, h_extract_val⟩
@@ -522,7 +521,7 @@ by
 
 /-- Extract composition: first extract [a, c), then extract [b, d) from that result,
     equals extracting [a+b, a+d) from the original. -/
-theorem extract_extract_general (x : ByteArray) (a b c d : Nat) (hb : b ≤ d) (hd : a + d ≤ c) :
+theorem extract_extract_general (x : ByteArray) (a b c d : Nat) (hd : a + d ≤ c) :
     (x.extract a c).extract b d = x.extract (a + b) (a + d) := by
   apply ByteArray.ext
   simp
@@ -536,11 +535,11 @@ theorem extract_after_suffix_offset (pref suff : ByteArray) (off k : Nat) :
     (pref ++ suff).extract (pref.size + off) (pref.size + off + k)
         = (pref ++ suff).extract (pref.size + off) (pref.size + (off + k)) := by simp [Nat.add_assoc]
     _ = ((pref ++ suff).extract pref.size (pref.size + (off + k))).extract off (off + k) := by
-      symm; exact extract_extract_general (pref ++ suff) pref.size off (pref.size + (off + k)) (off + k) (by omega) (by omega)
+      symm; exact extract_extract_general (pref ++ suff) pref.size off (pref.size + (off + k)) (off + k) (by omega)
     _ = (suff.extract 0 (off + k)).extract off (off + k) := by
       rw [extract_after_suffix pref suff (off + k)]
     _ = suff.extract off (off + k) := by
-      rw [extract_extract_general suff 0 off (off + k) (off + k) (by omega) (by omega)]
+      rw [extract_extract_general suff 0 off (off + k) (off + k) (by omega)]
       simp
 
 
@@ -581,28 +580,22 @@ by
         exact hoff.symm
       · simp [h0] at h_decode
         by_cases h1 : bytesToNat (data.extract off (off + 32)) = 1
-        · simp [h0, h1] at h_decode
+        · simp [h1] at h_decode
           rcases h_decode with ⟨hv, hoff⟩
           exact hoff.symm
-        · simp [h0, h1] at h_decode
+        · simp [h1] at h_decode
   · case bytesM s =>
     unfold decode at h_decode
     by_cases h_size : off + 32 > data.size
     · simp [h_size] at h_decode
     · simp [h_size] at h_decode
-      repeat (split at h_decode <;> try simp at h_decode)
-      all_goals
-        try (rcases h_decode with ⟨hv, hoff⟩; exact hoff.symm)
-        try (simp at h_decode)
+      omega
   · case address =>
     unfold decode at h_decode
     by_cases h_size : off + 32 > data.size
     · simp [h_size] at h_decode
     · simp [h_size] at h_decode
-      repeat (split at h_decode <;> try simp at h_decode)
-      all_goals
-        try (rcases h_decode with ⟨hv, hoff⟩; exact hoff.symm)
-        try (simp at h_decode)
+      omega
   · case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
   · case string => unfold isDynamic at h_nondyn; simp at h_nondyn
   · case array e sOpt => unfold isAtomic at h_atomic; simp at h_atomic
@@ -631,7 +624,7 @@ by
       · exfalso; omega
       · by_cases h_val : 2 ^ (s.len * 8) ≤ bytesToNat (suffix.extract off (off + 32))
         · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
-          simp [h_val, Functor.map, Except.map, Nat.add_assoc]
+          simp [h_val, Functor.map, Except.map]
         · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
           simp [h_val, Functor.map, Except.map, Nat.add_assoc]
   · case int s =>
@@ -656,9 +649,9 @@ by
           simp [h_val, Functor.map, Except.map, Nat.add_assoc]
         · by_cases h_val' : bytesToNat (suffix.extract off (off + 32)) = 1
           · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
-            simp [h_val, h_val', Functor.map, Except.map, Nat.add_assoc]
+            simp [h_val', Functor.map, Except.map, Nat.add_assoc]
           · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
-            simp [h_val, h_val', Functor.map, Except.map, Nat.add_assoc]
+            simp [h_val, h_val', Functor.map, Except.map]
   · case bytesM s =>
     have h_extract_slen : (pref ++ suffix).extract (pref.size + off) (pref.size + off + s.len) = suffix.extract off (off + s.len) :=
       extract_after_suffix_offset pref suffix off s.len
@@ -753,9 +746,9 @@ theorem encodeFixedArrayStatic_eq (elemType : ABIType) (vals : List ABIValue) (a
     intro acc
     simp [encodeFixedArrayStatic]
     cases h_enc_v : encode elemType v
-    · simp [h_enc_v]
+    · simp
     · rename_i enc_v
-      simp [h_enc_v]
+      simp
       cases h_rest : encodeFixedArrayStatic elemType rest ByteArray.empty
       · rename_i e
         simp [h_rest, ih enc_v, ih (acc ++ enc_v)]
@@ -882,21 +875,21 @@ by
             have h_extract_slen : (enc_v ++ suffix).extract 0 s.len = enc_v.extract 0 s.len := by
               calc
                 (enc_v ++ suffix).extract 0 s.len = ((enc_v ++ suffix).extract 0 32).extract 0 s.len := by
-                  rw [extract_extract_general (enc_v ++ suffix) 0 0 32 s.len (by omega) (by simpa using hslen32)]
+                  rw [extract_extract_general (enc_v ++ suffix) 0 0 32 s.len (by simpa using hslen32)]
                   simp
                 _ = (enc_v.extract 0 32).extract 0 s.len := by rw [h_extract_0_32]
                 _ = enc_v.extract 0 s.len := by
-                  rw [extract_extract_general enc_v 0 0 32 s.len (by omega) (by simpa using hslen32)]
+                  rw [extract_extract_general enc_v 0 0 32 s.len (by simpa using hslen32)]
                   simp
             unfold decode; simp [h_sz_v, h_extract_slen]
           · case address =>
             have h_extract_addr : (enc_v ++ suffix).extract 12 32 = enc_v.extract 12 32 := by
               calc
                 (enc_v ++ suffix).extract 12 32 = ((enc_v ++ suffix).extract 0 32).extract 12 32 := by
-                  rw [extract_extract_general (enc_v ++ suffix) 0 12 32 32 (by omega) (by omega)]
+                  rw [extract_extract_general (enc_v ++ suffix) 0 12 32 32 (by omega)]
                 _ = (enc_v.extract 0 32).extract 12 32 := by rw [h_extract_0_32]
                 _ = enc_v.extract 12 32 := by
-                  rw [extract_extract_general enc_v 0 12 32 32 (by omega) (by omega)]
+                  rw [extract_extract_general enc_v 0 12 32 32 (by omega)]
             unfold decode; simp [h_sz_v, h_extract_addr]
           · case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
           · case string => unfold isDynamic at h_nondyn; simp at h_nondyn
@@ -950,12 +943,8 @@ by
             _ = Except.ok (v :: rest, (enc_v ++ suffix).size) := by
               simp [h_sz_v]
 
-termination_by (abiSize elemType, 1, vals.length)
-decreasing_by
-  · apply Prod.Lex.right (a := abiSize elemType)
-    apply Prod.Lex.left; omega
-  · apply Prod.Lex.right (a := abiSize elemType)
-    apply Prod.Lex.right (a := 1); simp
+            _ = Except.ok (v :: rest, (enc_v ++ suffix).size) := by
+              simp [h_sz_v]
 
 
 /-- Universal roundtrip: encoding followed by decoding recovers the original value. -/
@@ -1073,7 +1062,7 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
                   have h_decode_go : decodeFixedArray_goStatic elemType vals.length enc 0 0 [] = Except.ok (vals, enc.size) :=
                     static_array_roundtrip elemType vals enc h_enc h_nondyn h_atomic
                   have h_len_val : bytesToNat (uint256ToBytes vals.length) = vals.length :=
-                    bytesToNat_uint256ToBytes vals.length h_len_lt
+                    bytesToNat_uint256ToBytes vals.length
                   have h_sz : (uint256ToBytes vals.length).size = 32 := by
                     apply uint256ToBytes_size; exact natToBytes_size_bound vals.length h_len_lt
                   have h_go_shift : decodeFixedArray_goStatic elemType vals.length

@@ -1,18 +1,9 @@
 import Mathlib.Tactic
-
-/-
-# ABI Utility Lemmas
-
-Foundation lemmas for byte-level encoding/decoding used by the roundtrip proofs.
--/
-
 import EvmAbi.ABI
 import EvmAbi.Encode
 import EvmAbi.Decode
 
 open EvmAbi.ABI
-
-set_option linter.unusedVariables false
 
 /- 1-byte ByteArray for testing. -/
 def mkSingleton (b : UInt8) : ByteArray := { data := Array.mk [b] }
@@ -278,7 +269,7 @@ theorem bytesToNat_padLeft (b : ByteArray) (n : Nat) : bytesToNat (padLeft b n) 
     rw [hlist, hz]
 
 /- bytesToNat ∘ uint256ToBytes = id for values < 2^256. -/
-theorem bytesToNat_uint256ToBytes (v : Nat) (hv : v < 2 ^ 256) : bytesToNat (uint256ToBytes v) = v := by
+theorem bytesToNat_uint256ToBytes (v : Nat) : bytesToNat (uint256ToBytes v) = v := by
   unfold uint256ToBytes
   rw [bytesToNat_padLeft, bytesToNat_natToBytes v]
 
@@ -311,7 +302,7 @@ theorem padLeft_extract_address (b : ByteArray) (h20 : b.size = 20) : (padLeft b
     simp [h20, zeros_size 12] at hi ⊢
 
 /- padRight b n extracts back to b for the first b.size bytes. -/
-theorem padRight_extract_self (b : ByteArray) (n : Nat) (h : b.size ≤ n) : (padRight b n).extract 0 b.size = b := by
+theorem padRight_extract_self (b : ByteArray) (n : Nat) : (padRight b n).extract 0 b.size = b := by
   unfold padRight; split
   · exact extract_self b
   · exact extract_first_n b (zeros (n - b.size))
@@ -337,7 +328,7 @@ theorem roundtrip_bytes_val (v' : ByteArray) (hv256 : v'.size < 2 ^ 256) :
         = (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract
             (uint256ToBytes v'.size).size ((uint256ToBytes v'.size).size + v'.size) := by simp [ha_sz]
     _ = (padRight v' (roundUp32 v'.size)).extract 0 v'.size := h_sub
-    _ = v' := padRight_extract_self v' (roundUp32 v'.size) h_val_sz
+    _ = v' := padRight_extract_self v' (roundUp32 v'.size)
 
 /-! ## UTF-8 lemmas -/
 
@@ -368,13 +359,13 @@ theorem intToBytes_neg_size (v' : Int) (byteLen : Nat) (hv_nonpos : ¬ v' ≥ 0)
 theorem two_pow_nonneg (b : Nat) : 0 ≤ (2 : Int) ^ b := by positivity
 
 theorem two_pow_nat_coe (b : Nat) : (2 : Int) ^ b = ((2 : Nat) ^ b : Int) := by
-  simpa using (Nat.cast_pow (2 : ℕ) b : ℤ)
+  simp
 
 /- .toNat of (2 : Int) ^ b equals (2 : Nat) ^ b. -/
 theorem two_toNat_eq (b : Nat) : ((2 : Int) ^ b).toNat = (2 : Nat) ^ b := by
   calc
     ((2 : Int) ^ b).toNat = (((2 : Nat) ^ b : ℤ)).toNat := by
-      simpa using (Nat.cast_pow (2 : ℕ) b : ℤ)
+      simp
     _ = (2 : Nat) ^ b := by
       have h_nonneg : 0 ≤ ((2 : Nat) ^ b : ℤ) := by positivity
       exact (Nat.cast_inj (R := ℤ)).mp (Int.toNat_of_nonneg h_nonneg)
