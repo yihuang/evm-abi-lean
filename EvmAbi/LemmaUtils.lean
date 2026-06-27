@@ -1,3 +1,5 @@
+import Mathlib.Tactic
+
 /-
 # ABI Utility Lemmas
 
@@ -93,7 +95,7 @@ theorem numBytes_ge_pow (n : Nat) (k : Nat) (h : 256 ^ k ≤ n) : k + 1 ≤ numB
           symm; exact Nat.mul_div_cancel (256 ^ k) (by decide : 0 < 256)
         _ ≤ n / 256 := h'
     have ih' := ih (n / 256) h_div
-    simpa [Nat.add_comm] using Nat.add_le_add_right ih' 1
+    omega
 
 
 /- Size of the recursive natToBytes accumulator. -/
@@ -363,44 +365,22 @@ theorem intToBytes_neg_size (v' : Int) (byteLen : Nat) (hv_nonpos : ¬ v' ≥ 0)
     _ = 32 := by omega
 
 /- (2 : Int) ^ b is non-negative for all b. -/
-theorem two_pow_nonneg (b : Nat) : 0 ≤ (2 : Int) ^ b := by
-  induction b with
-  | zero => simp
-  | succ b ih =>
-    have h_eq : (2 : Int) ^ (b+1) = (2 : Int) ^ b * (2 : Int) := rfl
-    rw [h_eq]
-    exact Int.mul_nonneg ih (by omega : 0 ≤ (2 : Int))
+theorem two_pow_nonneg (b : Nat) : 0 ≤ (2 : Int) ^ b := by positivity
 
-/- (2 : Int) ^ b = ((2 : Nat) ^ b : Int). -/
 theorem two_pow_nat_coe (b : Nat) : (2 : Int) ^ b = ((2 : Nat) ^ b : Int) := by
-  induction b with
-  | zero => simp
-  | succ b ih =>
-    calc
-      (2 : Int) ^ (b+1) = (2 : Int) ^ b * (2 : Int) := rfl
-      _ = ((2 : Nat) ^ b : Int) * (2 : Int) := by rw [ih]
-      _ = (((2 : Nat) ^ b * 2 : Nat) : Int) := by simp
-      _ = ((2 : Nat) ^ (b+1) : Int) := by
-        simpa using congrArg (fun n : Nat => (n : Int)) (Nat.pow_succ (2 : Nat) b).symm
+  simpa using (Nat.cast_pow (2 : ℕ) b : ℤ)
 
 /- .toNat of (2 : Int) ^ b equals (2 : Nat) ^ b. -/
 theorem two_toNat_eq (b : Nat) : ((2 : Int) ^ b).toNat = (2 : Nat) ^ b := by
-  induction b with
-  | zero => simp
-  | succ b ih =>
-    have h_nonneg : 0 ≤ (2 : Int) ^ b := two_pow_nonneg b
-    calc
-      ((2 : Int) ^ (b+1)).toNat = (((2 : Int) ^ b) * (2 : Int)).toNat := rfl
-      _ = ((2 : Int) ^ b).toNat * (2 : Int).toNat :=
-        Int.toNat_mul h_nonneg (by omega : 0 ≤ (2 : Int))
-      _ = (2 : Nat) ^ b * 2 := by simp [ih]
-      _ = (2 : Nat) ^ (b+1) := by rw [Nat.pow_succ]
-
-/- 2^b - 2^(b-1) = 2^(b-1) for b > 0 (in ℤ). -/
+  calc
+    ((2 : Int) ^ b).toNat = (((2 : Nat) ^ b : ℤ)).toNat := by
+      simpa using (Nat.cast_pow (2 : ℕ) b : ℤ)
+    _ = (2 : Nat) ^ b := by
+      have h_nonneg : 0 ≤ ((2 : Nat) ^ b : ℤ) := by positivity
+      exact (Nat.cast_inj (R := ℤ)).mp (Int.toNat_of_nonneg h_nonneg)
 theorem two_pow_succ_sub (b : Nat) (hbpos : 0 < b) : (2 : Int) ^ b - (2 : Int) ^ (b - 1) = (2 : Int) ^ (b - 1) := by
-  have h_nat : (2 : Nat) ^ b = (2 : Nat) ^ (b - 1) * 2 := by
+  have h : (2 : ℤ) ^ b = (2 : ℤ) ^ (b - 1) * (2 : ℤ) := by
     calc
-      (2 : Nat) ^ b = (2 : Nat) ^ ((b - 1) + 1) := by rw [Nat.sub_add_cancel hbpos]
-      _ = (2 : Nat) ^ (b - 1) * 2 := by rw [Nat.pow_succ]
-  have h_int : (2 : Int) ^ b = (2 : Int) ^ (b - 1) * (2 : Int) := by exact_mod_cast h_nat
+      (2 : ℤ) ^ b = (2 : ℤ) ^ ((b - 1) + 1) := by rw [Nat.sub_add_cancel hbpos]
+      _ = (2 : ℤ) ^ (b - 1) * (2 : ℤ) := by rw [pow_succ]
   omega

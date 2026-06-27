@@ -145,12 +145,7 @@ private theorem intToBytes_decode_neg (s : ByteSize) (v' : Int) (hv_neg : ¬ v' 
   let unsigned : Nat := ((2 ^ b : Int) + v').toNat
   have h_unsigned_lt : unsigned < 2 ^ b := by
     have h_lt : (2 ^ b : Int) + v' < (2 ^ b : Int) := by omega
-    have h_pos2b : 0 < (2 ^ b : Int) := by
-      have h_nat_pos : 0 < (2 : Nat) ^ b := by
-        induction b with
-        | zero => decide
-        | succ _ ih => exact Nat.mul_pos ih (by omega)
-      exact mod_cast h_nat_pos
+    have h_pos2b : 0 < (2 ^ b : Int) := by positivity
     have h_toNat : ((2 ^ b : Int) + v').toNat < (2 ^ b : Int).toNat :=
       (Int.toNat_lt_toNat h_pos2b).mpr h_lt
     simpa [unsigned, two_toNat_eq b] using h_toNat
@@ -550,7 +545,6 @@ by
     intro off acc
     rw [decodeFixedArray_goStatic, decodeFixedArray_goStatic]
     simp
-    rfl
   | succ n ih =>
     intro off acc
     have h_lt : ¬ 0 ≥ n.succ := by omega
@@ -763,7 +757,6 @@ by
     intro m IH n i off acc hm hsz
     by_cases h : i ≥ n
     · simp [decodeFixedArray_goStatic, h]
-      rfl
     · have h_not_ge : ¬ i ≥ n := by omega
       rw [decodeFixedArray_goStatic, decodeFixedArray_goStatic]
       rw [if_neg h_not_ge, if_neg h_not_ge]
@@ -923,11 +916,11 @@ by
         have h_decode_eq : decode elemType (enc_v ++ suffix) 0 = decode elemType enc_v 0 := by
           cases elemType
           · case uint s =>
-            unfold decode; simp [h_sz_v, h_extract_0_32]; omega
+            unfold decode; simp [h_sz_v, h_extract_0_32]
           · case int s =>
-            unfold decode; simp [h_sz_v, h_extract_0_32]; omega
+            unfold decode; simp [h_sz_v, h_extract_0_32]
           · case bool =>
-            unfold decode; simp [h_sz_v, h_extract_0_32]; omega
+            unfold decode; simp [h_sz_v, h_extract_0_32]
           · case bytesM s =>
             have hslen32 : s.len ≤ 32 := s.h.right
             have h_extract_slen : (enc_v ++ suffix).extract 0 s.len = enc_v.extract 0 s.len := by
