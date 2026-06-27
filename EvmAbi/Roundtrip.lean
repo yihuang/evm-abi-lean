@@ -988,7 +988,7 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
 
   | .tuple elems => by
       cases v
-      case tuple vals => sorry
+      case tuple vals => simp [encode] at henc
       case uint v' => simp [encode] at henc
       case int v' => simp [encode] at henc
       case bool v' => simp [encode] at henc
