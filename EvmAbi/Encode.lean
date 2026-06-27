@@ -195,12 +195,4 @@ def encodeArgs (types : List ABIType) (values : List ABIValue) : Except String B
   else
     encodeTupleElems (List.zip types values)
 
-def toHexDigit (n : Nat) : Char :=
-  if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
-
-def bytesToHex (b : ByteArray) : String :=
-  "0x" ++ b.foldl (fun acc byte =>
-    acc ++ String.ofList [toHexDigit (byte.toNat / 16), toHexDigit (byte.toNat % 16)]
-  ) ""
-
 end EvmAbi.ABI.Encode

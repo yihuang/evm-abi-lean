@@ -22,21 +22,10 @@ def decodeDynamicBytes (data : ByteArray) (offset : Nat) : Except String (ABIVal
       Except.ok (.bytes val, offset + consumed)
 
 def decodeDynamicString (data : ByteArray) (offset : Nat) : Except String (ABIValue × Nat) :=
-  if offset + 32 > data.size then
-    Except.error s!"string: data too short for length at offset {offset}"
-  else
-    let len := bytesToNat (data.extract offset (offset + 32))
-    let dataStart := offset + 32
-    if dataStart + len > data.size then
-      Except.error s!"string: data too short for {len} bytes at offset {dataStart}"
-    else
-      let rawBytes := data.extract dataStart (dataStart + len)
-      let s := String.fromUTF8! rawBytes
-      let consumed := 32 + roundUp32 len
-      Except.ok (.string s, offset + consumed)
-
-def computeFixedArraySize (elemType : ABIType) (n : Nat) : Nat :=
-  if !isDynamic elemType then n * 32 else n * 32
+  (decodeDynamicBytes data offset).map (fun (v, off) =>
+    match v with
+    | .bytes b => (.string (String.fromUTF8! b), off)
+    | v => (v, off))
 
 
 mutual

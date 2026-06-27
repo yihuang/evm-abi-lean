@@ -7,7 +7,11 @@ FIPS PUB 202 (SHA-3) and the original Keccak specification.
 The function selector is the first 4 bytes of Keccak-256(signature).
 -/
 
+import EvmAbi.ABI
+
 namespace EvmAbi.Hash
+open EvmAbi.ABI
+
 
 ----------------------------------------------------------------------
 -- Keccak-f[1600] permutation
@@ -168,15 +172,12 @@ def functionSelector (signature : String) : ByteArray :=
   let hash := keccak256 sigBytes
   hash.extract 0 4
 
-/-- Format a byte as a hex character -/
-def toHexDigit (n : Nat) : Char :=
-  if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
-
-/-- Format a function selector as a hex string -/
+/- Format a function selector as a hex string -/
 def selectorHex (sig : String) : String :=
   let sel := functionSelector sig
   "0x" ++ sel.foldl (fun acc byte =>
-    acc ++ String.ofList [toHexDigit (byte.toNat / 16), toHexDigit (byte.toNat % 16)]
+    acc ++ String.ofList [hexDigit (byte.toNat / 16), hexDigit (byte.toNat % 16)]
   ) ""
+
 
 end EvmAbi.Hash

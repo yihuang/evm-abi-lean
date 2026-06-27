@@ -279,17 +279,10 @@ theorem roundtrip_bytes_full (v' : ByteArray) (data : ByteArray) (henc : encode 
 theorem decodeDynamicString_roundtrip (v' : String) (hv256 : v'.toUTF8.size < 2 ^ 256) (data : ByteArray)
     (hdata : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) :
     decodeDynamicString data 0 = Except.ok (.string v', data.size) := by
-  let utf8 := v'.toUTF8
-  have huv256 : utf8.size < 2 ^ 256 := hv256
-  have hdata' : data = uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size) := by
-    simpa [utf8] using hdata
-  rw [hdata']
-  rcases dynamicRoundtrip_preamble utf8 huv256 with ⟨ha_sz, h_pad_sz, _, h_size, h_len, h_extract_val⟩
-  unfold decodeDynamicString; dsimp; simp
-  rw [ha_sz, h_pad_sz, h_len, h_extract_val, fromUTF8!_toUTF8 v']
-  have h1 : ¬ (32 + roundUp32 utf8.size < 32) := by omega
-  have h2 : ¬ (32 + roundUp32 utf8.size < 32 + utf8.size) := by omega
-  simp [h1, h2]
+  rw [decodeDynamicString, decodeDynamicBytes_roundtrip v'.toUTF8 hv256 data hdata]
+  simp [Except.map]
+  have h : v'.toByteArray = v'.toUTF8 := rfl
+  rw [h, fromUTF8!_toUTF8 v']
 theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .string (ABIValue.string v') = Except.ok data) :
     decode .string data 0 = Except.ok (ABIValue.string v', data.size) := by
   simp [encode] at henc; split at henc
@@ -828,15 +821,8 @@ by
               simp [hsz_eq] at h_enc_v
               have hdata' : enc_v = padRight v' 32 := h_enc_v.symm
               have h_extract' : (padRight v' 32).extract 0 s.len = v' := padRight_extract_eq v' s.len hsz_eq
-              have h_size' : (padRight v' 32).size = 32 := by
-                have h_v32 : v'.size ≤ 32 := by rw [hsz_eq]; exact s.h.right
-                unfold padRight; split
-                · omega
-                · have h_lt : v'.size < 32 := by omega
-                  calc
-                    (v' ++ zeros (32 - v'.size)).size = v'.size + (zeros (32 - v'.size)).size := by simp
-                    _ = v'.size + (32 - v'.size) := by simp [zeros_size]
-                    _ = 32 := by omega
+              have h_size' : (padRight v' 32).size = 32 :=
+                padRight_size_32 v' (by rw [hsz_eq]; exact s.h.right)
               unfold decode; rw [hdata']; simp [h_extract', h_size']
           case uint v' => simp [encode] at h_enc_v
           case int v' => simp [encode] at h_enc_v
@@ -974,25 +960,10 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
           have hdata : data = padRight v' 32 := henc.symm
           have h_extract : (padRight v' 32).extract 0 s.len = v' :=
             padRight_extract_eq v' s.len hsz_eq
-          have h_size : (padRight v' 32).size = 32 := by
-            have h_v32 : v'.size ≤ 32 := by
-              rw [hsz_eq]
-              exact s.h.right
-            unfold padRight; split
-            · omega
-            · have h_lt : v'.size < 32 := by omega
-              calc
-                (v' ++ zeros (32 - v'.size)).size = v'.size + (zeros (32 - v'.size)).size := by simp
-                _ = v'.size + (32 - v'.size) := by simp [zeros_size]
-                _ = 32 := by omega
+          have h_size : (padRight v' 32).size = 32 :=
+            padRight_size_32 v' (by rw [hsz_eq]; exact s.h.right)
           unfold decode; rw [hdata]; simp [h_extract, h_size]
-      case uint v' => simp [encode] at henc
-      case int v' => simp [encode] at henc
-      case bool v' => simp [encode] at henc
-      case string v' => simp [encode] at henc
-      case address v' => simp [encode] at henc
-      case array _ => simp [encode] at henc
-      case tuple _ => simp [encode] at henc
+      all_goals { unfold encode at henc; simp at henc }
   | .address => roundtrip_address v data henc
   | .bytes => by
       cases v

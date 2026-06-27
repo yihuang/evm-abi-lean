@@ -72,7 +72,7 @@ def assertEncodes (label : String) (t : ABIType) (v : ABIValue) (expectedHex : S
     if byteArraysEq enc expected then
       pure (.pass label)
     else
-      pure (.fail label s!"got {bytesToHex enc}, expected {expectedHex}")
+      pure (.fail label s!"got {hexBytes enc}, expected {expectedHex}")
   | Except.error e =>
     pure (.fail label s!"encode error: {e}")
 
@@ -100,7 +100,7 @@ def assertSelector (label : String) (sig : String) (expectedHex : String) : IO T
   if byteArraysEq sel expected then
     pure (.pass label)
   else
-    pure (.fail label s!"got {bytesToHex sel}, expected {expectedHex}")
+    pure (.fail label s!"got {hexBytes sel}, expected {expectedHex}")
 
 /-- Assert decode produces the expected value -/
 def assertDecodes (label : String) (t : ABIType) (dataHex : String) (expected : ABIValue) : IO TestResult := do

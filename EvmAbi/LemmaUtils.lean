@@ -300,6 +300,12 @@ theorem padRight_extract_self (b : ByteArray) (n : Nat) : (padRight b n).extract
   · exact extract_self b
   · exact extract_first_n b (zeros (n - b.size))
 
+/- padRight b 32 is always 32 bytes when b ≤ 32 bytes. -/
+theorem padRight_size_32 (b : ByteArray) (h : b.size ≤ 32) : (padRight b 32).size = 32 := by
+  unfold padRight; split
+  · omega
+  · simp [zeros_size]; omega
+
 /- Extract a suffix of an append equals extracting from the second part. -/
 theorem extract_after_suffix (a b : ByteArray) (k : Nat) : (a ++ b).extract a.size (a.size + k) = b.extract 0 k := by
   apply ByteArray.ext; simp
