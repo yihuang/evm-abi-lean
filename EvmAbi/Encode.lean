@@ -60,10 +60,20 @@ mutual
         Except.error s!"string: too long ({utf8.size} bytes)"
     | .array elemType sz, .array vals =>
       if !isDynamic elemType then
-        match encodeFixedArrayStatic elemType vals ByteArray.empty with
-        | Except.ok enc =>
-          Except.ok (match sz with | none => uint256ToBytes vals.length ++ enc | some _ => enc)
-        | Except.error e => Except.error e
+        match sz with
+        | some n =>
+          if vals.length ≠ n then
+            Except.error s!"array: expected {n} elements, got {vals.length}"
+          else
+            match encodeFixedArrayStatic elemType vals ByteArray.empty with
+            | Except.ok enc =>
+              Except.ok enc
+            | Except.error e => Except.error e
+        | none =>
+          match encodeFixedArrayStatic elemType vals ByteArray.empty with
+          | Except.ok enc =>
+            Except.ok (uint256ToBytes vals.length ++ enc)
+          | Except.error e => Except.error e
       else
         match encodeFixedArrayDynamic elemType vals with
         | Except.ok enc =>
