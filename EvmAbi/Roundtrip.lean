@@ -235,76 +235,71 @@ theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray) (henc : encod
       have hrange : -(2 ^ (s.len * 8 - 1) : Int) ≤ v' ∧ v' < (2 ^ (s.len * 8 - 1) : Int) := by omega
       have h_decode := decode_intToBytes s v' hrange
       simpa using h_decode
-/- dynamic bytes encode → decode recovers the original ByteArray. -/
+lemma dynamicRoundtrip_preamble (b : ByteArray) (hb256 : b.size < 2 ^ 256) :
+    (uint256ToBytes b.size).size = 32 ∧
+    (padRight b (roundUp32 b.size)).size = roundUp32 b.size ∧
+    b.size ≤ roundUp32 b.size ∧
+    (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size ∧
+    bytesToNat ((uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 0 32) = b.size ∧
+    (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 32 (32 + b.size) = b := by
+  have ha_sz : (uint256ToBytes b.size).size = 32 :=
+    uint256ToBytes_size b.size (natToBytes_size_bound b.size hb256)
+  have h_roundUp_ge : b.size ≤ roundUp32 b.size := by
+    unfold roundUp32; omega
+  have h_pad_sz : (padRight b (roundUp32 b.size)).size = roundUp32 b.size := by
+    unfold padRight; split
+    · omega
+    · simp [zeros_size]; omega
+  have h_size : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size := by
+    simp [ha_sz, h_pad_sz]
+  have h_len : bytesToNat ((uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 0 32) = b.size := by
+    rw [← ha_sz, extract_first_n, bytesToNat_uint256ToBytes b.size hb256]
+  have h_extract_val : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 32 (32 + b.size) = b :=
+    roundtrip_bytes_val b hb256
+  exact ⟨ha_sz, h_pad_sz, h_roundUp_ge, h_size, h_len, h_extract_val⟩
+
+theorem decodeDynamicBytes_roundtrip (v' : ByteArray) (hv256 : v'.size < 2 ^ 256) (data : ByteArray)
+    (hdata : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) :
+    decodeDynamicBytes data 0 = Except.ok (.bytes v', data.size) := by
+  rw [hdata]
+  rcases dynamicRoundtrip_preamble v' hv256 with ⟨_, _, h_roundUp_ge, h_size, h_len, h_extract_val⟩
+  unfold decodeDynamicBytes
+  simp [h_size, h_len, h_extract_val, h_roundUp_ge]
+
 theorem roundtrip_bytes_full (v' : ByteArray) (data : ByteArray) (henc : encode .bytes (ABIValue.bytes v') = Except.ok data) :
     decode .bytes data 0 = Except.ok (ABIValue.bytes v', data.size) := by
   simp [encode] at henc; split at henc
   · rename_i hv256
     have hdata : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size) := by
       simpa using henc.symm
-    have ha_sz : (uint256ToBytes v'.size).size = 32 :=
-      uint256ToBytes_size v'.size (natToBytes_size_bound v'.size hv256)
-    have h_roundUp_ge : v'.size ≤ roundUp32 v'.size := by
-      have : roundUp32 v'.size = ((v'.size + 31) / 32) * 32 := rfl
-      omega
-    have h_pad_sz : (padRight v' (roundUp32 v'.size)).size = roundUp32 v'.size := by
-      unfold padRight; split
-      · omega
-      · simp [zeros_size]; omega
-    have h_extract_len : data.extract 0 32 = uint256ToBytes v'.size := by
-      rw [hdata, ← ha_sz]
-      exact extract_first_n (uint256ToBytes v'.size) (padRight v' (roundUp32 v'.size))
-    have h_len : bytesToNat (data.extract 0 32) = v'.size := by
-      rw [h_extract_len, bytesToNat_uint256ToBytes v'.size hv256]
-    have h_extract_val : data.extract 32 (32 + v'.size) = v' := by
-      rw [hdata, roundtrip_bytes_val v' hv256]
-    unfold decode; rw [hdata]; unfold decodeDynamicBytes
-    have h_size : (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).size = 32 + roundUp32 v'.size := by
-      simp [ha_sz, h_pad_sz]
-    have h1 : ¬ (32 > 32 + roundUp32 v'.size) := by omega
-    have h_len' : bytesToNat ((uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract 0 32) = v'.size := by
-      simpa [hdata] using h_len
-    have h_extract_val' : (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract 32 (32 + v'.size) = v' := by
-      simpa [hdata] using h_extract_val
-    simp [h_size, h1, h_len', h_extract_val', h_roundUp_ge]
+    unfold decode
+    rw [hdata]
+    exact decodeDynamicBytes_roundtrip v' hv256 (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) rfl
   · simp at henc
 
-/- string encode → decode recovers the original String. -/
+theorem decodeDynamicString_roundtrip (v' : String) (hv256 : v'.toUTF8.size < 2 ^ 256) (data : ByteArray)
+    (hdata : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) :
+    decodeDynamicString data 0 = Except.ok (.string v', data.size) := by
+  let utf8 := v'.toUTF8
+  have huv256 : utf8.size < 2 ^ 256 := hv256
+  have hdata' : data = uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size) := by
+    simpa [utf8] using hdata
+  rw [hdata']
+  rcases dynamicRoundtrip_preamble utf8 huv256 with ⟨ha_sz, h_pad_sz, _, h_size, h_len, h_extract_val⟩
+  unfold decodeDynamicString; dsimp; simp
+  rw [ha_sz, h_pad_sz, h_len, h_extract_val, fromUTF8!_toUTF8 v']
+  have h1 : ¬ (32 + roundUp32 utf8.size < 32) := by omega
+  have h2 : ¬ (32 + roundUp32 utf8.size < 32 + utf8.size) := by omega
+  simp [h1, h2]
 theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .string (ABIValue.string v') = Except.ok data) :
     decode .string data 0 = Except.ok (ABIValue.string v', data.size) := by
   simp [encode] at henc; split at henc
   · rename_i huv256
-    let utf8 := v'.toUTF8
-    have hdata : data = uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size) := by
-      simpa [utf8] using henc.symm
-    have ha_sz : (uint256ToBytes utf8.size).size = 32 :=
-      uint256ToBytes_size utf8.size (natToBytes_size_bound utf8.size huv256)
-    have h_roundUp_ge : utf8.size ≤ roundUp32 utf8.size := by
-      have : roundUp32 utf8.size = ((utf8.size + 31) / 32) * 32 := rfl
-      omega
-    have h_pad_sz : (padRight utf8 (roundUp32 utf8.size)).size = roundUp32 utf8.size := by
-      unfold padRight; split
-      · omega
-      · simp [zeros_size]; omega
-    have h_extract_len : data.extract 0 32 = uint256ToBytes utf8.size := by
-      rw [hdata, ← ha_sz]
-      exact extract_first_n (uint256ToBytes utf8.size) (padRight utf8 (roundUp32 utf8.size))
-    have h_len : bytesToNat (data.extract 0 32) = utf8.size := by
-      rw [h_extract_len, bytesToNat_uint256ToBytes utf8.size huv256]
-    have h_extract_val : data.extract 32 (32 + utf8.size) = utf8 := by
-      rw [hdata, roundtrip_bytes_val utf8 huv256]
-    unfold decode; rw [hdata]; unfold decodeDynamicString
-    have h_from_utf8 : String.fromUTF8! utf8 = v' := by
-      dsimp [utf8]; exact fromUTF8!_toUTF8 v'
-    have h_size : (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size)).size = 32 + roundUp32 utf8.size := by
-      simp [ha_sz, h_pad_sz]
-    have h1 : ¬ (32 > 32 + roundUp32 utf8.size) := by omega
-    have h2 : ¬ (32 + utf8.size > 32 + roundUp32 utf8.size) := by omega
-    have h_len' : bytesToNat ((uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size)).extract 0 32) = utf8.size := by
-      simpa [hdata] using h_len
-    have h_extract_val' : (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size)).extract 32 (32 + utf8.size) = utf8 := by
-      simpa [hdata] using h_extract_val
-    simp [h_size, h1, h_len', h_extract_val', h_from_utf8, h_roundUp_ge]
+    have hdata : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size) := by
+      simpa using henc.symm
+    unfold decode
+    rw [hdata]
+    exact decodeDynamicString_roundtrip v' huv256 (uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) rfl
   · simp at henc
 
 /-- For ATOMIC non-dynamic types, encode always produces exactly 32 bytes.
