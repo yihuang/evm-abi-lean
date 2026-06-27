@@ -602,16 +602,17 @@ theorem extract_extract_general (x : ByteArray) (a b c d : Nat) (hb : b ≤ d) (
     (x.extract a c).extract b d = x.extract (a + b) (a + d) := by
   apply ByteArray.ext
   simp
-  have hmin : min (a + d) c = a + d := Nat.min_eq_right hd
+  have hmin : min (a + d) c = a + d := by
+    simpa [Nat.min_comm] using Nat.min_eq_right hd
   simp [hmin]
-
 /-- Extracting from (pref ++ suff) past pref.size is the same as extracting from suff. -/
 theorem extract_after_suffix_offset (pref suff : ByteArray) (off k : Nat) :
     (pref ++ suff).extract (pref.size + off) (pref.size + off + k) = suff.extract off (off + k) := by
   calc
     (pref ++ suff).extract (pref.size + off) (pref.size + off + k)
-        = ((pref ++ suff).extract pref.size (pref.size + off + k)).extract off (off + k) := by
-          symm; apply extract_extract_general (pref ++ suff) pref.size off (pref.size + off + k) (off + k) (by omega) (by omega)
+        = (pref ++ suff).extract (pref.size + off) (pref.size + (off + k)) := by simp [Nat.add_assoc]
+    _ = ((pref ++ suff).extract pref.size (pref.size + (off + k))).extract off (off + k) := by
+      symm; exact extract_extract_general (pref ++ suff) pref.size off (pref.size + (off + k)) (off + k) (by omega) (by omega)
     _ = (suff.extract 0 (off + k)).extract off (off + k) := by
       rw [extract_after_suffix pref suff (off + k)]
     _ = suff.extract off (off + k) := by
@@ -621,173 +622,252 @@ theorem extract_after_suffix_offset (pref suff : ByteArray) (off k : Nat) :
 
 /-! ## Atomic element offset shift lemmas -/
 
-/-- For atomic non-dynamic types, decoding from (pref ++ suffix) at offset (pref.size + off)
-    equals decoding from suffix at off, with the offset shifted by pref.size. -/
+/-- When an atomic type decodes successfully, the new offset is off + 32. -/
+theorem decode_atomic_new_off (t : ABIType) (data : ByteArray) (off : Nat) (v : ABIValue) (newOff : Nat)
+    (h_nondyn : isDynamic t = false) (h_atomic : isAtomic t)
+    (h_decode : decode t data off = Except.ok (v, newOff)) : newOff = off + 32 :=
+by
+  cases t
+  · case uint s =>
+    unfold decode at h_decode
+    by_cases h_size : off + 32 > data.size
+    · simp [h_size] at h_decode
+    · simp [h_size] at h_decode
+      repeat (split at h_decode <;> try simp at h_decode)
+      all_goals
+        try (rcases h_decode with ⟨hv, hoff⟩; exact hoff.symm)
+        try (simp at h_decode)
+  · case int s =>
+    unfold decode at h_decode
+    by_cases h_size : off + 32 > data.size
+    · simp [h_size] at h_decode
+    · simp [h_size] at h_decode
+      repeat (split at h_decode <;> try simp at h_decode)
+      all_goals
+        try (rcases h_decode with ⟨hv, hoff⟩; exact hoff.symm)
+        try (simp at h_decode)
+  · case bool =>
+    unfold decode at h_decode
+    by_cases h_size : off + 32 > data.size
+    · simp [h_size] at h_decode
+    · simp [h_size] at h_decode
+      by_cases h0 : bytesToNat (data.extract off (off + 32)) = 0
+      · simp [h0] at h_decode
+        rcases h_decode with ⟨hv, hoff⟩
+        exact hoff.symm
+      · simp [h0] at h_decode
+        by_cases h1 : bytesToNat (data.extract off (off + 32)) = 1
+        · simp [h0, h1] at h_decode
+          rcases h_decode with ⟨hv, hoff⟩
+          exact hoff.symm
+        · simp [h0, h1] at h_decode
+  · case bytesM s =>
+    unfold decode at h_decode
+    by_cases h_size : off + 32 > data.size
+    · simp [h_size] at h_decode
+    · simp [h_size] at h_decode
+      repeat (split at h_decode <;> try simp at h_decode)
+      all_goals
+        try (rcases h_decode with ⟨hv, hoff⟩; exact hoff.symm)
+        try (simp at h_decode)
+  · case address =>
+    unfold decode at h_decode
+    by_cases h_size : off + 32 > data.size
+    · simp [h_size] at h_decode
+    · simp [h_size] at h_decode
+      repeat (split at h_decode <;> try simp at h_decode)
+      all_goals
+        try (rcases h_decode with ⟨hv, hoff⟩; exact hoff.symm)
+        try (simp at h_decode)
+  · case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
+  · case string => unfold isDynamic at h_nondyn; simp at h_nondyn
+  · case array e sOpt => unfold isAtomic at h_atomic; simp at h_atomic
+  · case tuple es => unfold isAtomic at h_atomic; simp at h_atomic
+
+/-- For atomic non-dynamic types with enough data, decoding from (pref ++ suffix) at (pref.size + off)
+    equals decoding from suffix at off, with the offset shifted by pref.size.
+    Requires h_suff_size: off + 32 ≤ suffix.size so both sides have enough data. -/
 theorem decode_atomic_offset_shift (t : ABIType) (pref suffix : ByteArray) (off : Nat)
-    (h_nondyn : isDynamic t = false) (h_atomic : isAtomic t) :
+    (h_nondyn : isDynamic t = false) (h_atomic : isAtomic t)
+    (h_suff_size : off + 32 ≤ suffix.size) :
     decode t (pref ++ suffix) (pref.size + off) = 
     (fun (p : ABIValue × Nat) => (p.1, pref.size + p.2)) <$> decode t suffix off :=
 by
-  cases t with
-  | uint s =>
-    unfold decode; simp
-    have h_size_check : ((pref.size + off) + 32 > (pref ++ suffix).size) ↔ (off + 32 > suffix.size) := by
-      simp; omega
-    have h_extract : (pref ++ suffix).extract (pref.size + off) (pref.size + off + 32) = suffix.extract off (off + 32) :=
-      extract_after_suffix_offset pref suffix off 32
-    simp [h_size_check, h_extract]
-    by_cases h_val : 2 ^ (s.len * 8) ≤ bytesToNat (suffix.extract off (off + 32))
-    · simp [h_val]
-    · simp [h_val]
-  | int s =>
-    unfold decode; simp
-    have h_size_check : ((pref.size + off) + 32 > (pref ++ suffix).size) ↔ (off + 32 > suffix.size) := by
-      simp; omega
-    have h_extract : (pref ++ suffix).extract (pref.size + off) (pref.size + off + 32) = suffix.extract off (off + 32) :=
-      extract_after_suffix_offset pref suffix off 32
-    simp [h_size_check, h_extract]
-    by_cases h_val : bytesToNat (suffix.extract off (off + 32)) % 2 ^ (s.len * 8) < 2 ^ (s.len * 8 - 1)
-    · simp [h_val]
-    · simp [h_val]
-  | bool =>
-    unfold decode; simp
-    have h_size_check : ((pref.size + off) + 32 > (pref ++ suffix).size) ↔ (off + 32 > suffix.size) := by
-      simp; omega
-    have h_extract : (pref ++ suffix).extract (pref.size + off) (pref.size + off + 32) = suffix.extract off (off + 32) :=
-      extract_after_suffix_offset pref suffix off 32
-    simp [h_size_check, h_extract]
-    by_cases h_val : bytesToNat (suffix.extract off (off + 32)) = 0
-    · simp [h_val]
-    · by_cases h_val' : bytesToNat (suffix.extract off (off + 32)) = 1
-      · simp [h_val, h_val']
-      · simp [h_val, h_val']
-  | bytesM s =>
-    unfold decode; simp
-    have h_size_check : ((pref.size + off) + 32 > (pref ++ suffix).size) ↔ (off + 32 > suffix.size) := by
-      simp; omega
-    have h_extract : (pref ++ suffix).extract (pref.size + off) (pref.size + off + s.len) = suffix.extract off (off + s.len) :=
+  have h_size : ¬ (pref.size + off + 32 > (pref ++ suffix).size) := by
+    simp; omega
+  have h_extract32 : (pref ++ suffix).extract (pref.size + off) (pref.size + off + 32) = suffix.extract off (off + 32) :=
+    extract_after_suffix_offset pref suffix off 32
+  cases t
+  · case uint s =>
+    unfold decode
+    have h_suff_sz : off + 32 ≤ suffix.size := h_suff_size
+    by_cases h_sz1 : pref.size + off + 32 > (pref ++ suffix).size
+    · exfalso; exact h_size h_sz1
+    · by_cases h_sz2 : off + 32 > suffix.size
+      · exfalso; omega
+      · by_cases h_val : 2 ^ (s.len * 8) ≤ bytesToNat (suffix.extract off (off + 32))
+        · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
+          simp [h_val, Functor.map, Except.map, Nat.add_assoc]
+        · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
+          simp [h_val, Functor.map, Except.map, Nat.add_assoc]
+  · case int s =>
+    unfold decode
+    by_cases h_sz1 : pref.size + off + 32 > (pref ++ suffix).size
+    · exfalso; exact h_size h_sz1
+    · by_cases h_sz2 : off + 32 > suffix.size
+      · exfalso; omega
+      · by_cases h_val : bytesToNat (suffix.extract off (off + 32)) % 2 ^ (s.len * 8) < 2 ^ (s.len * 8 - 1)
+        · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
+          simp [h_val, Functor.map, Except.map, Nat.add_assoc]
+        · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
+          simp [h_val, Functor.map, Except.map, Nat.add_assoc]
+  · case bool =>
+    unfold decode
+    by_cases h_sz1 : pref.size + off + 32 > (pref ++ suffix).size
+    · exfalso; exact h_size h_sz1
+    · by_cases h_sz2 : off + 32 > suffix.size
+      · exfalso; omega
+      · by_cases h_val : bytesToNat (suffix.extract off (off + 32)) = 0
+        · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
+          simp [h_val, Functor.map, Except.map, Nat.add_assoc]
+        · by_cases h_val' : bytesToNat (suffix.extract off (off + 32)) = 1
+          · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
+            simp [h_val, h_val', Functor.map, Except.map, Nat.add_assoc]
+          · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
+            simp [h_val, h_val', Functor.map, Except.map, Nat.add_assoc]
+  · case bytesM s =>
+    have h_extract_slen : (pref ++ suffix).extract (pref.size + off) (pref.size + off + s.len) = suffix.extract off (off + s.len) :=
       extract_after_suffix_offset pref suffix off s.len
-    simp [h_size_check, h_extract]
-  | address =>
-    unfold decode; simp
-    have h_size_check : ((pref.size + off) + 32 > (pref ++ suffix).size) ↔ (off + 32 > suffix.size) := by
-      simp; omega
-    have h_extract : (pref ++ suffix).extract (pref.size + off + 12) (pref.size + off + 32) = suffix.extract (off + 12) (off + 32) :=
-      extract_after_suffix_offset pref suffix (off + 12) 20
-    simp [h_size_check, h_extract]
-  | bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
-  | string => unfold isDynamic at h_nondyn; simp at h_nondyn
-  | array e sOpt => unfold isAtomic at h_atomic; simp at h_atomic
-  | tuple es => unfold isAtomic at h_atomic; simp at h_atomic
+    unfold decode
+    by_cases h_sz1 : pref.size + off + 32 > (pref ++ suffix).size
+    · exfalso; exact h_size h_sz1
+    · by_cases h_sz2 : off + 32 > suffix.size
+      · exfalso; omega
+      · rw [if_neg h_sz1, if_neg h_sz2]
+        rw [h_extract_slen]
+        simp [Functor.map, Except.map, Nat.add_assoc]
+  · case address =>
+    have h_extract_addr : (pref ++ suffix).extract (pref.size + off + 12) (pref.size + off + 32) = suffix.extract (off + 12) (off + 32) := by
+      calc
+        (pref ++ suffix).extract (pref.size + off + 12) (pref.size + off + 32)
+            = (pref ++ suffix).extract (pref.size + (off + 12)) (pref.size + (off + 12) + 20) := by
+              have hA : pref.size + off + 12 = pref.size + (off + 12) := by omega
+              have hB : pref.size + off + 32 = pref.size + (off + 12) + 20 := by omega
+              simp [hA, hB]
+        _ = suffix.extract (off + 12) ((off + 12) + 20) := extract_after_suffix_offset pref suffix (off + 12) 20
+        _ = suffix.extract (off + 12) (off + 32) := by
+          have hB : (off + 12) + 20 = off + 32 := by omega
+          simp [hB]
+    unfold decode
+    by_cases h_sz1 : pref.size + off + 32 > (pref ++ suffix).size
+    · exfalso; exact h_size h_sz1
+    · by_cases h_sz2 : off + 32 > suffix.size
+      · exfalso; omega
+      · rw [if_neg h_sz1, if_neg h_sz2]
+        rw [h_extract_addr]
+        simp [Functor.map, Except.map, Nat.add_assoc]
+  · case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
+  · case string => unfold isDynamic at h_nondyn; simp at h_nondyn
+  · case array e sOpt => unfold isAtomic at h_atomic; simp at h_atomic
+  · case tuple es => unfold isAtomic at h_atomic; simp at h_atomic
 
-/-- Shifting goStatic data and offset by a prefix: running on (prefix ++ suffix) at offset (prefix.size + off)
-    equals running on suffix at offset off, with the offset in the result shifted. -/
+/-- Shifting goStatic data and offset by a prefix: running on (pref ++ suff) at offset (pref.size + off)
+    equals running on suff at offset off, with the result offset shifted.
+    Requires that the suffix has enough data for all remaining elements. -/
 theorem goStatic_offset_shift (e : ABIType) (pref suff : ByteArray) (n i off : Nat) (acc : List ABIValue)
-    (h_nondyn : isDynamic e = false) (h_atomic : isAtomic e) :
+    (h_nondyn : isDynamic e = false) (h_atomic : isAtomic e)
+    (h_suff_size : off + (n - i) * 32 ≤ suff.size) :
     decodeFixedArray_goStatic e n (pref ++ suff) i (pref.size + off) acc =
     (fun (p : List ABIValue × Nat) => (p.1, pref.size + p.2)) <$> decodeFixedArray_goStatic e n suff i off acc :=
 by
   have h_all : ∀ (k : Nat), ∀ (n i off : Nat) (acc : List ABIValue), n - i = k →
+    off + (n - i) * 32 ≤ suff.size →
     decodeFixedArray_goStatic e n (pref ++ suff) i (pref.size + off) acc =
     (fun (p : List ABIValue × Nat) => (p.1, pref.size + p.2)) <$> decodeFixedArray_goStatic e n suff i off acc := by
     intro k
     refine Nat.strongRecOn k ?_
-    intro m IH n i off acc hm
+    intro m IH n i off acc hm hsz
     by_cases h : i ≥ n
     · simp [decodeFixedArray_goStatic, h]
-      -- both sides are Except.ok (acc.reverse, ...), need to show equality with fmap
-      have : (fun (p : List ABIValue × Nat) => (p.1, pref.size + p.2)) <$> (Except.ok (acc.reverse, off) : Except String (List ABIValue × Nat)) =
-        Except.ok (acc.reverse, pref.size + off) := rfl
-      simp [this]
+      rfl
     · have h_not_ge : ¬ i ≥ n := by omega
       rw [decodeFixedArray_goStatic, decodeFixedArray_goStatic]
       rw [if_neg h_not_ge, if_neg h_not_ge]
+      -- enough data for the first decode
+      have h_suff_32 : off + 32 ≤ suff.size := by
+        have : n - i ≥ 1 := by omega
+        omega
       have h_decode_eq : decode e (pref ++ suff) (pref.size + off) = 
         (fun (p : ABIValue × Nat) => (p.1, pref.size + p.2)) <$> decode e suff off :=
-        decode_atomic_offset_shift e pref suff off h_nondyn h_atomic
+        decode_atomic_offset_shift e pref suff off h_nondyn h_atomic h_suff_32
       cases h_dec : decode e suff off
-      · -- error case: both sides error
-        simp
+      · rw [h_decode_eq, h_dec]; rfl
       · rename_i p; rcases p with ⟨v, newOff⟩
-        simp
+        have h_newOff : newOff = off + 32 :=
+          decode_atomic_new_off e suff off v newOff h_nondyn h_atomic h_dec
+        subst h_newOff
         have hm' : n - (i+1) < m := by
           have : n - (i+1) < n - i := by omega
           rw [hm] at this; exact this
+        have hsz' : (off + 32) + (n - (i+1)) * 32 ≤ suff.size := by
+          have : off + (n - i) * 32 = (off + 32) + (n - (i+1)) * 32 := by omega
+          rw [← this]; exact hsz
         rw [h_decode_eq, h_dec]
         simp
-        exact IH (n - (i+1)) hm' n (i+1) newOff (v :: acc) rfl
-  exact h_all (n - i) n i off acc rfl
+        exact IH (n - (i+1)) hm' n (i+1) (off + 32) (v :: acc) rfl hsz'
+  exact h_all (n - i) n i off acc rfl h_suff_size
 
-/-- Static array roundtrip: encoding vals via encodeFixedArrayStatic followed by
-    decodeFixedArray_goStatic recovers (vals, enc.size).
-    Restricted to atomic non-dynamic element types. -/
-theorem static_array_roundtrip (elemType : ABIType) (vals : List ABIValue) (enc : ByteArray)
-    (henc : encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok enc)
-    (h_nondyn : isDynamic elemType = false) (h_atomic : isAtomic elemType) :
-    decodeFixedArray_goStatic elemType vals.length enc 0 0 [] = Except.ok (vals, enc.size) :=
-by
-  induction vals generalizing enc with
-  | nil =>
-    simp [encodeFixedArrayStatic] at henc
-    subst henc; simp [decodeFixedArray_goStatic]
+/-- Relation between encoding with any accumulator and encoding from empty. -/
+theorem encodeFixedArrayStatic_eq (elemType : ABIType) (vals : List ABIValue) (acc : ByteArray) :
+    encodeFixedArrayStatic elemType vals acc =
+    match encodeFixedArrayStatic elemType vals ByteArray.empty with
+    | Except.ok suffix => Except.ok (acc ++ suffix)
+    | Except.error e => Except.error e := by
+  revert acc
+  induction vals with
+  | nil => intro acc; simp [encodeFixedArrayStatic]
   | cons v rest ih =>
-    simp [encodeFixedArrayStatic] at henc
+    intro acc
+    simp [encodeFixedArrayStatic]
     cases h_enc_v : encode elemType v
-    · simp [h_enc_v] at henc
+    · simp [h_enc_v]
     · rename_i enc_v
-      simp [h_enc_v] at henc
-      have h_sz_v : enc_v.size = 32 := encode_atomic_nondyn_size elemType v enc_v h_enc_v h_nondyn h_atomic
-      have h_decode_v : decode elemType enc_v 0 = Except.ok (v, enc_v.size) :=
-        roundtrip_aux elemType v enc_v h_enc_v
-      rcases encodeFixedArrayStatic_prefix elemType rest enc_v enc henc with ⟨suffix, henc_suffix⟩
-      -- Step 1: decode first element at offset 0
-      have h_decode_first : decode elemType enc 0 = Except.ok (v, enc_v.size) := by
-        rw [henc_suffix]
-        have h := decode_atomic_offset_shift elemType ByteArray.empty (enc_v ++ suffix) 0 h_nondyn h_atomic
-        simpa using h
-      -- Step 2: compute goStatic one step
-      have h_first_step : decodeFixedArray_goStatic elemType (rest.length + 1) enc 0 0 [] =
-        decodeFixedArray_goStatic elemType rest.length enc 0 enc_v.size [v] := by
-        rw [decodeFixedArray_goStatic, if_neg (by omega : ¬ 0 ≥ rest.length + 1)]
-        simp [h_decode_first]
-        rw [goStatic_shift_one elemType enc rest.length 0 enc_v.size [v]]
-      rw [h_first_step]
-      -- Step 3: use goStatic_prepend_initial to peel off [v]
-      rw [goStatic_prepend_initial elemType enc rest.length v enc_v.size []]
-      simp
-      -- Step 4: relate goStatic on enc (starting at enc_v.size) to goStatic on suffix (starting at 0)
-      rw [henc_suffix]
-      rw [goStatic_offset_shift elemType enc_v suffix rest.length 0 0 [] h_nondyn h_atomic]
-      simp
-      -- Step 5: apply IH. We know encodeFixedArrayStatic elemType rest ByteArray.empty = ok suffix
-      -- from the structure of the encoding. We need to extract this fact.
-      have h_rest_empty : encodeFixedArrayStatic elemType rest ByteArray.empty = Except.ok suffix := by
-        -- This follows from the fact that encodeFixedArrayStatic elemType rest enc_v = ok enc and
-        -- enc = enc_v ++ suffix.
-        -- By the definition of encodeFixedArrayStatic, encoding with accumulator enc_v
-        -- gives enc_v ++ encoding_with_empty_acc. Since enc = enc_v ++ suffix,
-        -- suffix IS the encoding from empty.
-        -- This is provable by induction on rest.
-        induction rest generalizing enc_v suffix with
-        | nil =>
-          simp at henc
-          simp [henc, henc_suffix]
-        | cons w rest' ih_rest =>
-          simp [encodeFixedArrayStatic] at henc
-          cases h_enc_w : encode elemType w
-          · simp [h_enc_w] at henc
-          · rename_i enc_w
-            simp [h_enc_w] at henc
-            rcases encodeFixedArrayStatic_prefix elemType rest' (enc_v ++ enc_w) enc henc with ⟨suffix', h_suf'⟩
-            have h_suf_rel : suffix = enc_w ++ suffix' := by
-              rw [h_suf'] at henc_suffix
-              -- need to show enc_v ++ enc_w ++ suffix' = enc_v ++ suffix → suffix = enc_w ++ suffix'
-              omega
-            have h_ih_rest := ih_rest (enc_v ++ enc_w) suffix' henc
-            simpa [h_suf_rel, encodeFixedArrayStatic] using h_ih_rest
-      rw [h_rest_empty]
-      have h_ih := ih suffix h_rest_empty
-      simpa [henc_suffix] using h_ih
+      simp [h_enc_v]
+      cases h_rest : encodeFixedArrayStatic elemType rest ByteArray.empty
+      · rename_i e
+        simp [h_rest, ih enc_v, ih (acc ++ enc_v)]
+      · rename_i suffix
+        have h_rest_result : encodeFixedArrayStatic elemType rest enc_v = Except.ok (enc_v ++ suffix) := by
+          rw [ih enc_v, h_rest]
+        have h_ih' : encodeFixedArrayStatic elemType rest (acc ++ enc_v) = Except.ok ((acc ++ enc_v) ++ suffix) := by
+          rw [ih (acc ++ enc_v), h_rest]
+        rw [h_rest_result, h_ih']
+        have h_assoc : (acc ++ enc_v) ++ suffix = acc ++ (enc_v ++ suffix) := by
+          apply ByteArray.ext; simp
+        rw [h_assoc]
+
+/-- Corollary: if encoding from empty succeeds, encoding from any accumulator adds it as prefix. -/
+theorem encodeFixedArrayStatic_acc (elemType : ABIType) (vals : List ABIValue) (acc suffix : ByteArray)
+    (h_empty : encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok suffix) :
+    encodeFixedArrayStatic elemType vals acc = Except.ok (acc ++ suffix) := by
+  rw [encodeFixedArrayStatic_eq elemType vals acc, h_empty]
+
+/-- If encoding vals with accumulator acc succeeds, the result is acc ++ suffix
+    where suffix encodes vals from empty. -/
+theorem encodeFixedArrayStatic_prefix (elemType : ABIType) (vals : List ABIValue) (acc enc : ByteArray)
+    (henc : encodeFixedArrayStatic elemType vals acc = Except.ok enc) :
+    ∃ (suffix : ByteArray), encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok suffix ∧ enc = acc ++ suffix := by
+  rw [encodeFixedArrayStatic_eq elemType vals acc] at henc
+  cases h_suffix : encodeFixedArrayStatic elemType vals ByteArray.empty
+  · simp [h_suffix] at henc
+  · rename_i suffix
+    simp [h_suffix] at henc
+    have henc_eq : enc = acc ++ suffix := by
+      have htemp : (Except.ok (acc ++ suffix) : Except String ByteArray) = (Except.ok enc : Except String ByteArray) := by
+        simpa [h_suffix] using henc
+      have htemp' : acc ++ suffix = enc := by injection htemp
+      exact htemp'.symm
+    exact ⟨suffix, rfl, henc_eq⟩
 
 theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data) :
     decode t data 0 = Except.ok (v, data.size) :=
@@ -875,3 +955,116 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
       case string v' => simp [encode] at henc
       case address v' => simp [encode] at henc
       case array _ => simp [encode] at henc
+/-- Static array roundtrip: encoding vals via encodeFixedArrayStatic followed by
+    decodeFixedArray_goStatic recovers (vals, enc.size).
+    Restricted to atomic non-dynamic element types. -/
+theorem static_array_roundtrip (elemType : ABIType) (vals : List ABIValue) (enc : ByteArray)
+    (henc : encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok enc)
+    (h_nondyn : isDynamic elemType = false) (h_atomic : isAtomic elemType) :
+    decodeFixedArray_goStatic elemType vals.length enc 0 0 [] = Except.ok (vals, enc.size) :=
+by
+  induction vals generalizing enc with
+  | nil =>
+    simp [encodeFixedArrayStatic] at henc
+    subst henc; simp [decodeFixedArray_goStatic]
+  | cons v rest ih =>
+    simp [encodeFixedArrayStatic] at henc
+    cases h_enc_v : encode elemType v
+    · simp [h_enc_v] at henc
+    · rename_i enc_v
+      simp [h_enc_v] at henc
+      have h_sz_v : enc_v.size = 32 := encode_atomic_nondyn_size elemType v enc_v h_enc_v h_nondyn h_atomic
+      have h_decode_v : decode elemType enc_v 0 = Except.ok (v, enc_v.size) :=
+        roundtrip_aux elemType v enc_v h_enc_v
+      rcases encodeFixedArrayStatic_prefix elemType rest enc_v enc henc with ⟨suffix, henc_suffix⟩
+      -- h_suff_decode: there's enough data to decode the first element
+      have h_suff_decode : 0 + 32 ≤ (enc_v ++ suffix).size := by
+        simp [h_sz_v]
+      -- Step 1: decode first element at offset 0
+      have h_decode_first : decode elemType enc 0 = Except.ok (v, enc_v.size) := by
+        rw [henc_suffix.2]
+        have h_extract_0_32 : (enc_v ++ suffix).extract 0 32 = enc_v.extract 0 32 := by
+          calc
+            (enc_v ++ suffix).extract 0 32 = (enc_v ++ suffix).extract 0 enc_v.size := by simp [h_sz_v]
+            _ = enc_v := extract_first_n enc_v suffix
+            _ = enc_v.extract 0 32 := by rw [← h_sz_v, extract_self enc_v]
+        have h_decode_eq : decode elemType (enc_v ++ suffix) 0 = decode elemType enc_v 0 := by
+          cases elemType
+          · case uint s =>
+            unfold decode; simp [h_sz_v, h_extract_0_32]; omega
+          · case int s =>
+            unfold decode; simp [h_sz_v, h_extract_0_32]; omega
+          · case bool =>
+            unfold decode; simp [h_sz_v, h_extract_0_32]; omega
+          · case bytesM s =>
+            have hslen32 : s.len ≤ 32 := s.h.right
+            have h_extract_slen : (enc_v ++ suffix).extract 0 s.len = enc_v.extract 0 s.len := by
+              calc
+                (enc_v ++ suffix).extract 0 s.len = ((enc_v ++ suffix).extract 0 32).extract 0 s.len := by
+                  rw [extract_extract_general (enc_v ++ suffix) 0 0 32 s.len (by omega) (by simpa using hslen32)]
+                  simp
+                _ = (enc_v.extract 0 32).extract 0 s.len := by rw [h_extract_0_32]
+                _ = enc_v.extract 0 s.len := by
+                  rw [extract_extract_general enc_v 0 0 32 s.len (by omega) (by simpa using hslen32)]
+                  simp
+            unfold decode; simp [h_sz_v, h_extract_slen]
+          · case address =>
+            have h_extract_addr : (enc_v ++ suffix).extract 12 32 = enc_v.extract 12 32 := by
+              calc
+                (enc_v ++ suffix).extract 12 32 = ((enc_v ++ suffix).extract 0 32).extract 12 32 := by
+                  rw [extract_extract_general (enc_v ++ suffix) 0 12 32 32 (by omega) (by omega)]
+                _ = (enc_v.extract 0 32).extract 12 32 := by rw [h_extract_0_32]
+                _ = enc_v.extract 12 32 := by
+                  rw [extract_extract_general enc_v 0 12 32 32 (by omega) (by omega)]
+            unfold decode; simp [h_sz_v, h_extract_addr]
+          · case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
+          · case string => unfold isDynamic at h_nondyn; simp at h_nondyn
+          · case array e sOpt => unfold isAtomic at h_atomic; simp at h_atomic
+          · case tuple es => unfold isAtomic at h_atomic; simp at h_atomic
+        rw [h_decode_eq, h_decode_v]
+      have h_first_step : decodeFixedArray_goStatic elemType ((v :: rest).length) enc 0 0 [] =
+        decodeFixedArray_goStatic elemType rest.length enc 0 enc_v.size [v] := by
+        simp
+        rw [decodeFixedArray_goStatic, if_neg (by omega : ¬ 0 ≥ rest.length + 1)]
+        simp [h_decode_first]
+        rw [goStatic_shift_one elemType enc rest.length 0 enc_v.size [v]]
+      rw [h_first_step]
+      -- Step 3: use goStatic_prepend_initial to peel off [v]
+      have h_prepend : decodeFixedArray_goStatic elemType rest.length enc 0 enc_v.size ([] ++ [v]) =
+        (fun (p : List ABIValue × Nat) => (v :: p.1, p.2)) <$> decodeFixedArray_goStatic elemType rest.length enc 0 enc_v.size [] :=
+        goStatic_prepend_initial elemType enc rest.length v enc_v.size []
+      have h_prepend' : decodeFixedArray_goStatic elemType rest.length enc 0 enc_v.size [v] =
+        (fun (p : List ABIValue × Nat) => (v :: p.1, p.2)) <$> decodeFixedArray_goStatic elemType rest.length enc 0 enc_v.size [] := by
+        simpa using h_prepend
+      rw [h_prepend']
+      -- Step 4: henc_suffix already gives the encoding of rest from empty
+      have h_rest_empty : encodeFixedArrayStatic elemType rest ByteArray.empty = Except.ok suffix := henc_suffix.1
+      have h_suff_sz : suffix.size = rest.length * 32 :=
+        encodeFixedArrayStatic_size elemType rest suffix h_rest_empty h_nondyn h_atomic
+      have h_suff_gs : 0 + (rest.length - 0) * 32 ≤ suffix.size := by
+        rw [h_suff_sz]; omega
+      -- Step 5: relate goStatic on enc (starting at enc_v.size) to goStatic on suffix (starting at 0)
+      have henc_eq : enc = enc_v ++ suffix := henc_suffix.2
+      rw [henc_eq]
+      have h_gs := goStatic_offset_shift elemType enc_v suffix rest.length 0 0 [] h_nondyn h_atomic h_suff_gs
+      have h_ih := ih suffix h_rest_empty
+      calc
+        (fun p : List ABIValue × Nat => (v :: p.1, p.2)) <$>
+            decodeFixedArray_goStatic elemType rest.length (enc_v ++ suffix) 0 enc_v.size []
+            = (fun p : List ABIValue × Nat => (v :: p.1, p.2)) <$>
+                ((fun p : List ABIValue × Nat => (p.1, enc_v.size + p.2)) <$>
+                  decodeFixedArray_goStatic elemType rest.length suffix 0 0 []) := by
+          rw [show decodeFixedArray_goStatic elemType rest.length (enc_v ++ suffix) 0 enc_v.size [] = 
+                     (fun (p : List ABIValue × Nat) => (p.1, enc_v.size + p.2)) <$>
+                       decodeFixedArray_goStatic elemType rest.length suffix 0 0 [] from h_gs]
+        _ = Except.ok (v :: rest, (enc_v ++ suffix).size) := by
+          rw [h_ih]
+          calc
+            (fun p : List ABIValue × Nat => (v :: p.1, p.2)) <$>
+              ((fun p : List ABIValue × Nat => (p.1, enc_v.size + p.2)) <$> Except.ok (rest, suffix.size))
+                = (fun p : List ABIValue × Nat => (v :: p.1, p.2)) <$> Except.ok (rest, enc_v.size + suffix.size) := by
+              simp [Functor.map, Except.map]
+            _ = Except.ok (v :: rest, enc_v.size + suffix.size) := by
+              simp [Functor.map, Except.map]
+            _ = Except.ok (v :: rest, (enc_v ++ suffix).size) := by
+              simp [h_sz_v]
