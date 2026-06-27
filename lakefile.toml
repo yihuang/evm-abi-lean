@@ -8,3 +8,8 @@ name = "EvmAbi"
 [[lean_exe]]
 name = "abi-lean-test"
 root = "EvmAbi.Test"
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.31.0"
