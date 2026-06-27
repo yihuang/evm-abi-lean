@@ -398,17 +398,9 @@ theorem two_toNat_eq (b : Nat) : ((2 : Int) ^ b).toNat = (2 : Nat) ^ b := by
 
 /- 2^b - 2^(b-1) = 2^(b-1) for b > 0 (in ℤ). -/
 theorem two_pow_succ_sub (b : Nat) (hbpos : 0 < b) : (2 : Int) ^ b - (2 : Int) ^ (b - 1) = (2 : Int) ^ (b - 1) := by
-  have h_exp_eq : b = (b - 1) + 1 := by omega
-  have h_nat_eq : (2 : Nat) ^ b = (2 : Nat) ^ (b - 1) * 2 := by
+  have h_nat : (2 : Nat) ^ b = (2 : Nat) ^ (b - 1) * 2 := by
     calc
-      (2 : Nat) ^ b = (2 : Nat) ^ ((b - 1) + 1) := congrArg (fun n => (2 : Nat) ^ n) h_exp_eq
+      (2 : Nat) ^ b = (2 : Nat) ^ ((b - 1) + 1) := by rw [Nat.sub_add_cancel hbpos]
       _ = (2 : Nat) ^ (b - 1) * 2 := by rw [Nat.pow_succ]
-  have h_int_cast : ((2 : Nat) ^ b : Int) = (((2 : Nat) ^ (b - 1) * 2 : Nat) : Int) :=
-    congrArg (fun n : Nat => (n : Int)) h_nat_eq
-  calc
-    (2 : Int) ^ b - (2 : Int) ^ (b - 1) = ((2 : Nat) ^ b : Int) - ((2 : Nat) ^ (b - 1) : Int) := by
-      rw [two_pow_nat_coe b, two_pow_nat_coe (b - 1)]
-    _ = (((2 : Nat) ^ (b - 1) * 2 : Nat) : Int) - ((2 : Nat) ^ (b - 1) : Int) := by
-      rw [h_int_cast]
-    _ = ((2 : Nat) ^ (b - 1) : Int) := by omega
-    _ = (2 : Int) ^ (b - 1) := by simp [two_pow_nat_coe]
+  have h_int : (2 : Int) ^ b = (2 : Int) ^ (b - 1) * (2 : Int) := by exact_mod_cast h_nat
+  omega
