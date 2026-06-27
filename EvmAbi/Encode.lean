@@ -15,9 +15,9 @@ theorem tuple_foldl_lt (es : List ABIType) :
     es.foldl (fun acc t => acc + abiSize t) 0 < abiSize (.tuple es) := by
   simp [abiSize]
 
-theorem list_foldl_lt_cons (t : ABIType) (rest : List (ABIType × ABIValue)) (v : ABIValue) :
+theorem list_foldl_lt_cons (t : ABIType) (rest : List (ABIType × ABIValue)) :
     List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst rest) <
-    List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst ((t, v) :: rest)) := by
+    List.foldl (fun acc t => acc + abiSize t) 0 (t :: List.map Prod.fst rest) := by
   simp
   have hpos : 0 < abiSize t := abiSize_pos t
   have h_eq : List.foldl (fun acc t => acc + abiSize t) (abiSize t) (List.map Prod.fst rest) =
@@ -151,10 +151,9 @@ mutual
     decreasing_by
       all_goals
         first
-        | apply Prod.Lex.left; exact list_foldl_lt_cons t rest v
-        | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst ((t, v) :: rest)))
+        | apply Prod.Lex.left; exact list_foldl_lt_cons t rest
+        | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (t :: List.map Prod.fst rest))
           apply Prod.Lex.left; omega
-
   def encodeTupleElemsDynamic (items : List (ABIType × ABIValue)) : Except String ByteArray :=
     let headAreaSize := items.length * 32
     match encodeTupleElemsCollect items [] with
@@ -181,11 +180,9 @@ mutual
     decreasing_by
       all_goals
         first
-        | apply Prod.Lex.left; exact list_foldl_lt_cons t rest v
-        | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst ((t, v) :: rest)))
+        | apply Prod.Lex.left; exact list_foldl_lt_cons t rest
+        | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (t :: List.map Prod.fst rest))
           apply Prod.Lex.left; omega
-
-
 end
 
 

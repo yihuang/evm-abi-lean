@@ -166,24 +166,8 @@ mutual
       let len := bytesToNat (data.extract offset (offset + 32))
       let arrayOffset := offset + 32
       match decodeFixedArray elemType len data arrayOffset with
-      | Except.ok (vals, _) =>
-        let totalConsumed :=
-          if !isDynamic elemType then 32 + len * 32
-          else
-            let headAreaSize := len * 32
-            let init := arrayOffset + headAreaSize
-            let rec calcEnd (i : Nat) (endPos : Nat) : Nat :=
-              if i ≥ len then endPos
-              else
-                let headOff := arrayOffset + i * 32
-                let rawOffset := bytesToNat (data.extract headOff (headOff + 32))
-                let tailOff := arrayOffset + rawOffset
-                match decode elemType data tailOff with
-                | Except.ok (_, newOff) => calcEnd (i + 1) (max endPos newOff)
-                | Except.error _ => calcEnd (i + 1) endPos
-              termination_by (abiSize elemType, 1, len - i)
-            calcEnd 0 init - offset
-        Except.ok (.array vals, offset + totalConsumed)
+      | Except.ok (vals, endOff) =>
+        Except.ok (.array vals, endOff)
       | Except.error e => Except.error e
     termination_by (abiSize elemType, 3, 0)
 
@@ -199,15 +183,12 @@ mutual
     termination_by (List.foldl (fun acc t => acc + abiSize t) 0 ts, 1, ts.length)
     decreasing_by
       · let total_fs := List.foldl (fun acc t => acc + abiSize t) 0 (t :: rest)
-        have hmem : t ∈ (t :: rest) := by simp
-        have h_sz_le : abiSize t ≤ total_fs := mem_foldl_le t (t :: rest) hmem
+        have h_sz_le : abiSize t ≤ total_fs := mem_foldl_le t (t :: rest) (by simp)
         by_cases h_lt : abiSize t < total_fs
         · apply Prod.Lex.left; exact h_lt
-        · have h_total_le : total_fs ≤ abiSize t := Nat.le_of_not_lt h_lt
-          have h_eq : abiSize t = total_fs := Nat.le_antisymm h_sz_le h_total_le
+        · have h_eq : abiSize t = total_fs := by omega
           rw [h_eq]
-          apply Prod.Lex.right (a := total_fs)
-          apply Prod.Lex.left; omega
+          apply Prod.Lex.right; apply Prod.Lex.left; omega
       · apply Prod.Lex.left; exact list_foldl_lt_cons_abi t rest
 
   /-- Iterate decoding dynamic tuple elements: read head pointers, decode from tails. -/
@@ -236,23 +217,17 @@ mutual
       all_goals
         first
         | let total := List.foldl (fun acc t => acc + abiSize t) 0 types
-          have h_mem : types.get ⟨i, hi⟩ ∈ types := by
-            have := List.getElem_mem (l := types) (n := i) (h := hi)
-            exact this
-          have h_sz_le : abiSize (types.get ⟨i, hi⟩) ≤ total :=
-            mem_foldl_le (types.get ⟨i, hi⟩) types h_mem
-          by_cases h_lt : abiSize (types.get ⟨i, hi⟩) < total
+          let t := types.get ⟨i, hi⟩
+          have hm : types.get ⟨i, hi⟩ ∈ types := by
+            simpa using List.getElem_mem (l := types) (h := hi)
+          have h_sz_le : abiSize t ≤ total := mem_foldl_le t types hm
+          by_cases h_lt : abiSize t < total
           · apply Prod.Lex.left; exact h_lt
-          · have h_total_le : total ≤ abiSize (types.get ⟨i, hi⟩) := Nat.le_of_not_lt h_lt
-            have h_eq : abiSize (types.get ⟨i, hi⟩) = total :=
-              Nat.le_antisymm h_sz_le h_total_le
+          · have h_eq : abiSize t = total := by omega
             rw [h_eq]
-            apply Prod.Lex.right (a := total)
-            apply Prod.Lex.left; omega
-        | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 types)
-          apply Prod.Lex.right (a := 1)
-          omega
-
+            apply Prod.Lex.right; apply Prod.Lex.left; omega
+        | refine Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 types)
+            (Prod.Lex.right (a := 1) (by omega))
   def decodeTupleElems (types : List ABIType) (data : ByteArray) (offset : Nat)
       : Except String (List ABIValue × Nat) :=
     let hasDynamic := types.any isDynamic
