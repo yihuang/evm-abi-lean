@@ -1025,40 +1025,93 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
       case address v' => simp [encode] at henc
       case array _ => simp [encode] at henc
       case tuple _ => simp [encode] at henc
+
+  | .tuple elems => by
+      cases v
+      case tuple vals => sorry
+      case uint v' => simp [encode] at henc
+      case int v' => simp [encode] at henc
+      case bool v' => simp [encode] at henc
+      case bytes v' => simp [encode] at henc
+      case string v' => simp [encode] at henc
+      case address v' => simp [encode] at henc
+      case array _ => simp [encode] at henc
   | .array elemType sizeOpt => by
       cases v
       case array vals =>
         unfold encode at henc; dsimp at henc
         by_cases h_dyn : isDynamic elemType
-        · -- Dynamic element type — not yet proven
-          simp [h_dyn] at henc
-          sorry
-        · -- Non-dynamic element type
-          simp [h_dyn] at henc
+        · simp [h_dyn] at henc; sorry
+        · simp [h_dyn] at henc
+          have h_nondyn : isDynamic elemType = false := by
+            simpa using h_dyn
           cases sizeOpt
-          · -- Variable-length: data = uint256ToBytes vals.length ++ enc
-            cases h_enc : encodeFixedArrayStatic elemType vals ByteArray.empty
-            · simp [h_enc] at henc
-            · rename_i enc
-              simp [h_enc] at henc
-              have hdata : data = uint256ToBytes vals.length ++ enc := henc.symm
-              subst hdata
-              sorry  -- variable-length array roundtrip (with length prefix) not yet proven
+          · -- Variable-length array
+            simp at henc
+            by_cases h_len_lt : vals.length < 2 ^ 256
+            · split at henc
+              · rename_i h_len_lt'
+                cases h_enc : encodeFixedArrayStatic elemType vals ByteArray.empty
+                · simp [h_enc] at henc
+                · rename_i enc
+                  simp [h_enc] at henc
+                  have hdata : data = uint256ToBytes vals.length ++ enc := henc.symm
+                  rw [hdata]
+                  have h_atomic : isAtomic elemType := by
+                    cases elemType
+                    · case uint s => rfl
+                    · case int s => rfl
+                    · case bool => rfl
+                    · case bytesM s => rfl
+                    · case address => rfl
+                    · case bytes => simp [isDynamic] at h_nondyn
+                    · case string => simp [isDynamic] at h_nondyn
+                    · case array e s => sorry
+                    · case tuple es => sorry
+                  have h_enc_size : enc.size = vals.length * 32 :=
+                    encodeFixedArrayStatic_size elemType vals enc h_enc h_nondyn h_atomic
+                  have h_decode_go : decodeFixedArray_goStatic elemType vals.length enc 0 0 [] = Except.ok (vals, enc.size) :=
+                    static_array_roundtrip elemType vals enc h_enc h_nondyn h_atomic
+                  have h_len_val : bytesToNat (uint256ToBytes vals.length) = vals.length :=
+                    bytesToNat_uint256ToBytes vals.length h_len_lt
+                  have h_sz : (uint256ToBytes vals.length).size = 32 := by
+                    apply uint256ToBytes_size; exact natToBytes_size_bound vals.length h_len_lt
+                  have h_go_shift : decodeFixedArray_goStatic elemType vals.length
+                      (uint256ToBytes vals.length ++ enc) 0 32 [] =
+                      (fun (p : List ABIValue × Nat) => (p.1, 32 + p.2)) <$>
+                      decodeFixedArray_goStatic elemType vals.length enc 0 0 [] := by
+                    have h_suff_size : (0 : Nat) + (vals.length - 0) * 32 ≤ enc.size := by
+                      rw [h_enc_size]; omega
+                    rw [← h_sz]
+                    exact goStatic_offset_shift elemType (uint256ToBytes vals.length) enc
+                      vals.length 0 0 [] h_nondyn h_atomic h_suff_size
+                  unfold decode; simp
+                  unfold decodeDynamicArray
+                  simp
+                  have h_not_short : ¬ ((uint256ToBytes vals.length).size + enc.size < 32) := by
+                    rw [h_sz]; omega
+                  simp [h_not_short]
+                  have h_extract : ((uint256ToBytes vals.length ++ enc).extract 0 32) = uint256ToBytes vals.length := by
+                    rw [← h_sz, extract_first_n]
+                  simp [h_extract, h_len_val, decodeFixedArray, h_nondyn]
+                  rw [h_go_shift, h_decode_go]
+                  simp [h_enc_size, h_sz]
+              · simp at henc
+            · split at henc
+              · rename_i h; exfalso; exact h_len_lt h
+              · simp at henc
           · rename_i n
-            -- Fixed-size: encode checks vals.length = n, data = enc
+            -- Fixed-size array
             have h_len_eq : vals.length = n := by
               by_cases h : vals.length = n
               · exact h
-              · exfalso
-                simp [h] at henc
+              · exfalso; simp [h] at henc
             simp [h_len_eq] at henc
             cases h_enc_val : encodeFixedArrayStatic elemType vals ByteArray.empty
             · simp [h_enc_val] at henc
             · rename_i encVal
               simp [h_enc_val] at henc
               have h_enc : encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok encVal := h_enc_val
-              have h_nondyn : isDynamic elemType = false :=
-                Bool.eq_false_iff.mpr h_dyn
               have h_atomic : isAtomic elemType := by
                 cases elemType
                 · case uint s => rfl
@@ -1066,13 +1119,12 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
                 · case bool => rfl
                 · case bytesM s => rfl
                 · case address => rfl
-                · case bytes => simp [isDynamic] at h_dyn
-                · case string => simp [isDynamic] at h_dyn
+                · case bytes => simp [isDynamic] at h_nondyn
+                · case string => simp [isDynamic] at h_nondyn
                 · case array e sOpt => sorry
                 · case tuple es => sorry
               have h_roundtrip := static_array_roundtrip elemType vals encVal h_enc h_nondyn h_atomic
-              have hdata : data = encVal := by
-                exact henc.symm
+              have hdata : data = encVal := henc.symm
               rw [hdata]
               have h_decode : decode (.array elemType (some n)) encVal 0 = Except.ok (ABIValue.array vals, encVal.size) := by
                 simp [decode, decodeFixedArray, h_nondyn]
@@ -1085,13 +1137,3 @@ theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : en
       case string v' => simp [encode] at henc
       case address v' => simp [encode] at henc
       case tuple _ => simp [encode] at henc
-  | .tuple elems => by
-      cases v
-      case tuple vals => sorry
-      case uint v' => simp [encode] at henc
-      case int v' => simp [encode] at henc
-      case bool v' => simp [encode] at henc
-      case bytes v' => simp [encode] at henc
-      case string v' => simp [encode] at henc
-      case address v' => simp [encode] at henc
-      case array _ => simp [encode] at henc

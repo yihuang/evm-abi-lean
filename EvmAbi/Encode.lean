@@ -64,14 +64,23 @@ mutual
               Except.ok enc
             | Except.error e => Except.error e
         | none =>
-          match encodeFixedArrayStatic elemType vals ByteArray.empty with
-          | Except.ok enc =>
-            Except.ok (uint256ToBytes vals.length ++ enc)
-          | Except.error e => Except.error e
+          if _ : vals.length < 2 ^ 256 then
+            match encodeFixedArrayStatic elemType vals ByteArray.empty with
+            | Except.ok enc =>
+              Except.ok (uint256ToBytes vals.length ++ enc)
+            | Except.error e => Except.error e
+          else
+            Except.error s!"array[]: length {vals.length} exceeds 2^256"
       else
         match encodeFixedArrayDynamic elemType vals with
         | Except.ok enc =>
-          Except.ok (match sz with | none => uint256ToBytes vals.length ++ enc | some _ => enc)
+          match sz with
+          | none =>
+            if _ : vals.length < 2 ^ 256 then
+              Except.ok (uint256ToBytes vals.length ++ enc)
+            else
+              Except.error s!"array[]: length {vals.length} exceeds 2^256"
+          | some _ => Except.ok enc
         | Except.error e => Except.error e
     | _, _ => Except.error s!"type/value mismatch"
     termination_by (abiSize type, 0, 0)
