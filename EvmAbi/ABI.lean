@@ -6,6 +6,64 @@ namespace EvmAbi.ABI
 
 open Nat
 
+/-- Structured error type for ABI encoding/decoding operations. -/
+inductive Error : Type where
+  /-- uint{b}: value {v} exceeds 2^{b} -/
+  | uintExceeds (bits : Nat) (value : Nat)
+  /-- int{b}: value {v} out of range -/
+  | intOutOfRange (bits : Nat) (value : Int)
+  /-- bytes{b}: expected {expected} bytes, got {actual} -/
+  | fixedBytesSize (expected : Nat) (actual : Nat)
+  /-- address: expected 20 bytes, got {actual} -/
+  | addressSize (actual : Nat)
+  /-- bytes/string: data too long ({size} bytes) -/
+  | dataTooLong (size : Nat)
+  /-- array: expected {expected} elements, got {actual} -/
+  | arrayElemCount (expected : Nat) (actual : Nat)
+  /-- array[]: length {length} exceeds 2^256 -/
+  | arrayLengthOverflow (length : Nat)
+  /-- type/value mismatch -/
+  | typeValueMismatch
+  /-- argument count mismatch -/
+  | argCountMismatch (types : Nat) (values : Nat)
+  /-- bytes: data too short for length at offset {offset} -/
+  | dataTooShortForLen (offset : Nat)
+  /-- bytes: data too short for {len} bytes at offset {offset} -/
+  | dataTooShortForBytes (offset : Nat) (len : Nat)
+  /-- {ty}: data too short at offset {offset} -/
+  | dataTooShort (ty : String) (offset : Nat)
+  /-- uint{b}: decoded value {value} exceeds 2^{b} -/
+  | uintDecodedExceeds (bits : Nat) (value : Nat)
+  /-- bool: invalid value {value}, expected 0 or 1 -/
+  | boolInvalidValue (value : Nat)
+  /-- array/tuple: data too short for head at offset {offset} -/
+  | dataTooShortForHead (offset : Nat)
+  /-- array/tuple: data too short for length at offset {offset} -/
+  | dataTooShortForArrayLen (offset : Nat)
+  /-- bytesToInt: value {value} exceeds 2^{bits} -/
+  | bytesToIntOverflow (value : Nat) (bits : Nat)
+  deriving Repr
+
+instance : ToString Error where
+  toString
+    | .uintExceeds bits v => s!"uint{bits}: value {v} exceeds 2^{bits}"
+    | .intOutOfRange bits v => s!"int{bits}: value {v} out of range"
+    | .fixedBytesSize exp act => s!"bytes{exp}: expected {exp} bytes, got {act}"
+    | .addressSize act => s!"address: expected 20 bytes, got {act}"
+    | .dataTooLong sz => s!"data too long ({sz} bytes)"
+    | .arrayElemCount exp act => s!"array: expected {exp} elements, got {act}"
+    | .arrayLengthOverflow len => s!"array[]: length {len} exceeds 2^256"
+    | .typeValueMismatch => "type/value mismatch"
+    | .argCountMismatch nt nv => s!"argument count mismatch: {nt} types vs {nv} values"
+    | .dataTooShortForLen off => s!"bytes: data too short for length at offset {off}"
+    | .dataTooShortForBytes off len => s!"bytes: data too short for {len} bytes at offset {off}"
+    | .dataTooShort ty off => s!"{ty}: data too short at offset {off}"
+    | .uintDecodedExceeds bits v => s!"uint{bits}: decoded value {v} exceeds 2^{bits}"
+    | .boolInvalidValue v => s!"bool: invalid value {v}, expected 0 or 1"
+    | .dataTooShortForHead off => s!"array/tuple: data too short for head at offset {off}"
+    | .dataTooShortForArrayLen off => s!"array[]: data too short for length at offset {off}"
+    | .bytesToIntOverflow v bits => s!"bytesToInt: value {v} exceeds 2^{bits}"
+
 
 /-- A validated byte-length in the range (0, 32]. -/
 structure ByteSize where
@@ -153,7 +211,7 @@ def bytesToNat_list : List UInt8 → Nat :=
 def bytesToNat (b : ByteArray) : Nat :=
   bytesToNat_list b.data.toList
 
-def bytesToInt (b : ByteArray) (byteLen : Nat) : Except String Int :=
+def bytesToInt (b : ByteArray) (byteLen : Nat) : Except Error Int :=
   let bv := byteLen * 8
   let unsigned := bytesToNat b
   let pow2_m1 := 2 ^ (bv - 1)
@@ -163,7 +221,7 @@ def bytesToInt (b : ByteArray) (byteLen : Nat) : Except String Int :=
   else if unsigned ≤ pow2 then
     Except.ok (-(Int.ofNat (pow2 - unsigned)))
   else
-    Except.error s!"bytesToInt: value {unsigned} exceeds 2^{bv}"
+    Except.error (.bytesToIntOverflow unsigned bv)
 
 def isDynamic : ABIType → Bool
   | .bytes | .string => true

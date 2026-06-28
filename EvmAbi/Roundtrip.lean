@@ -772,7 +772,7 @@ theorem encodeFixedArrayStatic_prefix (elemType : ABIType) (vals : List ABIValue
   · rename_i suffix
     simp [h_suffix] at henc
     have henc_eq : enc = acc ++ suffix := by
-      have htemp : (Except.ok (acc ++ suffix) : Except String ByteArray) = (Except.ok enc : Except String ByteArray) := by
+      have htemp : (Except.ok (acc ++ suffix) : Except Error ByteArray) = (Except.ok enc : Except Error ByteArray) := by
         simpa [h_suffix] using henc
       have htemp' : acc ++ suffix = enc := by injection htemp
       exact htemp'.symm

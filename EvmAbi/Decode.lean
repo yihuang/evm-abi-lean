@@ -8,20 +8,20 @@ open EvmAbi.ABI
 
 namespace EvmAbi.ABI.Decode
 
-def decodeDynamicBytes (data : ByteArray) (offset : Nat) : Except String (ABIValue × Nat) :=
+def decodeDynamicBytes (data : ByteArray) (offset : Nat) : Except Error (ABIValue × Nat) :=
   if offset + 32 > data.size then
-    Except.error s!"bytes: data too short for length at offset {offset}"
+    Except.error (.dataTooShortForLen offset)
   else
     let len := bytesToNat (data.extract offset (offset + 32))
     let dataStart := offset + 32
     if dataStart + len > data.size then
-      Except.error s!"bytes: data too short for {len} bytes at offset {dataStart}"
+      Except.error (.dataTooShortForBytes dataStart len)
     else
       let val := data.extract dataStart (dataStart + len)
       let consumed := 32 + roundUp32 len
       Except.ok (.bytes val, offset + consumed)
 
-def decodeDynamicString (data : ByteArray) (offset : Nat) : Except String (ABIValue × Nat) :=
+def decodeDynamicString (data : ByteArray) (offset : Nat) : Except Error (ABIValue × Nat) :=
   (decodeDynamicBytes data offset).map (fun (v, off) =>
     match v with
     | .bytes b => (.string (String.fromUTF8! b), off)
@@ -30,21 +30,21 @@ def decodeDynamicString (data : ByteArray) (offset : Nat) : Except String (ABIVa
 
 mutual
 
-  def decode (type : ABIType) (data : ByteArray) (offset : Nat) : Except String (ABIValue × Nat) :=
+  def decode (type : ABIType) (data : ByteArray) (offset : Nat) : Except Error (ABIValue × Nat) :=
     match type with
     | .uint s =>
       let b := s.len * 8
       if offset + 32 > data.size then
-        Except.error s!"uint{b}: data too short at offset {offset}"
+        Except.error (.dataTooShort (s!"uint{b}") offset)
       else
         let rawVal := bytesToNat (data.extract offset (offset + 32))
         if rawVal ≥ 2 ^ b then
-          Except.error s!"uint{b}: decoded value {rawVal} exceeds 2^{b}"
+          Except.error (.uintDecodedExceeds b rawVal)
         else Except.ok (.uint rawVal, offset + 32)
     | .int s =>
       let b := s.len * 8
       if offset + 32 > data.size then
-        Except.error s!"int{b}: data too short at offset {offset}"
+        Except.error (.dataTooShort (s!"int{b}") offset)
       else
         let rawVal := bytesToNat (data.extract offset (offset + 32))
         let masked := rawVal % (2 ^ b)
@@ -53,21 +53,21 @@ mutual
         else Except.ok (.int (-(Int.ofNat (2 ^ b - masked))), offset + 32)
     | .bool =>
       if offset + 32 > data.size then
-        Except.error s!"bool: data too short at offset {offset}"
+        Except.error (.dataTooShort "bool" offset)
       else
         let rawVal := bytesToNat (data.extract offset (offset + 32))
         if rawVal = 0 then Except.ok (.bool false, offset + 32)
         else if rawVal = 1 then Except.ok (.bool true, offset + 32)
-        else Except.error s!"bool: invalid value {rawVal}, expected 0 or 1"
+        else Except.error (.boolInvalidValue rawVal)
     | .bytesM s =>
       if offset + 32 > data.size then
-        Except.error s!"bytes{s.len}: data too short at offset {offset}"
+        Except.error (.dataTooShort (s!"bytes{s.len}") offset)
       else
         let val := data.extract offset (offset + s.len)
         Except.ok (.bytes val, offset + 32)
     | .address =>
       if offset + 32 > data.size then
-        Except.error s!"address: data too short at offset {offset}"
+        Except.error (.dataTooShort "address" offset)
       else
         let val := data.extract (offset + 12) (offset + 32)
         Except.ok (.address val, offset + 32)
@@ -95,7 +95,7 @@ mutual
 
   /-- Iterate decoding static array elements: call decode at each offset, collect values. -/
   def decodeFixedArray_goStatic (elemType : ABIType) (n : Nat) (data : ByteArray)
-      (i : Nat) (off : Nat) (acc : List ABIValue) : Except String (List ABIValue × Nat) :=
+      (i : Nat) (off : Nat) (acc : List ABIValue) : Except Error (List ABIValue × Nat) :=
     if i ≥ n then Except.ok (acc.reverse, off)
     else
       match decode elemType data off with
@@ -110,12 +110,12 @@ mutual
 
   /-- Iterate decoding dynamic array elements: read head pointers, decode from tails. -/
   def decodeFixedArray_goDynamic (elemType : ABIType) (n : Nat) (data : ByteArray) (offset : Nat)
-      (i : Nat) (vals : List ABIValue) (maxEnd : Nat) : Except String (List ABIValue × Nat) :=
+      (i : Nat) (vals : List ABIValue) (maxEnd : Nat) : Except Error (List ABIValue × Nat) :=
     if i ≥ n then Except.ok (vals.reverse, maxEnd)
     else
       let headOff := offset + i * 32
       if headOff + 32 > data.size then
-        Except.error s!"array: data too short for head at offset {headOff}"
+        Except.error (.dataTooShortForHead headOff)
       else
         let rawOffset := bytesToNat (data.extract headOff (headOff + 32))
         let tailOff := offset + rawOffset
@@ -130,7 +130,7 @@ mutual
         apply Prod.Lex.right (a := 1); omega
 
   def decodeFixedArray (elemType : ABIType) (n : Nat) (data : ByteArray) (offset : Nat)
-      : Except String (List ABIValue × Nat) :=
+      : Except Error (List ABIValue × Nat) :=
     if !isDynamic elemType then
       decodeFixedArray_goStatic elemType n data 0 offset []
     else
@@ -139,9 +139,9 @@ mutual
     termination_by (abiSize elemType, 2, n)
 
   def decodeDynamicArray (elemType : ABIType) (data : ByteArray) (offset : Nat)
-      : Except String (ABIValue × Nat) :=
+      : Except Error (ABIValue × Nat) :=
     if offset + 32 > data.size then
-      Except.error s!"array[]: data too short for length at offset {offset}"
+      Except.error (.dataTooShortForArrayLen offset)
     else
       let len := bytesToNat (data.extract offset (offset + 32))
       let arrayOffset := offset + 32
@@ -153,7 +153,7 @@ mutual
 
   /-- Iterate decoding static tuple elements (all non-dynamic): decode at sequential offsets. -/
   def decodeTupleElems_goStatic (types : List ABIType) (data : ByteArray) (offset : Nat)
-      (ts : List ABIType) (off : Nat) (acc : List ABIValue) : Except String (List ABIValue × Nat) :=
+      (ts : List ABIType) (off : Nat) (acc : List ABIValue) : Except Error (List ABIValue × Nat) :=
     match ts with
     | [] => Except.ok (acc.reverse, off)
     | t :: rest =>
@@ -173,12 +173,12 @@ mutual
 
   /-- Iterate decoding dynamic tuple elements: read head pointers, decode from tails. -/
   def decodeTupleElems_goDynamic (types : List ABIType) (data : ByteArray) (offset : Nat)
-      (i : Nat) (vals : List ABIValue) (maxEnd : Nat) : Except String (List ABIValue × Nat) :=
+      (i : Nat) (vals : List ABIValue) (maxEnd : Nat) : Except Error (List ABIValue × Nat) :=
     if h : i ≥ types.length then Except.ok (vals.reverse, maxEnd)
     else
       let headOff := offset + i * 32
       if headOff + 32 > data.size then
-        Except.error s!"tuple: data too short for head at offset {headOff}"
+        Except.error (.dataTooShortForHead headOff)
       else
         let hi : i < types.length := by omega
         let t := types.get ⟨i, hi⟩
@@ -209,7 +209,7 @@ mutual
         | refine Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 types)
             (Prod.Lex.right (a := 1) (by omega))
   def decodeTupleElems (types : List ABIType) (data : ByteArray) (offset : Nat)
-      : Except String (List ABIValue × Nat) :=
+      : Except Error (List ABIValue × Nat) :=
     let hasDynamic := types.any isDynamic
     if !hasDynamic then
       decodeTupleElems_goStatic types data offset types offset []
@@ -220,7 +220,7 @@ mutual
 
 end
 
-def decodeArgs (types : List ABIType) (data : ByteArray) (offset : Nat := 0) : Except String (List ABIValue) :=
+def decodeArgs (types : List ABIType) (data : ByteArray) (offset : Nat := 0) : Except Error (List ABIValue) :=
   match decodeTupleElems types data offset with
   | Except.ok (vals, _) => Except.ok vals
   | Except.error e => Except.error e
