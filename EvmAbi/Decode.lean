@@ -176,7 +176,7 @@ mutual
       (i : Nat) (vals : List ABIValue) (maxEnd : Nat) : Except Error (List ABIValue × Nat) :=
     if h : i ≥ types.length then Except.ok (vals.reverse, maxEnd)
     else
-      let headOff := offset + i * 32
+      let headOff := offset + (types.take i).foldl (fun acc t => acc + headSize t) 0
       if headOff + 32 > data.size then
         Except.error (.dataTooShortForHead headOff)
       else
@@ -214,8 +214,8 @@ mutual
     if !hasDynamic then
       decodeTupleElems_goStatic types data offset types offset []
     else
-      let headAreaSize := types.length * 32
-      decodeTupleElems_goDynamic types data offset 0 [] (offset + headAreaSize)
+      let totalHeadSize := types.foldl (fun acc t => acc + headSize t) 0
+      decodeTupleElems_goDynamic types data offset 0 [] (offset + totalHeadSize)
     termination_by (List.foldl (fun acc t => acc + abiSize t) 0 types, 3, types.length)
 
 end

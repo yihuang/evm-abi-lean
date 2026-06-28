@@ -158,7 +158,7 @@ mutual
         | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (t :: List.map Prod.fst rest))
           apply Prod.Lex.left; omega
   def encodeTupleElemsDynamic (items : List (ABIType × ABIValue)) : Except Error ByteArray :=
-    let headAreaSize := items.length * 32
+    let headAreaSize := items.foldl (fun acc (t, _) => acc + headSize t) 0
     match encodeTupleElemsCollect items [] with
     | Except.ok processed =>
       let init : Nat × ByteArray × ByteArray := (headAreaSize, ByteArray.empty, ByteArray.empty)

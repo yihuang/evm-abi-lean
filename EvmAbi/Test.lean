@@ -234,6 +234,54 @@ def testTuples : List (IO TestResult) := [
   assertRoundtrip "() empty tuple roundtrip" (.tuple []) (.tuple []),
 ]
 
+def testComplexHeadSize : List (IO TestResult) := [
+  assertEncodes "(uint256[3],bytes) encode" (.tuple [
+    (.array (.uint (ByteSize.ofLen 32 (by omega))) (some 3)),
+    .bytes
+  ]) (.tuple [
+    (.array [.uint 1, .uint 2, .uint 3]),
+    .bytes (bytes [0x68, 0x65, 0x6c, 0x6c, 0x6f])
+  ])
+    ("0x0000000000000000000000000000000000000000000000000000000000000001" ++
+    "0000000000000000000000000000000000000000000000000000000000000002" ++
+    "0000000000000000000000000000000000000000000000000000000000000003" ++
+    "0000000000000000000000000000000000000000000000000000000000000080" ++
+    "0000000000000000000000000000000000000000000000000000000000000005" ++
+    "68656c6c6f000000000000000000000000000000000000000000000000000000"),
+  assertRoundtrip "(uint256[3],bytes) roundtrip" (.tuple [
+    (.array (.uint (ByteSize.ofLen 32 (by omega))) (some 3)),
+    .bytes
+  ]) (.tuple [
+    (.array [.uint 1, .uint 2, .uint 3]),
+    .bytes (bytes [0x68, 0x65, 0x6c, 0x6c, 0x6f])
+  ]),
+  assertEncodes "(uint256,bytes,uint256[3]) encode" (.tuple [
+    (.uint (ByteSize.ofLen 32 (by omega))),
+    .bytes,
+    (.array (.uint (ByteSize.ofLen 32 (by omega))) (some 3))
+  ]) (.tuple [
+    .uint 42,
+    .bytes (bytes [0x68, 0x65, 0x6c, 0x6c, 0x6f]),
+    (.array [.uint 1, .uint 2, .uint 3])
+  ])
+    ("0x000000000000000000000000000000000000000000000000000000000000002a" ++
+    "00000000000000000000000000000000000000000000000000000000000000a0" ++
+    "0000000000000000000000000000000000000000000000000000000000000001" ++
+    "0000000000000000000000000000000000000000000000000000000000000002" ++
+    "0000000000000000000000000000000000000000000000000000000000000003" ++
+    "0000000000000000000000000000000000000000000000000000000000000005" ++
+    "68656c6c6f000000000000000000000000000000000000000000000000000000"),
+  assertRoundtrip "(uint256,bytes,uint256[3]) roundtrip" (.tuple [
+    (.uint (ByteSize.ofLen 32 (by omega))),
+    .bytes,
+    (.array (.uint (ByteSize.ofLen 32 (by omega))) (some 3))
+  ]) (.tuple [
+    .uint 42,
+    .bytes (bytes [0x68, 0x65, 0x6c, 0x6c, 0x6f]),
+    (.array [.uint 1, .uint 2, .uint 3])
+  ]),
+]
+
 def testBazExample : List (IO TestResult) := [
   assertEncodes "baz(uint32,bool) encode" (.tuple [(.uint (ByteSize.ofLen 4 (by omega))), .bool])
     (.tuple [(.uint 69), .bool true])
@@ -335,6 +383,7 @@ def main : IO Unit := do
     ("Arrays (fixed & dynamic)", testArrays),
     ("Tuples", testTuples),
     ("Spec Example: baz(uint32,bool)", testBazExample),
+    ("Complex Head Sizes", testComplexHeadSize),
     ("Spec Example: bar(bytes3[2])", testBarExample),
     ("Spec Example: sam(bytes,bool,uint256[])", testSamExample),
     ("Spec Example: f(uint256,uint32[],bytes10,bytes)", testFExample),
