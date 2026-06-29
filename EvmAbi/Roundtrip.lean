@@ -191,17 +191,27 @@ private lemma dynamicRoundtrip_preamble (b : ByteArray) (hb256 : b.size < 2 ^ 25
     b.size ≤ roundUp32 b.size ∧ (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size ∧
     bytesToNat ((uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 0 32) = b.size ∧
     (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 32 (32 + b.size) = b := by
-  sorry
+  have ha_sz : (uint256ToBytes b.size).size = 32 := uint256ToBytes_size b.size (natToBytes_size_bound b.size hb256)
+  have h_roundUp_ge : b.size ≤ roundUp32 b.size := by unfold roundUp32; omega
+  have h_pad_sz : (padRight b (roundUp32 b.size)).size = roundUp32 b.size := by
+    unfold padRight; split; omega; simp [zeros_size]; omega
+  have h_size : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size := by simp [ha_sz, h_pad_sz]
+  have h_len : bytesToNat ((uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 0 32) = b.size := by
+    rw [← ha_sz, extract_first_n, bytesToNat_uint256ToBytes b.size]
+  have h_extract_val : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 32 (32 + b.size) = b := roundtrip_bytes_val b hb256
+  exact ⟨ha_sz, h_pad_sz, h_roundUp_ge, h_size, h_len, h_extract_val⟩
 
 private lemma decodeDynamicBytes_roundtrip (v' : ByteArray) (hv256 : v'.size < 2 ^ 256) (data : ByteArray)
     (hdata : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) :
     decodeDynamicBytes data 0 = Except.ok (.bytes v', data.size) := by
-  sorry
+  rw [hdata]; rcases dynamicRoundtrip_preamble v' hv256 with ⟨_, _, h_roundUp_ge, h_size, h_len, h_extract_val⟩
+  unfold decodeDynamicBytes; simp [h_size, h_len, h_extract_val, h_roundUp_ge]
 
 private lemma decodeDynamicString_roundtrip (v' : String) (hv256 : v'.toUTF8.size < 2 ^ 256) (data : ByteArray)
     (hdata : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) :
     decodeDynamicString data 0 = Except.ok (.string v', data.size) := by
-  sorry
+  rw [decodeDynamicString, decodeDynamicBytes_roundtrip v'.toUTF8 hv256 data hdata]
+  simp [Except.map]; have h : v'.toByteArray = v'.toUTF8 := rfl; rw [h, fromUTF8!_toUTF8 v']
 
 /-! ## ABIVisitor instance -/
 
