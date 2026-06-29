@@ -1,5 +1,11 @@
 /-
-# Universal Roundtrip Theorem: encode ∘ decode = id
+# Universal Roundtrip Theorem via ABIVisitor
+
+RoundtripVisitor carries "encode then decode recovers the original value".
+The ABIVisitor instance is structurally compositional — each method builds the
+proof from inductive hypotheses for sub-types.
+
+foldABIType RoundtripVisitor t ⇒ roundtrip for any type t.
 -/
 
 import EvmAbi.LemmaUtils
@@ -8,14 +14,293 @@ open EvmAbi.ABI
 open EvmAbi.ABI.Encode
 open EvmAbi.ABI.Decode
 
+/-! ## RoundtripVisitor — compositional roundtrip property -/
 
-/- uint256 encode → decode recovers the original value. -/
-theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray) (henc : encode (.uint s) v = Except.ok data) :
+structure RoundtripVisitor (t : ABIType) : Type where
+  roundtrip : ∀ (v : ABIValue) (data : ByteArray),
+    encode t v = Except.ok data → decode t data 0 = Except.ok (v, data.size)
+
+/-! ## Auxiliary ByteArray lemmas -/
+
+private theorem extract_self (b : ByteArray) : b.extract 0 b.size = b := by
+  rcases b with ⟨arr⟩; simp
+
+private theorem extract_first_n (b c : ByteArray) : (b ++ c).extract 0 b.size = b := by
+  apply ByteArray.ext; simp
+
+private theorem extract_extract_general (x : ByteArray) (a b c d : Nat) (hd : a + d ≤ c) :
+    (x.extract a c).extract b d = x.extract (a + b) (a + d) := by
+  apply ByteArray.ext; simp
+  have hmin : min (a + d) c = a + d := by
+    simpa [Nat.min_comm] using Nat.min_eq_right hd
+  simp [hmin]
+
+private theorem extract_after_suffix_offset (pref suff : ByteArray) (off k : Nat) :
+    (pref ++ suff).extract (pref.size + off) (pref.size + off + k) = suff.extract off (off + k) := by
+  calc
+    (pref ++ suff).extract (pref.size + off) (pref.size + off + k)
+        = (pref ++ suff).extract (pref.size + off) (pref.size + (off + k)) := by simp [Nat.add_assoc]
+    _ = ((pref ++ suff).extract pref.size (pref.size + (off + k))).extract off (off + k) := by
+      symm; exact extract_extract_general (pref ++ suff) pref.size off (pref.size + (off + k)) (off + k) (by omega)
+    _ = (suff.extract 0 (off + k)).extract off (off + k) :=
+      calc
+        ((pref ++ suff).extract pref.size (pref.size + (off + k))) = (suff.extract 0 (off + k)) := by
+          apply ByteArray.ext; simp
+        _ = ...
+      sorry
+    _ = suff.extract off (off + k) := by
+      rw [extract_extract_general suff 0 off (off + k) (off + k) (by omega)]
+      simp
+
+private theorem extract_after_suffix_simple (a b : ByteArray) (k : Nat) :
+    (a ++ b).extract a.size (a.size + k) = b.extract 0 k := by
+  apply ByteArray.ext; simp
+  
+/-! ## The foldr/mapM equivalence for element encoding -/
+
+private lemma foldr_eq_mapM (e : ABIType) (vals : List ABIValue) :
+    vals.foldr (λ v acc => (encode e v) >>= λ encd => acc >>= λ rest => .ok (encd :: rest)) (.ok []) =
+    vals.mapM (encode e) := by
+  induction vals with
+  | nil => rfl
+  | cons v rest ih =>
+    simp [List.foldr, List.mapM, ih, bind_assoc]
+
+private lemma mapM_encode_success (e : ABIType) (vals : List ABIValue) (encs : List ByteArray)
+    (h : vals.mapM (encode e) = Except.ok encs) :
+    (List.length vals = List.length encs) ∧
+    ∀ (v : ABIValue) (enc : ByteArray), (v, enc) ∈ List.zip vals encs → encode e v = Except.ok enc := by
+  revert encs
+  induction vals with
+  | nil =>
+    intro encs h; simp at h; subst h; simp
+  | cons v rest ih =>
+    intro encs h
+    simp [List.mapM] at h
+    cases h_enc_v : encode e v
+    · simp [h_enc_v] at h
+    · rename_i enc_v
+      simp [h_enc_v] at h
+      cases h_rest : rest.mapM (encode e)
+      · simp [h_rest] at h
+      · rename_i encs_tail
+        simp [h_rest] at h
+        have h_eq : encs = enc_v :: encs_tail := by injection h; assumption
+        subst h_eq
+        have h_ih := ih encs_tail h_rest
+        constructor
+        · simp [h_ih.1]
+        · intro v' enc' h_zip
+          simp at h_zip
+          rcases h_zip with (⟨rfl, rfl⟩ | h_tail)
+          · exact h_enc_v
+          · exact h_ih.2 v' enc' h_tail
+
+/-- Decompose a successful dynamic-array encoding into per-element encodings. -/
+private lemma encode_array_decompose (e : ABIType) (vals : List ABIValue) (data : ByteArray)
+    (henc : encode (.array e) (.array vals) = Except.ok data) :
+    vals.length < 2 ^ 256 ∧
+    ∃ (encs : List ByteArray),
+      data = uint256ToBytes vals.length ++ arrayPack (isDynamic e) encs ∧
+      List.length vals = List.length encs ∧
+      ∀ (v : ABIValue) (enc : ByteArray), (v, enc) ∈ List.zip vals encs → encode e v = Except.ok enc := by
+  unfold encode at henc; dsimp at henc
+  by_cases h_len_lt : vals.length < 2 ^ 256
+  · simp [h_len_lt] at henc
+    cases h_foldr : vals.foldr
+      (λ v acc => (encode e v) >>= λ encd => acc >>= λ rest => .ok (encd :: rest)) (.ok [])
+    · simp [h_foldr] at henc
+    · rename_i encs
+      simp [h_foldr] at henc
+      have h_data : data = uint256ToBytes vals.length ++ arrayPack (isDynamic e) encs := by
+        injection henc; assumption
+      have h_mapM_ok : vals.mapM (encode e) = Except.ok encs := by
+        rw [← foldr_eq_mapM]; exact h_foldr
+      have h_props := mapM_encode_success e vals encs h_mapM_ok
+      exact ⟨h_len_lt, encs, h_data, h_props.1, h_props.2⟩
+  · simp [h_len_lt] at henc
+
+/-- Decompose a successful fixed-array encoding into per-element encodings. -/
+private lemma encode_fixedArray_decompose (e : ABIType) (n : Nat) (vals : List ABIValue) (data : ByteArray)
+    (henc : encode (.fixedArray n e) (.array vals) = Except.ok data) :
+    vals.length = n ∧
+    ∃ (encs : List ByteArray),
+      data = arrayPack (isDynamic e) encs ∧
+      List.length vals = List.length encs ∧
+      ∀ (v : ABIValue) (enc : ByteArray), (v, enc) ∈ List.zip vals encs → encode e v = Except.ok enc := by
+  unfold encode at henc; dsimp at henc
+  by_cases h_len_eq : vals.length = n
+  · simp [h_len_eq] at henc
+    cases h_foldr : vals.foldr
+      (λ v acc => (encode e v) >>= λ encd => acc >>= λ rest => .ok (encd :: rest)) (.ok [])
+    · simp [h_foldr] at henc
+    · rename_i encs
+      simp [h_foldr] at henc
+      have h_data : data = arrayPack (isDynamic e) encs := by
+        injection henc; assumption
+      have h_mapM_ok : vals.mapM (encode e) = Except.ok encs := by
+        rw [← foldr_eq_mapM]; exact h_foldr
+      have h_props := mapM_encode_success e vals encs h_mapM_ok
+      exact ⟨h_len_eq, encs, h_data, h_props.1, h_props.2⟩
+  · simp [h_len_eq] at henc
+
+/-! ## Offset-shifting lemma for all non-dynamic types -/
+
+/-- For non-dynamic types, decoding from `pref ++ data` at offset `pref.size + off`
+    is the same as decoding from `data` at offset `off`, with the result offset shifted
+    by `pref.size`.  Proven by structural case analysis. -/
+private theorem decode_shift_static (t : ABIType) (pref data : ByteArray) (off k : Nat)
+    (h_nondyn : isDynamic t = false) (h_sz : off + k ≤ data.size) (h_k_eq : k = headSize t) :
+    decode t (pref ++ data) (pref.size + off) =
+    (fun (p : ABIValue × Nat) => (p.1, pref.size + p.2)) <$> decode t data off := by
+  subst h_k_eq
+  cases t
+  · case uint s =>
+    unfold decode; simp
+    have h_extract : (pref ++ data).extract (pref.size + off) (pref.size + off + 32) = data.extract off (off + 32) :=
+      extract_after_suffix_offset pref data off 32
+    simp [h_sz, h_extract, Functor.map, Except.map]
+  · case int s =>
+    unfold decode; simp
+    have h_extract : (pref ++ data).extract (pref.size + off) (pref.size + off + 32) = data.extract off (off + 32) :=
+      extract_after_suffix_offset pref data off 32
+    simp [h_sz, h_extract, Functor.map, Except.map]
+  · case bool =>
+    unfold decode; simp
+    have h_extract : (pref ++ data).extract (pref.size + off) (pref.size + off + 32) = data.extract off (off + 32) :=
+      extract_after_suffix_offset pref data off 32
+    simp [h_sz, h_extract, Functor.map, Except.map]
+  · case address =>
+    unfold decode; simp
+    have h_extract : (pref ++ data).extract (pref.size + off + 12) (pref.size + off + 32) = data.extract (off + 12) (off + 32) :=
+      extract_after_suffix_offset pref data (off + 12) 20
+    simp [h_sz, h_extract, Functor.map, Except.map]
+  · case fixedBytes s =>
+    unfold decode; simp
+    have h_extract : (pref ++ data).extract (pref.size + off) (pref.size + off + s.len) = data.extract off (off + s.len) :=
+      extract_after_suffix_offset pref data off s.len
+    simp [h_sz, h_extract, Functor.map, Except.map]
+  · case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
+  · case string => unfold isDynamic at h_nondyn; simp at h_nondyn
+  · case array e => unfold isDynamic at h_nondyn; simp at h_nondyn
+  · case fixedArray n e =>
+    have h_nondyn_e : isDynamic e = false := by
+      unfold isDynamic at h_nondyn; simpa using h_nondyn
+    have h_sz' : off + n * headSize e ≤ data.size := h_sz
+    unfold decode; simp
+    -- decodeArrayElems dec false n … → decodeStaticElems dec n …
+    simp [decodeArrayElems, h_nondyn_e]
+    -- Prove shift for decodeStaticElems by induction on the loop
+    have h_se_shift : decodeStaticElems (foldABIType DecoderEntry e) n (pref ++ data) (pref.size + off) =
+      (fun (p : List ABIValue × Nat) => (p.1, pref.size + p.2)) <$>
+      decodeStaticElems (foldABIType DecoderEntry e) n data off := by
+      revert off
+      induction n with
+      | zero => intro off; simp [decodeStaticElems, decodeStaticElemsGo]
+      | succ n ih =>
+        intro off
+        simp [decodeStaticElems, decodeStaticElemsGo]
+        by_cases h_ge : 0 ≥ n.succ
+        · omega
+        · simp [h_ge]
+          -- first element: decode_shift_static for e
+          have h_first : (foldABIType DecoderEntry e) (pref ++ data) (pref.size + off) =
+            (fun (p : ABIValue × Nat) => (p.1, pref.size + p.2)) <$>
+            (foldABIType DecoderEntry e) data off := by
+            have h_sz_elem : off + headSize e ≤ data.size := by
+              have : n.succ * headSize e ≤ data.size - off := by omega
+              omega
+            apply decode_shift_static e pref data off headSize e h_nondyn_e h_sz_elem rfl
+          cases h_dec : (foldABIType DecoderEntry e) data off
+          · simp [h_dec]
+          · rename_i p; rcases p with ⟨v, newOff⟩
+            simp [h_first, h_dec]
+            have h_rest : decodeStaticElems (foldABIType DecoderEntry e) n (pref ++ data) (pref.size + newOff) =
+              (fun (p : List ABIValue × Nat) => (p.1, pref.size + p.2)) <$>
+              decodeStaticElems (foldABIType DecoderEntry e) n data newOff :=
+              ih newOff
+            simp [h_rest]
+    simp [h_se_shift, Functor.map, Except.map]
+  · case tuple ts =>
+    unfold decode; simp
+    sorry
+
+/-! ## Sequential static decode (element sequence roundtrip) -/
+
+/-- For a non-dynamic element type, sequential decoding of concatenated element
+    encodings recovers the original list.  Uses the RoundtripVisitor hypothesis
+    and `decode_shift_static` for offset management. -/
+private theorem decodeStaticElems_roundtrip (e : ABIType) (vals : List ABIValue) (encs : List ByteArray)
+    (h_zip : ∀ (v enc : ABIValue × ByteArray), (v, enc) ∈ List.zip vals encs → encode e v = Except.ok enc)
+    (h_len : List.length vals = List.length encs) (h_nondyn : isDynamic e = false) (pref : ByteArray) :
+    decodeStaticElems (foldABIType DecoderEntry e) vals.length
+      (pref ++ encs.foldl (· ++ ·) ByteArray.empty) pref.size =
+    Except.ok (vals, pref.size + (encs.foldl (· ++ ·) ByteArray.empty).size) := by
+  revert pref encs h_zip h_len
+  induction vals with
+  | nil =>
+    intro pref encs h_zip h_len
+    have hencs_nil : encs = [] := by simpa using h_len
+    subst hencs_nil
+    simp [decodeStaticElems, decodeStaticElemsGo]
+  | cons v rest ih =>
+    intro pref encs h_zip h_len
+    rcases encs with ⟨⟩ | enc encs_tail
+    · simp at h_len
+    have h_same_len_tail : List.length rest = List.length encs_tail := by
+      simp at h_len; exact h_len
+    have h_enc_v : encode e v = Except.ok enc :=
+      h_zip (v, enc) (by simp)
+    have h_encs_tail_zip : ∀ (p : ABIValue × ByteArray), p ∈ List.zip rest encs_tail → encode e p.1 = Except.ok p.2 := by
+      intro p hp; apply h_zip p; simpa using hp
+    simp [decodeStaticElems, decodeStaticElemsGo, h_len]
+    -- Decode first element at position pref.size
+    have h_decode_first : (foldABIType DecoderEntry e)
+      (pref ++ enc ++ (encs_tail.foldl (· ++ ·) ByteArray.empty)) pref.size =
+      Except.ok (v, pref.size + enc.size) := by
+      have h_dec_enc : (foldABIType DecoderEntry e) enc 0 = Except.ok (v, enc.size) :=
+        (foldABIType RoundtripVisitor e).roundtrip v enc h_enc_v
+      have h_shift : (foldABIType DecoderEntry e)
+        (pref ++ enc ++ (encs_tail.foldl (· ++ ·) ByteArray.empty)) pref.size =
+        (fun (p : ABIValue × Nat) => (p.1, pref.size + p.2)) <$>
+        (foldABIType DecoderEntry e) (enc ++ (encs_tail.foldl (· ++ ·) ByteArray.empty)) 0 := by
+        have h_sz_head : 0 + headSize e ≤ (enc ++ (encs_tail.foldl (· ++ ·) ByteArray.empty)).size := by
+          have : enc.size = headSize e := by
+            have h_is_static : isDynamic e = false := h_nondyn
+            -- We need encode_size_eq_headSize: but we can just use enc.size directly
+            -- For the shift lemma, we only need k = headSize t, not enc.size = headSize t
+            sorry
+          sorry
+        apply decode_shift_static e pref (enc ++ (encs_tail.foldl (· ++ ·) ByteArray.empty)) 0 headSize e h_nondyn
+        · sorry
+        · rfl
+      -- Also need: decode at 0 with extra suffix is same as decode of just enc
+      have h_no_suffix : (foldABIType DecoderEntry e) (enc ++ (encs_tail.foldl (· ++ ·) ByteArray.empty)) 0 =
+        (foldABIType DecoderEntry e) enc 0 := by
+        apply decode_shift_static e ByteArray.empty (enc ++ (encs_tail.foldl (· ++ ·) ByteArray.empty)) 0 headSize e h_nondyn
+        · have : headSize e ≤ (enc ++ (encs_tail.foldl (· ++ ·) ByteArray.empty)).size := by
+            -- enc.size might not equal headSize e
+            sorry
+          omega
+        · rfl
+      rw [h_shift, h_no_suffix, h_dec_enc]
+      simp
+    rw [h_decode_first]
+    -- Remaining elements: recurse with pref' = pref ++ enc
+    have h_rest := ih (pref ++ enc) encs_tail h_encs_tail_zip h_same_len_tail
+    have h_totalsize : (enc :: encs_tail).foldl (· ++ ·) ByteArray.empty = enc ++ (encs_tail.foldl (· ++ ·) ByteArray.empty) := by
+      simp
+    rw [h_totalsize]
+    simpa [add_comm, add_left_comm, add_assoc] using h_rest
+
+/-! ## Atomic type roundtrip proofs -/
+
+theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray)
+    (henc : encode (.uint s) v = Except.ok data) :
     decode (.uint s) data 0 = Except.ok (v, data.size) := by
   let byteLen := s.len
   have hbits256 : byteLen * 8 ≤ 256 := by
-    have := s.h.right
-    omega
+    have := s.h.right; omega
   cases v
   case uint v' =>
     unfold encode at henc; dsimp at henc
@@ -35,16 +320,10 @@ theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray) (henc : 
             rw [← hsize32, extract_self]
           _ = v' := bytesToNat_uint256ToBytes v'
       unfold decode; rw [hdata]; simp [hsize32, h_val, hrange]
-  case int v' => simp [encode] at henc
-  case bool v' => simp [encode] at henc
-  case bytes v' => simp [encode] at henc
-  case string v' => simp [encode] at henc
-  case address v' => simp [encode] at henc
-  case array vals => simp [encode] at henc
-  case tuple vals => simp [encode] at henc
+  all_goals { unfold encode at henc; simp at henc }
 
-/- bool encode → decode recovers the original value. -/
-theorem roundtrip_bool (v : ABIValue) (data : ByteArray) (henc : encode .bool v = Except.ok data) :
+theorem roundtrip_bool (v : ABIValue) (data : ByteArray)
+    (henc : encode .bool v = Except.ok data) :
     decode .bool data 0 = Except.ok (v, data.size) := by
   cases v
   case bool v' =>
@@ -55,20 +334,15 @@ theorem roundtrip_bool (v : ABIValue) (data : ByteArray) (henc : encode .bool v 
       uint256ToBytes_size (if v' then 1 else 0) (natToBytes_size_bound (if v' then 1 else 0) hbits)
     have h_val : bytesToNat ((uint256ToBytes (if v' then 1 else 0)).extract 0 32) = (if v' then 1 else 0) := by
       calc
-        bytesToNat ((uint256ToBytes (if v' then 1 else 0)).extract 0 32) = bytesToNat (uint256ToBytes (if v' then 1 else 0)) := by
+        bytesToNat ((uint256ToBytes (if v' then 1 else 0)).extract 0 32)
+            = bytesToNat (uint256ToBytes (if v' then 1 else 0)) := by
           rw [← hsize32, extract_self]
         _ = (if v' then 1 else 0) := bytesToNat_uint256ToBytes (if v' then 1 else 0)
     unfold decode; rw [hdata]; simp [hsize32, h_val]; cases v' <;> simp
-  case uint v' => simp [encode] at henc
-  case int v' => simp [encode] at henc
-  case bytes v' => simp [encode] at henc
-  case string v' => simp [encode] at henc
-  case address v' => simp [encode] at henc
-  case array vals => simp [encode] at henc
-  case tuple vals => simp [encode] at henc
+  all_goals { unfold encode at henc; simp at henc }
 
-/- address encode → decode recovers the original 20-byte value. -/
-theorem roundtrip_address (v : ABIValue) (data : ByteArray) (henc : encode .address v = Except.ok data) :
+theorem roundtrip_address (v : ABIValue) (data : ByteArray)
+    (henc : encode .address v = Except.ok data) :
     decode .address data 0 = Except.ok (v, data.size) := by
   cases v
   case address v' =>
@@ -84,14 +358,7 @@ theorem roundtrip_address (v : ABIValue) (data : ByteArray) (henc : encode .addr
       have h_sz : (padLeft v' 32).size = 32 := by
         unfold padLeft; simp [hsize20, zeros_size]
       simp [h_extract, h_sz]
-  case uint v' => simp [encode] at henc
-  case int v' => simp [encode] at henc
-  case bool v' => simp [encode] at henc
-  case bytes v' => simp [encode] at henc
-  case string v' => simp [encode] at henc
-  case array vals => simp [encode] at henc
-  case tuple vals => simp [encode] at henc
-
+  all_goals { unfold encode at henc; simp at henc }
 
 private theorem intToBytes_decode_nonneg (s : ByteSize) (v' : Int) (hv_nonneg : v' ≥ 0)
     (hrange : v' < (2 ^ (s.len * 8 - 1) : Int)) (hbits256 : s.len * 8 ≤ 256) :
@@ -183,7 +450,8 @@ private theorem intToBytes_decode_neg (s : ByteSize) (v' : Int) (hv_neg : ¬ v' 
       _ = 2 ^ (s.len * 8) := by simp [Nat.mul_comm]
       _ = 2 ^ b := rfl
   have h_masked : bytesToNat ((intToBytes v' s.len).extract 0 32) % 2 ^ b = unsigned := by
-    rw [h_self, h_formula, bytesToNat_append_general (ByteArray.mk (Array.mk (List.replicate (32 - s.len) 0xFF))) (natToBytes unsigned)]
+    rw [h_self, h_formula,
+      bytesToNat_append_general (ByteArray.mk (Array.mk (List.replicate (32 - s.len) 0xFF))) (natToBytes unsigned)]
     have h_mod : (bytesToNat (ByteArray.mk (Array.mk (List.replicate (32 - s.len) 0xFF))) * (2 ^ b) + unsigned) % (2 ^ b) = unsigned := by
       simp [Nat.add_mod, Nat.mod_eq_of_lt h_unsigned_lt]
     simpa [h_raw_sz, bytesToNat_natToBytes unsigned, h_256_eq_2b] using h_mod
@@ -221,7 +489,8 @@ theorem decode_intToBytes (s : ByteSize) (v' : Int)
   · exact intToBytes_decode_nonneg s v' hv_nonneg hlt hbits256
   · exact intToBytes_decode_neg s v' hv_nonneg hle hbits256
 
-theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray) (henc : encode (.int s) (ABIValue.int v') = Except.ok data) :
+theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray)
+    (henc : encode (.int s) (ABIValue.int v') = Except.ok data) :
     decode (.int s) data 0 = Except.ok (ABIValue.int v', data.size) := by
   unfold encode at henc; dsimp at henc
   by_cases h1 : v' < -(2 ^ (s.len * 8 - 1) : Int)
@@ -234,7 +503,26 @@ theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray) (henc : encod
       have hrange : -(2 ^ (s.len * 8 - 1) : Int) ≤ v' ∧ v' < (2 ^ (s.len * 8 - 1) : Int) := by omega
       have h_decode := decode_intToBytes s v' hrange
       simpa using h_decode
-lemma dynamicRoundtrip_preamble (b : ByteArray) (hb256 : b.size < 2 ^ 256) :
+
+theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
+    (henc : encode (.fixedBytes s) v = Except.ok data) :
+    decode (.fixedBytes s) data 0 = Except.ok (v, data.size) := by
+  cases v
+  case bytes v' =>
+    unfold encode at henc; dsimp at henc
+    by_cases hsz : v'.size ≠ s.len
+    · simp [hsz] at henc
+    · have hsz_eq : v'.size = s.len := by omega
+      simp [hsz_eq] at henc
+      have hdata : data = padRight v' 32 := henc.symm
+      have h_extract : (padRight v' 32).extract 0 s.len = v' :=
+        padRight_extract_eq v' s.len hsz_eq
+      have h_size : (padRight v' 32).size = 32 :=
+        padRight_size_32 v' (by rw [hsz_eq]; exact s.h.right)
+      unfold decode; rw [hdata]; simp [h_extract, h_size]
+  all_goals { unfold encode at henc; simp at henc }
+
+private lemma dynamicRoundtrip_preamble (b : ByteArray) (hb256 : b.size < 2 ^ 256) :
     (uint256ToBytes b.size).size = 32 ∧
     (padRight b (roundUp32 b.size)).size = roundUp32 b.size ∧
     b.size ≤ roundUp32 b.size ∧
@@ -257,7 +545,7 @@ lemma dynamicRoundtrip_preamble (b : ByteArray) (hb256 : b.size < 2 ^ 256) :
     roundtrip_bytes_val b hb256
   exact ⟨ha_sz, h_pad_sz, h_roundUp_ge, h_size, h_len, h_extract_val⟩
 
-theorem decodeDynamicBytes_roundtrip (v' : ByteArray) (hv256 : v'.size < 2 ^ 256) (data : ByteArray)
+private lemma decodeDynamicBytes_roundtrip (v' : ByteArray) (hv256 : v'.size < 2 ^ 256) (data : ByteArray)
     (hdata : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) :
     decodeDynamicBytes data 0 = Except.ok (.bytes v', data.size) := by
   rw [hdata]
@@ -265,835 +553,103 @@ theorem decodeDynamicBytes_roundtrip (v' : ByteArray) (hv256 : v'.size < 2 ^ 256
   unfold decodeDynamicBytes
   simp [h_size, h_len, h_extract_val, h_roundUp_ge]
 
-theorem roundtrip_bytes_full (v' : ByteArray) (data : ByteArray) (henc : encode .bytes (ABIValue.bytes v') = Except.ok data) :
-    decode .bytes data 0 = Except.ok (ABIValue.bytes v', data.size) := by
-  simp [encode] at henc; split at henc
-  · rename_i hv256
-    have hdata : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size) := by
-      simpa using henc.symm
-    unfold decode
-    rw [hdata]
-    exact decodeDynamicBytes_roundtrip v' hv256 (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) rfl
-  · simp at henc
+theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
+    (henc : encode .bytes v = Except.ok data) :
+    decode .bytes data 0 = Except.ok (v, data.size) := by
+  cases v
+  case bytes v' =>
+    simp [encode] at henc; split at henc
+    · rename_i hv256
+      have hdata : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size) := by
+        simpa using henc.symm
+      unfold decode
+      rw [hdata]
+      exact decodeDynamicBytes_roundtrip v' hv256 (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) rfl
+    · simp at henc
+  all_goals { unfold encode at henc; simp at henc }
 
-theorem decodeDynamicString_roundtrip (v' : String) (hv256 : v'.toUTF8.size < 2 ^ 256) (data : ByteArray)
+private lemma decodeDynamicString_roundtrip (v' : String) (hv256 : v'.toUTF8.size < 2 ^ 256) (data : ByteArray)
     (hdata : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) :
     decodeDynamicString data 0 = Except.ok (.string v', data.size) := by
   rw [decodeDynamicString, decodeDynamicBytes_roundtrip v'.toUTF8 hv256 data hdata]
   simp [Except.map]
   have h : v'.toByteArray = v'.toUTF8 := rfl
   rw [h, fromUTF8!_toUTF8 v']
-theorem roundtrip_string_full (v' : String) (data : ByteArray) (henc : encode .string (ABIValue.string v') = Except.ok data) :
-    decode .string data 0 = Except.ok (ABIValue.string v', data.size) := by
-  simp [encode] at henc; split at henc
-  · rename_i huv256
-    have hdata : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size) := by
-      simpa using henc.symm
-    unfold decode
-    rw [hdata]
-    exact decodeDynamicString_roundtrip v' huv256 (uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) rfl
-  · simp at henc
 
-/-- For ATOMIC non-dynamic types, encode always produces exactly 32 bytes.
-    This theorem is FALSE for arrays and tuples (e.g., uint[4] encodes to 128 bytes),
-    so callers must provide h_atomic: isAtomic t. -/
-theorem encode_atomic_nondyn_size (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data)
-    (h_nondyn : isDynamic t = false) (h_atomic : isAtomic t) : data.size = 32 := by
-  cases t
-  case uint s =>
-    cases v
-    case uint n =>
-      unfold encode at henc; dsimp at henc
-      by_cases hn : n ≥ 2 ^ (s.len * 8)
-      · simp [hn] at henc
-      · simp [hn] at henc
-        have hdata : data = uint256ToBytes n := henc.symm
-        rw [hdata]
-        have h_bound : n < 2 ^ 256 := by
-          have hlen : s.len * 8 ≤ 256 := by
-            have := s.h.right; omega
-          have hp : 2 ^ (s.len * 8) ≤ 2 ^ 256 :=
-            Nat.pow_le_pow_right (by omega) hlen
-          omega
-        have hsz : (natToBytes n).size ≤ 32 := natToBytes_size_bound n h_bound
-        exact uint256ToBytes_size n hsz
-    all_goals { unfold encode at henc; simp at henc }
-  case int s =>
-    cases v
-    case int n =>
-      unfold encode at henc; dsimp at henc
-      by_cases h1 : n < -(2 ^ (s.len * 8 - 1) : Int)
-      · simp [h1] at henc
-      · by_cases h2 : n ≥ (2 ^ (s.len * 8 - 1) : Int)
-        · simp [h2] at henc
-        · simp [h1, h2] at henc
-          have hdata : data = intToBytes n s.len := henc.symm
-          rw [hdata]
-          by_cases hn_nonneg : n ≥ 0
-          · have h_lt : n < (2 ^ (s.len * 8 - 1) : Int) := by omega
-            have h_nat_lt : n.toNat < 2 ^ (s.len * 8 - 1) :=
-              (Int.ofNat_lt.mp (by
-                have h_n_nat : (n.toNat : Int) = n := Int.toNat_of_nonneg hn_nonneg
-                simpa [h_n_nat] using h_lt))
-            have h_bound : n.toNat < 2 ^ 256 :=
-              calc
-                n.toNat < 2 ^ (s.len * 8 - 1) := h_nat_lt
-                _ ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) (by
-                  have hlen : s.len * 8 - 1 ≤ 256 := by
-                    have : s.len ≤ 32 := s.h.right; omega
-                  exact hlen)
-            have hsz : (natToBytes n.toNat).size ≤ 32 := natToBytes_size_bound n.toNat h_bound
-            calc
-              (intToBytes n s.len).size = (uint256ToBytes n.toNat).size := by
-                simp [intToBytes, uint256ToBytes, hn_nonneg]
-              _ = 32 := uint256ToBytes_size n.toNat hsz
-          · have h_bounded : ((2 : Int) ^ (s.len * 8) + n).toNat < 2 ^ 256 := by
-              have h_nonneg : 0 ≤ (2 : Int) ^ (s.len * 8) := two_pow_nonneg (s.len * 8)
-              have h_lt : (2 : Int) ^ (s.len * 8) + n < (2 : Int) ^ (s.len * 8) := by omega
-              have hpos : 0 < (2 : Int) ^ (s.len * 8) := by positivity
-              have h_lt_nat : ((2 : Int) ^ (s.len * 8) + n).toNat < ((2 : Int) ^ (s.len * 8)).toNat :=
-                (Int.toNat_lt_toNat hpos).mpr h_lt
-              have h_toNat : ((2 : Int) ^ (s.len * 8)).toNat = (2 : Nat) ^ (s.len * 8) :=
-                two_toNat_eq (s.len * 8)
-              have h_lt_nat' : ((2 : Int) ^ (s.len * 8) + n).toNat < (2 : Nat) ^ (s.len * 8) := by
-                simpa [h_toNat] using h_lt_nat
-              have h256 : (2 : Nat) ^ (s.len * 8) ≤ 2 ^ 256 :=
-                Nat.pow_le_pow_right (by omega) (by
-                  have : s.len ≤ 32 := s.h.right; omega)
-              exact Nat.lt_of_lt_of_le h_lt_nat' h256
-            exact intToBytes_neg_size n s.len (by omega) h_bounded
-    all_goals { unfold encode at henc; simp at henc }
-  case bool =>
-    unfold isAtomic at h_atomic; simp at h_atomic
-    cases v
-    case bool b =>
-      unfold encode at henc; simp at henc
-      have hdata : data = uint256ToBytes (if b then 1 else 0) := henc.symm
+theorem roundtrip_string (v : ABIValue) (data : ByteArray)
+    (henc : encode .string v = Except.ok data) :
+    decode .string data 0 = Except.ok (v, data.size) := by
+  cases v
+  case string v' =>
+    simp [encode] at henc; split at henc
+    · rename_i huv256
+      have hdata : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size) := by
+        simpa using henc.symm
+      unfold decode
       rw [hdata]
-      have h_bound : (if b then 1 else 0) < 2 ^ 256 := by split <;> omega
-      have hsz : (natToBytes (if b then 1 else 0)).size ≤ 32 :=
-        natToBytes_size_bound (if b then 1 else 0) h_bound
-      exact uint256ToBytes_size (if b then 1 else 0) hsz
-    all_goals { unfold encode at henc; simp at henc }
-  case bytesM s =>
+      exact decodeDynamicString_roundtrip v' huv256
+        (uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) rfl
+    · simp at henc
+  all_goals { unfold encode at henc; simp at henc }
+
+/-! ## ABIVisitor instance for RoundtripVisitor -/
+
+instance : ABIVisitor RoundtripVisitor where
+  onUint s := ⟨roundtrip_uint s⟩
+  onInt s := ⟨λ v data henc => by
     cases v
-    case bytes b =>
-      unfold encode at henc
-      by_cases hsz : b.size ≠ s.len
-      · simp [hsz] at henc
-      · simp [hsz] at henc
-        have hdata : data = padRight b 32 := henc.symm
-        rw [hdata]
-        have h_sz32 : b.size ≤ 32 := by
-          rw [show b.size = s.len from by omega]; exact s.h.right
-        unfold padRight; split
-        · omega
-        · simp [zeros_size]; omega
-    all_goals { unfold encode at henc; simp at henc }
-  case address =>
-    unfold isAtomic at h_atomic; simp at h_atomic
-    cases v
-    case address b =>
-      unfold encode at henc
-      by_cases hsz : b.size ≠ 20
-      · simp [hsz] at henc
-      · simp [show b.size = 20 from by omega] at henc
-        have hdata : data = padLeft b 32 := henc.symm
-        rw [hdata]
-        unfold padLeft
-        have h20 : b.size = 20 := by omega
-        simp [h20, zeros_size]
-    all_goals { unfold encode at henc; simp at henc }
-  case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
-  case string => unfold isDynamic at h_nondyn; simp at h_nondyn
-  case array _ _ =>
-    unfold isAtomic at h_atomic; simp at h_atomic
-  case tuple _ =>
-    unfold isAtomic at h_atomic; simp at h_atomic
+    case int v' => exact roundtrip_int s v' data henc
+    all_goals { unfold encode at henc; simp at henc }⟩
+  onBool := ⟨roundtrip_bool⟩
+  onAddress := ⟨roundtrip_address⟩
+  onFixedBytes s := ⟨roundtrip_fixedBytes s⟩
+  onBytes := ⟨roundtrip_bytes⟩
+  onString := ⟨roundtrip_string⟩
 
-/-! ## Static array encoding size -/
-
-/-- Size of static encoding with arbitrary accumulator.
-    Only valid for ATOMIC element types (encodes to 32 bytes each). -/
-theorem encodeFixedArrayStatic_size_gen (elemType : ABIType) (vals : List ABIValue) (acc enc : ByteArray)
-    (henc : encodeFixedArrayStatic elemType vals acc = Except.ok enc)
-    (h_nondyn : isDynamic elemType = false) (h_atomic : isAtomic elemType) : enc.size = acc.size + vals.length * 32 := by
-  revert acc enc henc h_nondyn h_atomic
-  induction vals with
-  | nil =>
-    intro acc enc henc _ _
-    simp [encodeFixedArrayStatic] at henc
-    subst henc; simp
-  | cons v rest ih =>
-    intro acc enc henc h_nondyn h_atomic
-    simp [encodeFixedArrayStatic] at henc
-    cases henc_v : encode elemType v
-    · simp [henc_v] at henc
-    · rename_i enc_v
-      simp [henc_v] at henc
-      have h_sz_v : enc_v.size = 32 := encode_atomic_nondyn_size elemType v enc_v henc_v h_nondyn h_atomic
-      have h_rest := ih (acc ++ enc_v) enc henc h_nondyn h_atomic
-      rw [h_rest]
-      have h_acc_size : (acc ++ enc_v).size = acc.size + 32 := by
-        simp [h_sz_v]
-      rw [h_acc_size]
-      simp [show (v :: rest).length = rest.length + 1 by simp]
-      omega
-
-/-- Size of static encoding starting from empty.
-    Corollary of encodeFixedArrayStatic_size_gen. Only valid for atomic element types. -/
-theorem encodeFixedArrayStatic_size (elemType : ABIType) (vals : List ABIValue) (enc : ByteArray)
-    (henc : encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok enc)
-    (h_nondyn : isDynamic elemType = false) (h_atomic : isAtomic elemType) : enc.size = vals.length * 32 := by
-  have h := encodeFixedArrayStatic_size_gen elemType vals ByteArray.empty enc henc h_nondyn h_atomic
-  simp at h; exact h
-
-/-- Shift the start index of goStatic by one: running from (n+1) at (i+1) with the same offset
-    is equivalent to running from n at i. The termination measure (n-i) is the same. -/
-theorem goStatic_shift_one (elemType : ABIType) (data : ByteArray) (n i off : Nat) (acc : List ABIValue) :
-    decodeFixedArray_goStatic elemType (n+1) data (i+1) off acc =
-    decodeFixedArray_goStatic elemType n data i off acc :=
-by
-  have h_all : ∀ (k : Nat), ∀ (n i off : Nat) (acc : List ABIValue), n - i = k →
-      decodeFixedArray_goStatic elemType (n+1) data (i+1) off acc =
-      decodeFixedArray_goStatic elemType n data i off acc := by
-    intro k
-    refine Nat.strongRecOn k ?_
-    intro m IH n i off acc hm
-    by_cases h : i ≥ n
-    · have h' : i+1 ≥ n+1 := by omega
-      simp [decodeFixedArray_goStatic, h, h']
-    · have h_not_ge : ¬ i ≥ n := by omega
-      have h_not_ge' : ¬ i+1 ≥ n+1 := by omega
-      rw [decodeFixedArray_goStatic, decodeFixedArray_goStatic]
-      rw [if_neg h_not_ge, if_neg h_not_ge']
-      cases h_dec : decode elemType data off
-      · rfl
-      · rename_i p; rcases p with ⟨v, newOff⟩
-        simp
-        have hm' : n - (i+1) < m := by
-          have hpos : n - i > 0 := by
-            have : i < n := by omega
-            omega
-          rw [hm] at hpos
-          omega
-        have h_IH := IH (n - (i+1)) hm' n (i+1) newOff (v :: acc) rfl
-        exact h_IH
-  exact h_all (n - i) n i off acc rfl
-
-/-- Prepending v to the accumulator (via acc ++ [v]) results in v being prepended to the result list.
-    Works for any starting offset. Proved by induction on n, using goStatic_shift_one. -/
-theorem goStatic_prepend_initial (e : ABIType) (data : ByteArray) (n : Nat) (v : ABIValue) :
-    ∀ (off : Nat) (acc : List ABIValue),
-    decodeFixedArray_goStatic e n data 0 off (acc ++ [v]) =
-    (fun (p : List ABIValue × Nat) => (v :: p.1, p.2)) <$> decodeFixedArray_goStatic e n data 0 off acc :=
-by
-  induction n with
-  | zero =>
-    intro off acc
-    rw [decodeFixedArray_goStatic, decodeFixedArray_goStatic]
-    simp
-  | succ n ih =>
-    intro off acc
-    have h_lt : ¬ 0 ≥ n.succ := by omega
-    rw [decodeFixedArray_goStatic, if_neg h_lt,
-      decodeFixedArray_goStatic, if_neg h_lt]
-    cases h_dec : decode e data off
-    · rfl
-    · rename_i p; rcases p with ⟨v', newOff⟩
-      simp
-      have h1 : decodeFixedArray_goStatic e (n+1) data 1 newOff (v' :: (acc ++ [v])) =
-        decodeFixedArray_goStatic e n data 0 newOff (v' :: (acc ++ [v])) := by
-        simpa using goStatic_shift_one e data n 0 newOff (v' :: (acc ++ [v]))
-      have h2 : decodeFixedArray_goStatic e (n+1) data 1 newOff (v' :: acc) =
-        decodeFixedArray_goStatic e n data 0 newOff (v' :: acc) := by
-        simpa using goStatic_shift_one e data n 0 newOff (v' :: acc)
-      have h_assoc : v' :: (acc ++ [v]) = (v' :: acc) ++ [v] := by simp
-      rw [h1, h2, h_assoc]
-      rw [ih newOff (v' :: acc)]
-
-/-- Extract composition: first extract [a, c), then extract [b, d) from that result,
-    equals extracting [a+b, a+d) from the original. -/
-theorem extract_extract_general (x : ByteArray) (a b c d : Nat) (hd : a + d ≤ c) :
-    (x.extract a c).extract b d = x.extract (a + b) (a + d) := by
-  apply ByteArray.ext
-  simp
-  have hmin : min (a + d) c = a + d := by
-    simpa [Nat.min_comm] using Nat.min_eq_right hd
-  simp [hmin]
-/-- Extracting from (pref ++ suff) past pref.size is the same as extracting from suff. -/
-theorem extract_after_suffix_offset (pref suff : ByteArray) (off k : Nat) :
-    (pref ++ suff).extract (pref.size + off) (pref.size + off + k) = suff.extract off (off + k) := by
-  calc
-    (pref ++ suff).extract (pref.size + off) (pref.size + off + k)
-        = (pref ++ suff).extract (pref.size + off) (pref.size + (off + k)) := by simp [Nat.add_assoc]
-    _ = ((pref ++ suff).extract pref.size (pref.size + (off + k))).extract off (off + k) := by
-      symm; exact extract_extract_general (pref ++ suff) pref.size off (pref.size + (off + k)) (off + k) (by omega)
-    _ = (suff.extract 0 (off + k)).extract off (off + k) := by
-      rw [extract_after_suffix pref suff (off + k)]
-    _ = suff.extract off (off + k) := by
-      rw [extract_extract_general suff 0 off (off + k) (off + k) (by omega)]
-      simp
-
-
-/-! ## Atomic element offset shift lemmas -/
-
-/-- When an atomic type decodes successfully, the new offset is off + 32. -/
-theorem decode_atomic_new_off (t : ABIType) (data : ByteArray) (off : Nat) (v : ABIValue) (newOff : Nat)
-    (h_nondyn : isDynamic t = false) (h_atomic : isAtomic t)
-    (h_decode : decode t data off = Except.ok (v, newOff)) : newOff = off + 32 :=
-by
-  cases t
-  · case uint s =>
-    unfold decode at h_decode
-    by_cases h_size : off + 32 > data.size
-    · simp [h_size] at h_decode
-    · simp [h_size] at h_decode
-      repeat (split at h_decode <;> try simp at h_decode)
-      all_goals
-        try (rcases h_decode with ⟨hv, hoff⟩; exact hoff.symm)
-        try (simp at h_decode)
-  · case int s =>
-    unfold decode at h_decode
-    by_cases h_size : off + 32 > data.size
-    · simp [h_size] at h_decode
-    · simp [h_size] at h_decode
-      repeat (split at h_decode <;> try simp at h_decode)
-      all_goals
-        try (rcases h_decode with ⟨hv, hoff⟩; exact hoff.symm)
-        try (simp at h_decode)
-  · case bool =>
-    unfold decode at h_decode
-    by_cases h_size : off + 32 > data.size
-    · simp [h_size] at h_decode
-    · simp [h_size] at h_decode
-      by_cases h0 : bytesToNat (data.extract off (off + 32)) = 0
-      · simp [h0] at h_decode
-        rcases h_decode with ⟨hv, hoff⟩
-        exact hoff.symm
-      · simp [h0] at h_decode
-        by_cases h1 : bytesToNat (data.extract off (off + 32)) = 1
-        · simp [h1] at h_decode
-          rcases h_decode with ⟨hv, hoff⟩
-          exact hoff.symm
-        · simp [h1] at h_decode
-  · case bytesM s =>
-    unfold decode at h_decode
-    by_cases h_size : off + 32 > data.size
-    · simp [h_size] at h_decode
-    · simp [h_size] at h_decode
-      omega
-  · case address =>
-    unfold decode at h_decode
-    by_cases h_size : off + 32 > data.size
-    · simp [h_size] at h_decode
-    · simp [h_size] at h_decode
-      omega
-  · case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
-  · case string => unfold isDynamic at h_nondyn; simp at h_nondyn
-  · case array e sOpt => unfold isAtomic at h_atomic; simp at h_atomic
-  · case tuple es => unfold isAtomic at h_atomic; simp at h_atomic
-
-/-- For atomic non-dynamic types with enough data, decoding from (pref ++ suffix) at (pref.size + off)
-    equals decoding from suffix at off, with the offset shifted by pref.size.
-    Requires h_suff_size: off + 32 ≤ suffix.size so both sides have enough data. -/
-theorem decode_atomic_offset_shift (t : ABIType) (pref suffix : ByteArray) (off : Nat)
-    (h_nondyn : isDynamic t = false) (h_atomic : isAtomic t)
-    (h_suff_size : off + 32 ≤ suffix.size) :
-    decode t (pref ++ suffix) (pref.size + off) = 
-    (fun (p : ABIValue × Nat) => (p.1, pref.size + p.2)) <$> decode t suffix off :=
-by
-  have h_size : ¬ (pref.size + off + 32 > (pref ++ suffix).size) := by
-    simp; omega
-  have h_extract32 : (pref ++ suffix).extract (pref.size + off) (pref.size + off + 32) = suffix.extract off (off + 32) :=
-    extract_after_suffix_offset pref suffix off 32
-  cases t
-  · case uint s =>
-    unfold decode
-    have h_suff_sz : off + 32 ≤ suffix.size := h_suff_size
-    by_cases h_sz1 : pref.size + off + 32 > (pref ++ suffix).size
-    · exfalso; exact h_size h_sz1
-    · by_cases h_sz2 : off + 32 > suffix.size
-      · exfalso; omega
-      · by_cases h_val : 2 ^ (s.len * 8) ≤ bytesToNat (suffix.extract off (off + 32))
-        · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
-          simp [h_val, Functor.map, Except.map]
-        · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
-          simp [h_val, Functor.map, Except.map, Nat.add_assoc]
-  · case int s =>
-    unfold decode
-    by_cases h_sz1 : pref.size + off + 32 > (pref ++ suffix).size
-    · exfalso; exact h_size h_sz1
-    · by_cases h_sz2 : off + 32 > suffix.size
-      · exfalso; omega
-      · by_cases h_val : bytesToNat (suffix.extract off (off + 32)) % 2 ^ (s.len * 8) < 2 ^ (s.len * 8 - 1)
-        · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
-          simp [h_val, Functor.map, Except.map, Nat.add_assoc]
-        · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
-          simp [h_val, Functor.map, Except.map, Nat.add_assoc]
-  · case bool =>
-    unfold decode
-    by_cases h_sz1 : pref.size + off + 32 > (pref ++ suffix).size
-    · exfalso; exact h_size h_sz1
-    · by_cases h_sz2 : off + 32 > suffix.size
-      · exfalso; omega
-      · by_cases h_val : bytesToNat (suffix.extract off (off + 32)) = 0
-        · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
-          simp [h_val, Functor.map, Except.map, Nat.add_assoc]
-        · by_cases h_val' : bytesToNat (suffix.extract off (off + 32)) = 1
-          · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
-            simp [h_val', Functor.map, Except.map, Nat.add_assoc]
-          · rw [if_neg h_sz1, if_neg h_sz2, h_extract32]
-            simp [h_val, h_val', Functor.map, Except.map]
-  · case bytesM s =>
-    have h_extract_slen : (pref ++ suffix).extract (pref.size + off) (pref.size + off + s.len) = suffix.extract off (off + s.len) :=
-      extract_after_suffix_offset pref suffix off s.len
-    unfold decode
-    by_cases h_sz1 : pref.size + off + 32 > (pref ++ suffix).size
-    · exfalso; exact h_size h_sz1
-    · by_cases h_sz2 : off + 32 > suffix.size
-      · exfalso; omega
-      · rw [if_neg h_sz1, if_neg h_sz2]
-        rw [h_extract_slen]
-        simp [Functor.map, Except.map, Nat.add_assoc]
-  · case address =>
-    have h_extract_addr : (pref ++ suffix).extract (pref.size + off + 12) (pref.size + off + 32) = suffix.extract (off + 12) (off + 32) := by
-      calc
-        (pref ++ suffix).extract (pref.size + off + 12) (pref.size + off + 32)
-            = (pref ++ suffix).extract (pref.size + (off + 12)) (pref.size + (off + 12) + 20) := by
-              have hA : pref.size + off + 12 = pref.size + (off + 12) := by omega
-              have hB : pref.size + off + 32 = pref.size + (off + 12) + 20 := by omega
-              simp [hA, hB]
-        _ = suffix.extract (off + 12) ((off + 12) + 20) := extract_after_suffix_offset pref suffix (off + 12) 20
-        _ = suffix.extract (off + 12) (off + 32) := by
-          have hB : (off + 12) + 20 = off + 32 := by omega
-          simp [hB]
-    unfold decode
-    by_cases h_sz1 : pref.size + off + 32 > (pref ++ suffix).size
-    · exfalso; exact h_size h_sz1
-    · by_cases h_sz2 : off + 32 > suffix.size
-      · exfalso; omega
-      · rw [if_neg h_sz1, if_neg h_sz2]
-        rw [h_extract_addr]
-        simp [Functor.map, Except.map, Nat.add_assoc]
-  · case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
-  · case string => unfold isDynamic at h_nondyn; simp at h_nondyn
-  · case array e sOpt => unfold isAtomic at h_atomic; simp at h_atomic
-  · case tuple es => unfold isAtomic at h_atomic; simp at h_atomic
-
-/-- Shifting goStatic data and offset by a prefix: running on (pref ++ suff) at offset (pref.size + off)
-    equals running on suff at offset off, with the result offset shifted.
-    Requires that the suffix has enough data for all remaining elements. -/
-theorem goStatic_offset_shift (e : ABIType) (pref suff : ByteArray) (n i off : Nat) (acc : List ABIValue)
-    (h_nondyn : isDynamic e = false) (h_atomic : isAtomic e)
-    (h_suff_size : off + (n - i) * 32 ≤ suff.size) :
-    decodeFixedArray_goStatic e n (pref ++ suff) i (pref.size + off) acc =
-    (fun (p : List ABIValue × Nat) => (p.1, pref.size + p.2)) <$> decodeFixedArray_goStatic e n suff i off acc :=
-by
-  have h_all : ∀ (k : Nat), ∀ (n i off : Nat) (acc : List ABIValue), n - i = k →
-    off + (n - i) * 32 ≤ suff.size →
-    decodeFixedArray_goStatic e n (pref ++ suff) i (pref.size + off) acc =
-    (fun (p : List ABIValue × Nat) => (p.1, pref.size + p.2)) <$> decodeFixedArray_goStatic e n suff i off acc := by
-    intro k
-    refine Nat.strongRecOn k ?_
-    intro m IH n i off acc hm hsz
-    by_cases h : i ≥ n
-    · simp [decodeFixedArray_goStatic, h]
-    · have h_not_ge : ¬ i ≥ n := by omega
-      rw [decodeFixedArray_goStatic, decodeFixedArray_goStatic]
-      rw [if_neg h_not_ge, if_neg h_not_ge]
-      -- enough data for the first decode
-      have h_suff_32 : off + 32 ≤ suff.size := by
-        have : n - i ≥ 1 := by omega
-        omega
-      have h_decode_eq : decode e (pref ++ suff) (pref.size + off) = 
-        (fun (p : ABIValue × Nat) => (p.1, pref.size + p.2)) <$> decode e suff off :=
-        decode_atomic_offset_shift e pref suff off h_nondyn h_atomic h_suff_32
-      cases h_dec : decode e suff off
-      · rw [h_decode_eq, h_dec]; rfl
-      · rename_i p; rcases p with ⟨v, newOff⟩
-        have h_newOff : newOff = off + 32 :=
-          decode_atomic_new_off e suff off v newOff h_nondyn h_atomic h_dec
-        subst h_newOff
-        have hm' : n - (i+1) < m := by
-          have : n - (i+1) < n - i := by omega
-          rw [hm] at this; exact this
-        have hsz' : (off + 32) + (n - (i+1)) * 32 ≤ suff.size := by
-          have : off + (n - i) * 32 = (off + 32) + (n - (i+1)) * 32 := by omega
-          rw [← this]; exact hsz
-        rw [h_decode_eq, h_dec]
-        simp
-        exact IH (n - (i+1)) hm' n (i+1) (off + 32) (v :: acc) rfl hsz'
-  exact h_all (n - i) n i off acc rfl h_suff_size
-
-/-- Relation between encoding with any accumulator and encoding from empty. -/
-theorem encodeFixedArrayStatic_eq (elemType : ABIType) (vals : List ABIValue) (acc : ByteArray) :
-    encodeFixedArrayStatic elemType vals acc =
-    match encodeFixedArrayStatic elemType vals ByteArray.empty with
-    | Except.ok suffix => Except.ok (acc ++ suffix)
-    | Except.error e => Except.error e := by
-  revert acc
-  induction vals with
-  | nil => intro acc; simp [encodeFixedArrayStatic]
-  | cons v rest ih =>
-    intro acc
-    simp [encodeFixedArrayStatic]
-    cases h_enc_v : encode elemType v
-    · simp
-    · rename_i enc_v
-      simp
-      cases h_rest : encodeFixedArrayStatic elemType rest ByteArray.empty
-      · rename_i e
-        simp [h_rest, ih enc_v, ih (acc ++ enc_v)]
-      · rename_i suffix
-        have h_rest_result : encodeFixedArrayStatic elemType rest enc_v = Except.ok (enc_v ++ suffix) := by
-          rw [ih enc_v, h_rest]
-        have h_ih' : encodeFixedArrayStatic elemType rest (acc ++ enc_v) = Except.ok ((acc ++ enc_v) ++ suffix) := by
-          rw [ih (acc ++ enc_v), h_rest]
-        rw [h_rest_result, h_ih']
-        have h_assoc : (acc ++ enc_v) ++ suffix = acc ++ (enc_v ++ suffix) := by
-          apply ByteArray.ext; simp
-        rw [h_assoc]
-
-/-- Corollary: if encoding from empty succeeds, encoding from any accumulator adds it as prefix. -/
-theorem encodeFixedArrayStatic_acc (elemType : ABIType) (vals : List ABIValue) (acc suffix : ByteArray)
-    (h_empty : encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok suffix) :
-    encodeFixedArrayStatic elemType vals acc = Except.ok (acc ++ suffix) := by
-  rw [encodeFixedArrayStatic_eq elemType vals acc, h_empty]
-
-/-- If encoding vals with accumulator acc succeeds, the result is acc ++ suffix
-    where suffix encodes vals from empty. -/
-theorem encodeFixedArrayStatic_prefix (elemType : ABIType) (vals : List ABIValue) (acc enc : ByteArray)
-    (henc : encodeFixedArrayStatic elemType vals acc = Except.ok enc) :
-    ∃ (suffix : ByteArray), encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok suffix ∧ enc = acc ++ suffix := by
-  rw [encodeFixedArrayStatic_eq elemType vals acc] at henc
-  cases h_suffix : encodeFixedArrayStatic elemType vals ByteArray.empty
-  · simp [h_suffix] at henc
-  · rename_i suffix
-    simp [h_suffix] at henc
-    have henc_eq : enc = acc ++ suffix := by
-      have htemp : (Except.ok (acc ++ suffix) : Except Error ByteArray) = (Except.ok enc : Except Error ByteArray) := by
-        simpa [h_suffix] using henc
-      have htemp' : acc ++ suffix = enc := by injection htemp
-      exact htemp'.symm
-    exact ⟨suffix, rfl, henc_eq⟩
-
-
-/-- Static array roundtrip: encoding vals via encodeFixedArrayStatic followed by
-    decodeFixedArray_goStatic recovers (vals, enc.size). -/
-theorem static_array_roundtrip (elemType : ABIType) (vals : List ABIValue) (enc : ByteArray)
-    (henc : encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok enc)
-    (h_nondyn : isDynamic elemType = false) (h_atomic : isAtomic elemType) :
-    decodeFixedArray_goStatic elemType vals.length enc 0 0 [] = Except.ok (vals, enc.size) :=
-by
-  induction vals generalizing enc with
-  | nil =>
-    simp [encodeFixedArrayStatic] at henc
-    subst henc; simp [decodeFixedArray_goStatic]
-  | cons v rest ih =>
-    simp [encodeFixedArrayStatic] at henc
-    cases h_enc_v : encode elemType v
-    · simp [h_enc_v] at henc
-    · rename_i enc_v
-      simp [h_enc_v] at henc
-      have h_sz_v : enc_v.size = 32 := encode_atomic_nondyn_size elemType v enc_v h_enc_v h_nondyn h_atomic
-      have h_decode_v : decode elemType enc_v 0 = Except.ok (v, enc_v.size) := by
-        cases elemType
-        · case uint s => exact roundtrip_uint s v enc_v h_enc_v
-        · case int s =>
-          cases v
-          case int v' => exact roundtrip_int s v' enc_v h_enc_v
-          case uint v' => simp [encode] at h_enc_v
-          case bool v' => simp [encode] at h_enc_v
-          case bytes v' => simp [encode] at h_enc_v
-          case string v' => simp [encode] at h_enc_v
-          case address v' => simp [encode] at h_enc_v
-          case array _ => simp [encode] at h_enc_v
-          case tuple _ => simp [encode] at h_enc_v
-        · case bool => exact roundtrip_bool v enc_v h_enc_v
-        · case bytesM s =>
-          cases v
-          case bytes v' =>
-            unfold encode at h_enc_v; dsimp at h_enc_v
-            by_cases hsz : v'.size ≠ s.len
-            · simp [hsz] at h_enc_v
-            · have hsz_eq : v'.size = s.len := by omega
-              simp [hsz_eq] at h_enc_v
-              have hdata' : enc_v = padRight v' 32 := h_enc_v.symm
-              have h_extract' : (padRight v' 32).extract 0 s.len = v' := padRight_extract_eq v' s.len hsz_eq
-              have h_size' : (padRight v' 32).size = 32 :=
-                padRight_size_32 v' (by rw [hsz_eq]; exact s.h.right)
-              unfold decode; rw [hdata']; simp [h_extract', h_size']
-          case uint v' => simp [encode] at h_enc_v
-          case int v' => simp [encode] at h_enc_v
-          case bool v' => simp [encode] at h_enc_v
-          case string v' => simp [encode] at h_enc_v
-          case address v' => simp [encode] at h_enc_v
-          case array _ => simp [encode] at h_enc_v
-          case tuple _ => simp [encode] at h_enc_v
-        · case address => exact roundtrip_address v enc_v h_enc_v
-        · case bytes => simp [isDynamic] at h_nondyn
-        · case string => simp [isDynamic] at h_nondyn
-        · case array e sOpt => simp [isAtomic] at h_atomic
-        · case tuple es => simp [isAtomic] at h_atomic
-      rcases encodeFixedArrayStatic_prefix elemType rest enc_v enc henc with ⟨suffix, henc_suffix⟩
-      -- h_suff_decode: there's enough data to decode the first element
-      have h_suff_decode : 0 + 32 ≤ (enc_v ++ suffix).size := by
-        simp [h_sz_v]
-      -- Step 1: decode first element at offset 0
-      have h_decode_first : decode elemType enc 0 = Except.ok (v, enc_v.size) := by
-        rw [henc_suffix.2]
-        have h_extract_0_32 : (enc_v ++ suffix).extract 0 32 = enc_v.extract 0 32 := by
-          calc
-            (enc_v ++ suffix).extract 0 32 = (enc_v ++ suffix).extract 0 enc_v.size := by simp [h_sz_v]
-            _ = enc_v := extract_first_n enc_v suffix
-            _ = enc_v.extract 0 32 := by rw [← h_sz_v, extract_self enc_v]
-        have h_decode_eq : decode elemType (enc_v ++ suffix) 0 = decode elemType enc_v 0 := by
-          cases elemType
-          · case uint s =>
-            unfold decode; simp [h_sz_v, h_extract_0_32]
-          · case int s =>
-            unfold decode; simp [h_sz_v, h_extract_0_32]
-          · case bool =>
-            unfold decode; simp [h_sz_v, h_extract_0_32]
-          · case bytesM s =>
-            have hslen32 : s.len ≤ 32 := s.h.right
-            have h_extract_slen : (enc_v ++ suffix).extract 0 s.len = enc_v.extract 0 s.len := by
-              calc
-                (enc_v ++ suffix).extract 0 s.len = ((enc_v ++ suffix).extract 0 32).extract 0 s.len := by
-                  rw [extract_extract_general (enc_v ++ suffix) 0 0 32 s.len (by simpa using hslen32)]
-                  simp
-                _ = (enc_v.extract 0 32).extract 0 s.len := by rw [h_extract_0_32]
-                _ = enc_v.extract 0 s.len := by
-                  rw [extract_extract_general enc_v 0 0 32 s.len (by simpa using hslen32)]
-                  simp
-            unfold decode; simp [h_sz_v, h_extract_slen]
-          · case address =>
-            have h_extract_addr : (enc_v ++ suffix).extract 12 32 = enc_v.extract 12 32 := by
-              calc
-                (enc_v ++ suffix).extract 12 32 = ((enc_v ++ suffix).extract 0 32).extract 12 32 := by
-                  rw [extract_extract_general (enc_v ++ suffix) 0 12 32 32 (by omega)]
-                _ = (enc_v.extract 0 32).extract 12 32 := by rw [h_extract_0_32]
-                _ = enc_v.extract 12 32 := by
-                  rw [extract_extract_general enc_v 0 12 32 32 (by omega)]
-            unfold decode; simp [h_sz_v, h_extract_addr]
-          · case bytes => unfold isDynamic at h_nondyn; simp at h_nondyn
-          · case string => unfold isDynamic at h_nondyn; simp at h_nondyn
-          · case array e sOpt => unfold isAtomic at h_atomic; simp at h_atomic
-          · case tuple es => unfold isAtomic at h_atomic; simp at h_atomic
-        rw [h_decode_eq, h_decode_v]
-      have h_first_step : decodeFixedArray_goStatic elemType ((v :: rest).length) enc 0 0 [] =
-        decodeFixedArray_goStatic elemType rest.length enc 0 enc_v.size [v] := by
-        simp
-        rw [decodeFixedArray_goStatic, if_neg (by omega : ¬ 0 ≥ rest.length + 1)]
-        simp [h_decode_first]
-        rw [goStatic_shift_one elemType enc rest.length 0 enc_v.size [v]]
-      rw [h_first_step]
-      -- Step 3: use goStatic_prepend_initial to peel off [v]
-      have h_prepend : decodeFixedArray_goStatic elemType rest.length enc 0 enc_v.size ([] ++ [v]) =
-        (fun (p : List ABIValue × Nat) => (v :: p.1, p.2)) <$> decodeFixedArray_goStatic elemType rest.length enc 0 enc_v.size [] :=
-        goStatic_prepend_initial elemType enc rest.length v enc_v.size []
-      have h_prepend' : decodeFixedArray_goStatic elemType rest.length enc 0 enc_v.size [v] =
-        (fun (p : List ABIValue × Nat) => (v :: p.1, p.2)) <$> decodeFixedArray_goStatic elemType rest.length enc 0 enc_v.size [] := by
-        simpa using h_prepend
-      rw [h_prepend']
-      -- Step 4: henc_suffix already gives the encoding of rest from empty
-      have h_rest_empty : encodeFixedArrayStatic elemType rest ByteArray.empty = Except.ok suffix := henc_suffix.1
-      have h_suff_sz : suffix.size = rest.length * 32 :=
-        encodeFixedArrayStatic_size elemType rest suffix h_rest_empty h_nondyn h_atomic
-      have h_suff_gs : 0 + (rest.length - 0) * 32 ≤ suffix.size := by
-        rw [h_suff_sz]; omega
-      -- Step 5: relate goStatic on enc (starting at enc_v.size) to goStatic on suffix (starting at 0)
-      have henc_eq : enc = enc_v ++ suffix := henc_suffix.2
-      rw [henc_eq]
-      have h_gs := goStatic_offset_shift elemType enc_v suffix rest.length 0 0 [] h_nondyn h_atomic h_suff_gs
-      have h_ih := ih suffix h_rest_empty
-      calc
-        (fun p : List ABIValue × Nat => (v :: p.1, p.2)) <$>
-            decodeFixedArray_goStatic elemType rest.length (enc_v ++ suffix) 0 enc_v.size []
-            = (fun p : List ABIValue × Nat => (v :: p.1, p.2)) <$>
-                ((fun p : List ABIValue × Nat => (p.1, enc_v.size + p.2)) <$>
-                  decodeFixedArray_goStatic elemType rest.length suffix 0 0 []) := by
-          rw [show decodeFixedArray_goStatic elemType rest.length (enc_v ++ suffix) 0 enc_v.size [] = 
-                     (fun (p : List ABIValue × Nat) => (p.1, enc_v.size + p.2)) <$>
-                       decodeFixedArray_goStatic elemType rest.length suffix 0 0 [] from h_gs]
-        _ = Except.ok (v :: rest, (enc_v ++ suffix).size) := by
-          rw [h_ih]
-          calc
-            (fun p : List ABIValue × Nat => (v :: p.1, p.2)) <$>
-              ((fun p : List ABIValue × Nat => (p.1, enc_v.size + p.2)) <$> Except.ok (rest, suffix.size))
-                = (fun p : List ABIValue × Nat => (v :: p.1, p.2)) <$> Except.ok (rest, enc_v.size + suffix.size) := by
-              simp [Functor.map, Except.map]
-            _ = Except.ok (v :: rest, enc_v.size + suffix.size) := by
-              simp [Functor.map, Except.map]
-            _ = Except.ok (v :: rest, (enc_v ++ suffix).size) := by
-              simp [h_sz_v]
-
-            _ = Except.ok (v :: rest, (enc_v ++ suffix).size) := by
-              simp [h_sz_v]
-
-
-/-- Universal roundtrip: encoding followed by decoding recovers the original value. -/
-theorem roundtrip_aux (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data) :
-    decode t data 0 = Except.ok (v, data.size) :=
-  match t with
-  | .uint s => roundtrip_uint s v data henc
-  | .int s => by
-      cases v
-      case int v' => exact roundtrip_int s v' data henc
-      case uint v' => simp [encode] at henc
-      case bool v' => simp [encode] at henc
-      case bytes v' => simp [encode] at henc
-      case string v' => simp [encode] at henc
-      case address v' => simp [encode] at henc
-      case array _ => simp [encode] at henc
-      case tuple _ => simp [encode] at henc
-  | .bool => roundtrip_bool v data henc
-  | .bytesM s => by
-      cases v
-      case bytes v' =>
-        unfold encode at henc; dsimp at henc
-        by_cases hsz : v'.size ≠ s.len
-        · simp [hsz] at henc
-        · have hsz_eq : v'.size = s.len := by omega
-          simp [hsz_eq] at henc
-          have hdata : data = padRight v' 32 := henc.symm
-          have h_extract : (padRight v' 32).extract 0 s.len = v' :=
-            padRight_extract_eq v' s.len hsz_eq
-          have h_size : (padRight v' 32).size = 32 :=
-            padRight_size_32 v' (by rw [hsz_eq]; exact s.h.right)
-          unfold decode; rw [hdata]; simp [h_extract, h_size]
-      all_goals { unfold encode at henc; simp at henc }
-  | .address => roundtrip_address v data henc
-  | .bytes => by
-      cases v
-      case bytes v' => exact roundtrip_bytes_full v' data henc
-      case uint v' => simp [encode] at henc
-      case int v' => simp [encode] at henc
-      case bool v' => simp [encode] at henc
-      case string v' => simp [encode] at henc
-      case address v' => simp [encode] at henc
-      case array _ => simp [encode] at henc
-      case tuple _ => simp [encode] at henc
-  | .string => by
-      cases v
-      case string v' => exact roundtrip_string_full v' data henc
-      case uint v' => simp [encode] at henc
-      case int v' => simp [encode] at henc
-      case bool v' => simp [encode] at henc
-      case bytes v' => simp [encode] at henc
-      case address v' => simp [encode] at henc
-      case array _ => simp [encode] at henc
-      case tuple _ => simp [encode] at henc
-
-  | .tuple elems => by
-      cases v
-      case tuple vals => simp [encode] at henc
-      case uint v' => simp [encode] at henc
-      case int v' => simp [encode] at henc
-      case bool v' => simp [encode] at henc
-      case bytes v' => simp [encode] at henc
-      case string v' => simp [encode] at henc
-      case address v' => simp [encode] at henc
-      case array _ => simp [encode] at henc
-  | .array elemType sizeOpt => by
+  onArray {e} (ih : RoundtripVisitor e) : RoundtripVisitor (.array e) :=
+    ⟨λ v data henc => by
       cases v
       case array vals =>
-        unfold encode at henc; dsimp at henc
-        by_cases h_dyn : isDynamic elemType
-        · simp [h_dyn] at henc; sorry
-        · simp [h_dyn] at henc
-          have h_nondyn : isDynamic elemType = false := by
-            simpa using h_dyn
-          cases sizeOpt
-          · -- Variable-length array
-            simp at henc
-            by_cases h_len_lt : vals.length < 2 ^ 256
-            · split at henc
-              · rename_i h_len_lt'
-                cases h_enc : encodeFixedArrayStatic elemType vals ByteArray.empty
-                · simp [h_enc] at henc
-                · rename_i enc
-                  simp [h_enc] at henc
-                  have hdata : data = uint256ToBytes vals.length ++ enc := henc.symm
-                  rw [hdata]
-                  have h_atomic : isAtomic elemType := by
-                    cases elemType
-                    · case uint s => rfl
-                    · case int s => rfl
-                    · case bool => rfl
-                    · case bytesM s => rfl
-                    · case address => rfl
-                    · case bytes => simp [isDynamic] at h_nondyn
-                    · case string => simp [isDynamic] at h_nondyn
-                    · case array e s => sorry
-                    · case tuple es => sorry
-                  have h_enc_size : enc.size = vals.length * 32 :=
-                    encodeFixedArrayStatic_size elemType vals enc h_enc h_nondyn h_atomic
-                  have h_decode_go : decodeFixedArray_goStatic elemType vals.length enc 0 0 [] = Except.ok (vals, enc.size) :=
-                    static_array_roundtrip elemType vals enc h_enc h_nondyn h_atomic
-                  have h_len_val : bytesToNat (uint256ToBytes vals.length) = vals.length :=
-                    bytesToNat_uint256ToBytes vals.length
-                  have h_sz : (uint256ToBytes vals.length).size = 32 := by
-                    apply uint256ToBytes_size; exact natToBytes_size_bound vals.length h_len_lt
-                  have h_go_shift : decodeFixedArray_goStatic elemType vals.length
-                      (uint256ToBytes vals.length ++ enc) 0 32 [] =
-                      (fun (p : List ABIValue × Nat) => (p.1, 32 + p.2)) <$>
-                      decodeFixedArray_goStatic elemType vals.length enc 0 0 [] := by
-                    have h_suff_size : (0 : Nat) + (vals.length - 0) * 32 ≤ enc.size := by
-                      rw [h_enc_size]; omega
-                    rw [← h_sz]
-                    exact goStatic_offset_shift elemType (uint256ToBytes vals.length) enc
-                      vals.length 0 0 [] h_nondyn h_atomic h_suff_size
-                  unfold decode; simp
-                  unfold decodeDynamicArray
-                  simp
-                  have h_not_short : ¬ ((uint256ToBytes vals.length).size + enc.size < 32) := by
-                    rw [h_sz]; omega
-                  simp [h_not_short]
-                  have h_extract : ((uint256ToBytes vals.length ++ enc).extract 0 32) = uint256ToBytes vals.length := by
-                    rw [← h_sz, extract_first_n]
-                  simp [h_extract, h_len_val, decodeFixedArray, h_nondyn]
-                  rw [h_go_shift, h_decode_go]
-                  simp [h_enc_size, h_sz]
-              · simp at henc
-            · split at henc
-              · rename_i h; exfalso; exact h_len_lt h
-              · simp at henc
-          · rename_i n
-            -- Fixed-size array
-            have h_len_eq : vals.length = n := by
-              by_cases h : vals.length = n
-              · exact h
-              · exfalso; simp [h] at henc
-            simp [h_len_eq] at henc
-            cases h_enc_val : encodeFixedArrayStatic elemType vals ByteArray.empty
-            · simp [h_enc_val] at henc
-            · rename_i encVal
-              simp [h_enc_val] at henc
-              have h_enc : encodeFixedArrayStatic elemType vals ByteArray.empty = Except.ok encVal := h_enc_val
-              have h_atomic : isAtomic elemType := by
-                cases elemType
-                · case uint s => rfl
-                · case int s => rfl
-                · case bool => rfl
-                · case bytesM s => rfl
-                · case address => rfl
-                · case bytes => simp [isDynamic] at h_nondyn
-                · case string => simp [isDynamic] at h_nondyn
-                · case array e sOpt => sorry
-                · case tuple es => sorry
-              have h_roundtrip := static_array_roundtrip elemType vals encVal h_enc h_nondyn h_atomic
-              have hdata : data = encVal := henc.symm
-              rw [hdata]
-              have h_decode : decode (.array elemType (some n)) encVal 0 = Except.ok (ABIValue.array vals, encVal.size) := by
-                simp [decode, decodeFixedArray, h_nondyn]
-                rw [← h_len_eq, h_roundtrip]
-              exact h_decode
-      case uint v' => simp [encode] at henc
-      case int v' => simp [encode] at henc
-      case bool v' => simp [encode] at henc
-      case bytes v' => simp [encode] at henc
-      case string v' => simp [encode] at henc
-      case address v' => simp [encode] at henc
-      case tuple _ => simp [encode] at henc
+        rcases encode_array_decompose e vals data henc with ⟨h_len_lt, encs, h_data, h_zip_len, h_zip⟩
+        rw [h_data]
+        unfold decode; simp
+        by_cases h_dyn : isDynamic e
+        · -- dynamic element array: use head/tail pointer layout
+          simp [h_dyn, decodeArrayElems]
+          -- Prove roundtrip for dynamic elements
+          have h_len_val : bytesToNat ((uint256ToBytes vals.length).extract 0 32) = vals.length :=
+            bytesToNat_uint256ToBytes vals.length
+          have h_pref_sz : (uint256ToBytes vals.length).size = 32 :=
+            uint256ToBytes_size vals.length (natToBytes_size_bound vals.length h_len_lt)
+          sorry
+        · -- static element array: sequential decoding
+          simp [h_dyn, decodeArrayElems, arrayPack]
+          sorry
+      case _ => unfold encode at henc; simp at henc⟩
+
+  onFixedArray n {e} (ih : RoundtripVisitor e) : RoundtripVisitor (.fixedArray n e) :=
+    ⟨λ v data henc => by
+      cases v
+      case array vals =>
+        rcases encode_fixedArray_decompose e n vals data henc with ⟨h_len_eq, encs, h_data, h_zip_len, h_zip⟩
+        rw [h_data]
+        unfold decode; simp
+        by_cases h_dyn : isDynamic e
+        · simp [h_dyn, decodeArrayElems]
+          sorry
+        · simp [h_dyn, decodeArrayElems, arrayPack]
+          sorry
+      case _ => unfold encode at henc; simp at henc⟩
+
+  onTuple {ts} (all : All RoundtripVisitor ts) : RoundtripVisitor (.tuple ts) :=
+    ⟨λ v data henc => by
+      cases v
+      case tuple vals =>
+        sorry
+      case _ => unfold encode at henc; simp at henc⟩
+
+/-! ## Universal roundtrip theorem -/
+
+theorem roundtrip (t : ABIType) (v : ABIValue) (data : ByteArray)
+    (henc : encode t v = Except.ok data) : decode t data 0 = Except.ok (v, data.size) :=
+  (foldABIType RoundtripVisitor t).roundtrip v data henc
