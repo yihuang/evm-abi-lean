@@ -132,7 +132,32 @@ theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray)
 
 theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
     (henc : encode (.fixedBytes s) v = Except.ok data) : decode (.fixedBytes s) data 0 = Except.ok (v, data.size) := by
-  sorry
+  match v with
+  | .bytes v' =>
+    unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
+    by_cases hsz : v'.size = s.len
+    · simp [hsz] at henc
+      have hd : padRight v' 32 = data := henc
+      subst hd
+      unfold decode; unfold foldABIType; delta instABIVisitorDecoderEntry; dsimp
+      have h_extract : (padRight v' 32).extract 0 s.len = v' := padRight_extract_eq v' s.len hsz
+      have h_size : (padRight v' 32).size = 32 := padRight_size_32 v' (by rw [hsz]; exact s.h.right)
+      simp [h_extract, h_size]
+    · simp [hsz] at henc
+  | x =>
+    unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
+    cases x with
+    | bytes v' =>
+      by_cases hsz : v'.size = s.len
+      · simp [hsz] at henc
+        have hd : padRight v' 32 = data := henc
+        subst hd
+        unfold decode; unfold foldABIType; delta instABIVisitorDecoderEntry; dsimp
+        have h_extract : (padRight v' 32).extract 0 s.len = v' := padRight_extract_eq v' s.len hsz
+        have h_size : (padRight v' 32).size = 32 := padRight_size_32 v' (by rw [hsz]; exact s.h.right)
+        simp [h_extract, h_size]
+      · simp [hsz] at henc
+    | _ => simp at henc
 
 theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
     (henc : encode .bytes v = Except.ok data) : decode .bytes data 0 = Except.ok (v, data.size) := by
