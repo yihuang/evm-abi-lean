@@ -58,7 +58,40 @@ theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray)
 
 theorem roundtrip_bool (v : ABIValue) (data : ByteArray)
     (henc : encode .bool v = Except.ok data) : decode .bool data 0 = Except.ok (v, data.size) := by
-  sorry
+  match v with
+  | .bool v' =>
+    unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
+    simp at henc
+    have hd : uint256ToBytes (if v' then 1 else 0) = data := henc
+    rw [hd.symm]
+    unfold decode; unfold foldABIType; delta instABIVisitorDecoderEntry; dsimp
+    have hbits : (if v' then 1 else 0) < 2 ^ 256 := by split <;> omega
+    have hsize32 : (uint256ToBytes (if v' then 1 else 0)).size = 32 :=
+      uint256ToBytes_size (if v' then 1 else 0) (natToBytes_size_bound (if v' then 1 else 0) hbits)
+    have h_val : bytesToNat ((uint256ToBytes (if v' then 1 else 0)).extract 0 32) = (if v' then 1 else 0) := by
+      calc
+        bytesToNat ((uint256ToBytes (if v' then 1 else 0)).extract 0 32) = bytesToNat (uint256ToBytes (if v' then 1 else 0)) := by
+          rw [← hsize32, extract_self]
+        _ = (if v' then 1 else 0) := bytesToNat_uint256ToBytes (if v' then 1 else 0)
+    simp [hsize32]; rw [h_val]; cases v' <;> simp
+  | x =>
+    unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
+    cases x with
+    | bool v' =>
+      simp at henc
+      have hd : uint256ToBytes (if v' then 1 else 0) = data := henc
+      rw [hd.symm]
+      unfold decode; unfold foldABIType; delta instABIVisitorDecoderEntry; dsimp
+      have hbits : (if v' then 1 else 0) < 2 ^ 256 := by split <;> omega
+      have hsize32 : (uint256ToBytes (if v' then 1 else 0)).size = 32 :=
+        uint256ToBytes_size (if v' then 1 else 0) (natToBytes_size_bound (if v' then 1 else 0) hbits)
+      have h_val : bytesToNat ((uint256ToBytes (if v' then 1 else 0)).extract 0 32) = (if v' then 1 else 0) := by
+        calc
+          bytesToNat ((uint256ToBytes (if v' then 1 else 0)).extract 0 32) = bytesToNat (uint256ToBytes (if v' then 1 else 0)) := by
+            rw [← hsize32, extract_self]
+          _ = (if v' then 1 else 0) := bytesToNat_uint256ToBytes (if v' then 1 else 0)
+      simp [hsize32]; rw [h_val]; cases v' <;> simp
+    | _ => simp at henc
 
 theorem roundtrip_address (v : ABIValue) (data : ByteArray)
     (henc : encode .address v = Except.ok data) : decode .address data 0 = Except.ok (v, data.size) := by
