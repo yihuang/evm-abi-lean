@@ -1,5 +1,7 @@
 /-
 # ABI (Application Binary Interface) Core Types
+
+Uses the ABIVisitor catamorphism (structural fold) pattern.
 -/
 
 namespace EvmAbi.ABI
@@ -8,39 +10,22 @@ open Nat
 
 /-- Structured error type for ABI encoding/decoding operations. -/
 inductive Error : Type where
-  /-- uint{b}: value {v} exceeds 2^{b} -/
   | uintExceeds (bits : Nat) (value : Nat)
-  /-- int{b}: value {v} out of range -/
   | intOutOfRange (bits : Nat) (value : Int)
-  /-- bytes{b}: expected {expected} bytes, got {actual} -/
   | fixedBytesSize (expected : Nat) (actual : Nat)
-  /-- address: expected 20 bytes, got {actual} -/
   | addressSize (actual : Nat)
-  /-- bytes/string: data too long ({size} bytes) -/
   | dataTooLong (size : Nat)
-  /-- array: expected {expected} elements, got {actual} -/
   | arrayElemCount (expected : Nat) (actual : Nat)
-  /-- array[]: length {length} exceeds 2^256 -/
   | arrayLengthOverflow (length : Nat)
-  /-- type/value mismatch -/
   | typeValueMismatch
-  /-- argument count mismatch -/
   | argCountMismatch (types : Nat) (values : Nat)
-  /-- bytes: data too short for length at offset {offset} -/
   | dataTooShortForLen (offset : Nat)
-  /-- bytes: data too short for {len} bytes at offset {offset} -/
   | dataTooShortForBytes (offset : Nat) (len : Nat)
-  /-- {ty}: data too short at offset {offset} -/
   | dataTooShort (ty : String) (offset : Nat)
-  /-- uint{b}: decoded value {value} exceeds 2^{b} -/
   | uintDecodedExceeds (bits : Nat) (value : Nat)
-  /-- bool: invalid value {value}, expected 0 or 1 -/
   | boolInvalidValue (value : Nat)
-  /-- array/tuple: data too short for head at offset {offset} -/
   | dataTooShortForHead (offset : Nat)
-  /-- array/tuple: data too short for length at offset {offset} -/
   | dataTooShortForArrayLen (offset : Nat)
-  /-- bytesToInt: value {value} exceeds 2^{bits} -/
   | bytesToIntOverflow (value : Nat) (bits : Nat)
   deriving Repr
 
@@ -64,7 +49,6 @@ instance : ToString Error where
     | .dataTooShortForArrayLen off => s!"array[]: data too short for length at offset {off}"
     | .bytesToIntOverflow v bits => s!"bytesToInt: value {v} exceeds 2^{bits}"
 
-
 /-- A validated byte-length in the range (0, 32]. -/
 structure ByteSize where
   len : Nat
@@ -72,108 +56,162 @@ structure ByteSize where
   deriving Repr, BEq
 
 namespace ByteSize
-
-/-- Smart constructor: call with e.g. `ByteSize.ofLen 32 (by omega)`. -/
 def ofLen (n : Nat) (h : 0 < n ∧ n ≤ 32) : ByteSize :=
   { len := n, h := h }
-
 end ByteSize
 
+/-- ABI type with ByteSize for uint/int/bytes widths. -/
 inductive ABIType : Type where
-  | uint (s : ByteSize)
-  | int (s : ByteSize)
+  | uint         (s : ByteSize)
+  | int          (s : ByteSize)
   | bool
-  | bytesM (s : ByteSize)
   | address
-  | bytes
+  | bytes                     -- dynamic bytes (was dynamicBytes)
+  | fixedBytes   (s : ByteSize)  -- fixed bytes N (was bytes)
   | string
-  | array (elem : ABIType) (size : Option Nat)
-  | tuple (elems : List ABIType)
+  | array        (elem : ABIType)             -- dynamic T[]
+  | fixedArray   (n : Nat) (elem : ABIType)   -- fixed T[n]
+  | tuple        (elems : List ABIType)
   deriving Repr, BEq
 
+/-- ABI value. -/
 inductive ABIValue : Type where
-  | uint (v : Nat)
-  | int (v : Int)
-  | bool (v : Bool)
-  | bytes (v : ByteArray)
-  | string (v : String)
+  | uint    (v : Nat)
+  | int     (v : Int)
+  | bool    (v : Bool)
+  | bytes   (v : ByteArray)
+  | string  (v : String)
   | address (v : ByteArray)
-  | array (vals : List ABIValue)
-  | tuple (vals : List ABIValue)
+  | array   (vals : List ABIValue)
+  | tuple   (vals : List ABIValue)
   deriving BEq
 
-instance : ToString ABIType where
-  toString t := (repr t).pretty 0
+/-! ## All — heterogeneous list for ABIVisitor -/
+
+inductive All (φ : ABIType → Type) : List ABIType → Type where
+  | nil  : All φ []
+  | cons : φ t → All φ ts → All φ (t :: ts)
+
+namespace All
+
+def map {φ ψ : ABIType → Type} (f : ∀ {t}, φ t → ψ t) : ∀ {ts}, All φ ts → All ψ ts
+  | _, .nil => .nil
+  | _, .cons x xs => .cons (f x) (map f xs)
+
+def foldr {φ : ABIType → Type} {β : Type} (f : ∀ {t}, φ t → β → β) (init : β) : ∀ {ts}, All φ ts → β
+  | _, .nil => init
+  | _, .cons x xs => f x (foldr f init xs)
+
+def any : ∀ {ts}, All (λ _ => Bool) ts → Bool
+  | _, .nil => false
+  | _, .cons b bs => b || any bs
+
+def sum : ∀ {ts}, All (λ _ => Nat) ts → Nat
+  | _, .nil => 0
+  | _, .cons n ns => n + sum ns
+
+end All
+
+/-! ## ABIVisitor — catamorphism over ABIType -/
+
+class ABIVisitor (φ : ABIType → Type) where
+  onUint         : (s : ByteSize) → φ (.uint s)
+  onInt          : (s : ByteSize) → φ (.int s)
+  onBool         : φ .bool
+  onAddress      : φ .address
+  onBytes        : φ .bytes
+  onFixedBytes   : (s : ByteSize) → φ (.fixedBytes s)
+  onString       : φ .string
+  onArray        : {e : ABIType} → φ e → φ (.array e)
+  onFixedArray   : (n : Nat) → {e : ABIType} → φ e → φ (.fixedArray n e)
+  onTuple        : {ts : List ABIType} → All φ ts → φ (.tuple ts)
+
+/-! ## Simple properties -/
 
 def abiSize : ABIType → Nat
-  | .uint _ => 1
-  | .int _ => 1
-  | .bool => 1
-  | .bytesM _ => 1
-  | .address => 1
-  | .bytes => 1
-  | .string => 1
-  | .array e _ => 1 + abiSize e
-  | .tuple es => 1 + es.foldl (fun acc t => acc + abiSize t) 0
+  | .uint _         => 1
+  | .int _          => 1
+  | .bool           => 1
+  | .address        => 1
+  | .bytes           => 1
+  | .fixedBytes _   => 1
+  | .string         => 1
+  | .array e        => 1 + abiSize e
+  | .fixedArray _ e => 1 + abiSize e
+  | .tuple []       => 1
+  | .tuple (t::ts)  => abiSize t + abiSize (.tuple ts)
 
-theorem foldl_add_eq (a : Nat) : ∀ (xs : List ABIType),
-    xs.foldl (fun acc t => acc + abiSize t) a = a + xs.foldl (fun acc t => acc + abiSize t) 0
-  | [] => by simp
-  | x :: xs => by
-    simp
-    rw [foldl_add_eq (a + abiSize x) xs, foldl_add_eq (abiSize x) xs]
-    omega
+def headSize : ABIType → Nat
+  | .uint _         => 32
+  | .int _          => 32
+  | .bool           => 32
+  | .address        => 32
+  | .bytes           => 32
+  | .fixedBytes _   => 32
+  | .string         => 32
+  | .array _        => 32
+  | .fixedArray n e => n * headSize e
+  | .tuple []       => 0
+  | .tuple (t::ts)  => headSize t + headSize (.tuple ts)
 
-theorem le_foldl_add (a : Nat) : ∀ (xs : List ABIType), a ≤ xs.foldl (fun acc t => acc + abiSize t) a
-  | [] => Nat.le_refl a
-  | x :: xs => by
-    simp
-    have h' : a + abiSize x ≤ xs.foldl (fun acc t => acc + abiSize t) (a + abiSize x) :=
-      le_foldl_add (a + abiSize x) xs
-    exact Nat.le_trans (Nat.le_add_right a (abiSize x)) h'
+def isDynamic : ABIType → Bool
+  | .bytes | .string | .array _ => true
+  | .fixedArray _ e => isDynamic e
+  | .tuple []       => false
+  | .tuple (e::es)  => isDynamic e || isDynamic (.tuple es)
+  | _ => false
 
-theorem mem_foldl_le (t : ABIType) (ts : List ABIType) (h : t ∈ ts) :
-    abiSize t ≤ ts.foldl (fun acc t => acc + abiSize t) 0 := by
-  induction ts with
-  | nil => simp at h
-  | cons x xs ih =>
-    simp at h
-    cases h with
-    | inl h_eq =>
-      rw [h_eq]
-      simp
-      exact le_foldl_add (abiSize x) xs
-    | inr h_mem =>
-      have h_ih := ih h_mem
-      refine Nat.le_trans h_ih ?_
-      simp
-      rw [foldl_add_eq (abiSize x) xs, foldl_add_eq 0 xs]
-      omega
+/-! ## Termination lemmas for foldABIType (using sizeOf) -/
 
-theorem abiSize_lt_array (e : ABIType) (s : Option Nat) : abiSize e < abiSize (.array e s) := by
-  simp [abiSize]
-
-theorem abiSize_lt_tuple (t : ABIType) (ts : List ABIType) (h : t ∈ ts) : abiSize t < abiSize (.tuple ts) := by
-  simp [abiSize]
-  have hle : abiSize t ≤ ts.foldl (fun acc t => acc + abiSize t) 0 :=
-    mem_foldl_le t ts h
-  apply Nat.lt_of_le_of_lt hle
-  omega
-
-theorem list_foldl_lt_cons_abi (t : ABIType) (rest : List ABIType) :
-    List.foldl (fun acc t => acc + abiSize t) 0 rest <
-    List.foldl (fun acc t => acc + abiSize t) 0 (t :: rest) := by
+theorem sizeOf_lt_array (e : ABIType) : sizeOf e < sizeOf (ABIType.array e) := by
   simp
-  have hpos : 0 < abiSize t := by unfold abiSize; split <;> omega
-  have h_eq : List.foldl (fun acc t => acc + abiSize t) (abiSize t) rest =
-             abiSize t + List.foldl (fun acc t => acc + abiSize t) 0 rest :=
-    foldl_add_eq (abiSize t) rest
-  rw [h_eq]; omega
+
+theorem sizeOf_lt_fixedArray (n : Nat) (e : ABIType) : sizeOf e < sizeOf (ABIType.fixedArray n e) := by
+  simp; omega
+
+theorem sizeOf_lt_tuple_cons (t : ABIType) (ts : List ABIType) : sizeOf t < sizeOf (ABIType.tuple (t :: ts)) := by
+  simp; omega
+
+theorem sizeOf_tuple_lt_tuple_cons (t : ABIType) (ts : List ABIType) : sizeOf (ABIType.tuple ts) < sizeOf (ABIType.tuple (t :: ts)) := by
+  simp; omega
+
+mutual
+
+  def foldABIType (φ : ABIType → Type) [inst : ABIVisitor φ] (t : ABIType) : φ t :=
+    match t with
+    | .uint s         => inst.onUint s
+    | .int s          => inst.onInt s
+    | .bool           => inst.onBool
+    | .address        => inst.onAddress
+    | .bytes         => inst.onBytes
+    | .fixedBytes s  => inst.onFixedBytes s
+    | .string         => inst.onString
+    | .array e        => inst.onArray (foldABIType φ e)
+    | .fixedArray n e => inst.onFixedArray n (foldABIType φ e)
+    | .tuple ts       => inst.onTuple (foldAll φ ts)
+  termination_by (sizeOf t, 1, 0)
+  decreasing_by
+    · apply Prod.Lex.left; simp
+    · apply Prod.Lex.left; simp; omega
+    · apply Prod.Lex.right (a := sizeOf (ABIType.tuple ts))
+      apply Prod.Lex.left; omega
+
+  def foldAll (φ : ABIType → Type) [inst : ABIVisitor φ] (types : List ABIType) : All φ types :=
+    match types with
+    | []    => All.nil
+    | t::ts => All.cons (foldABIType φ t) (foldAll φ ts)
+  termination_by (sizeOf (ABIType.tuple types), 0, types.length)
+  decreasing_by
+    · apply Prod.Lex.left; apply sizeOf_lt_tuple_cons
+    · apply Prod.Lex.left; apply sizeOf_tuple_lt_tuple_cons
+
+end
+
+/-! ## Byte helpers -/
 
 def roundUp32 (n : Nat) : Nat := ((n + 31) / 32) * 32
 
 def zeroByte : UInt8 := 0
-
 def zeros (n : Nat) : ByteArray :=
   ByteArray.mk (Array.mk (List.replicate n zeroByte))
 
@@ -190,8 +228,7 @@ def natToBytes (v : Nat) : ByteArray :=
         go (n / 256) (ByteArray.mk (Array.mk [((n % 256).toUInt8)]) ++ acc)
     go v ByteArray.empty
 
-def uint256ToBytes (v : Nat) : ByteArray :=
-  padLeft (natToBytes v) 32
+def uint256ToBytes (v : Nat) : ByteArray := padLeft (natToBytes v) 32
 
 def intToBytes (v : Int) (byteLen : Nat) : ByteArray :=
   let b := byteLen * 8
@@ -199,55 +236,24 @@ def intToBytes (v : Int) (byteLen : Nat) : ByteArray :=
   let unsigned : Nat :=
     if v ≥ 0 then v.toNat
     else ((pow2 : Int) + v).toNat
-  if v ≥ 0 then
-    padLeft (natToBytes unsigned) 32
-  else
-    let raw := natToBytes unsigned
-    ByteArray.mk (Array.mk (List.replicate (32 - raw.size) 0xFF)) ++ raw
+  if v ≥ 0 then padLeft (natToBytes unsigned) 32
+  else ByteArray.mk (Array.mk (List.replicate (32 - (natToBytes unsigned).size) 0xFF)) ++ natToBytes unsigned
 
 def bytesToNat_list : List UInt8 → Nat :=
   List.foldl (λ acc b => acc * 256 + b.toNat) 0
 
-def bytesToNat (b : ByteArray) : Nat :=
-  bytesToNat_list b.data.toList
+def bytesToNat (b : ByteArray) : Nat := bytesToNat_list b.data.toList
 
 def bytesToInt (b : ByteArray) (byteLen : Nat) : Except Error Int :=
   let bv := byteLen * 8
   let unsigned := bytesToNat b
   let pow2_m1 := 2 ^ (bv - 1)
   let pow2 := 2 ^ bv
-  if unsigned < pow2_m1 then
-    Except.ok (Int.ofNat unsigned)
-  else if unsigned ≤ pow2 then
-    Except.ok (-(Int.ofNat (pow2 - unsigned)))
-  else
-    Except.error (.bytesToIntOverflow unsigned bv)
+  if unsigned < pow2_m1 then .ok (Int.ofNat unsigned)
+  else if unsigned ≤ pow2 then .ok (-(Int.ofNat (pow2 - unsigned)))
+  else .error (.bytesToIntOverflow unsigned bv)
 
-def isDynamic : ABIType → Bool
-  | .bytes | .string => true
-  | .array _ none => true
-  | .array elem (some _) => isDynamic elem
-  | .tuple [] => false
-  | .tuple (e :: es) => isDynamic e || isDynamic (.tuple es)
-  | _ => false
-
-def isTuple : ABIType → Bool
-  | .tuple _ => true
-  | _ => false
-
-def isAtomic : ABIType → Bool
-  | .array _ _ | .tuple _ | .bytes | .string => false
-  | _ => true
-
-def headSize (type : ABIType) : Nat :=
-  if isDynamic type then 32 else
-    match type with
-    | .uint _ | .int _ | .bool | .address => 32
-    | .bytesM _ => 32
-    | .array elem (some n) => n * headSize elem
-    | .tuple [] => 0
-    | .tuple (e :: es) => headSize e + headSize (.tuple es)
-    | _ => 0
+/-! ## Formatting -/
 
 def hexDigit (n : Nat) : Char :=
   if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)

@@ -2,7 +2,7 @@ import EvmAbi.ABI
 import EvmAbi.Encode
 import EvmAbi.Decode
 import EvmAbi.Hash
-import EvmAbi.Roundtrip
+
 
 /-!
 # EvmAbi — EVM ABI encoding/decoding in Lean 4

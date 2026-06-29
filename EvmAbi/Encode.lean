@@ -1,5 +1,5 @@
 /-
-# ABI Encoding
+# ABI Encoding via ABIVisitor
 -/
 
 import EvmAbi.ABI
@@ -8,191 +8,139 @@ open EvmAbi.ABI
 
 namespace EvmAbi.ABI.Encode
 
-theorem abiSize_pos (t : ABIType) : 0 < abiSize t := by
-  unfold abiSize; split <;> omega
+/-- EncoderEntry t = (isDynamic, encoder function) for type t. -/
+def EncoderEntry (_t : ABIType) : Type := Bool × (ABIValue → Except Error ByteArray)
 
-theorem tuple_foldl_lt (es : List ABIType) :
-    es.foldl (fun acc t => acc + abiSize t) 0 < abiSize (.tuple es) := by
-  simp [abiSize]
+/-- Pack encoded array elements. -/
+def arrayPack (elemDynamic : Bool) (encoded : List ByteArray) : ByteArray :=
+  if !elemDynamic then
+    encoded.foldl (· ++ ·) ByteArray.empty
+  else
+    let headAreaSize := if encoded.length = 0 then 32 else encoded.length * 32
+    let init : Nat × ByteArray × ByteArray := (headAreaSize, ByteArray.empty, ByteArray.empty)
+    let (_, heads, tails) :=
+      List.foldl (λ (acc : Nat × ByteArray × ByteArray) (enc : ByteArray) =>
+        let (offset, heads, accTails) := acc
+        (offset + roundUp32 enc.size, heads ++ uint256ToBytes offset, accTails ++ enc)
+      ) init encoded
+    heads ++ tails
 
-theorem list_foldl_lt_cons (t : ABIType) (rest : List (ABIType × ABIValue)) :
-    List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst rest) <
-    List.foldl (fun acc t => acc + abiSize t) 0 (t :: List.map Prod.fst rest) :=
-  list_foldl_lt_cons_abi t (List.map Prod.fst rest)
+/-- Pack tuple elements. -/
+def tuplePack (headSizes : List Nat) (dynamics : List Bool) (encoded : List (Bool × ByteArray)) : ByteArray :=
+  if !(dynamics.any id) then
+    encoded.foldl (λ acc (_, enc) => acc ++ enc) ByteArray.empty
+  else
+    let headAreaSize := headSizes.foldl (· + ·) 0
+    let init : Nat × ByteArray × ByteArray := (headAreaSize, ByteArray.empty, ByteArray.empty)
+    let (_, heads, tails) :=
+      List.foldl (λ (acc : Nat × ByteArray × ByteArray) ((isDyn, enc) : Bool × ByteArray) =>
+        let (offset, heads, accTails) := acc
+        if isDyn then (offset + roundUp32 enc.size, heads ++ uint256ToBytes offset, accTails ++ enc)
+        else (offset, heads ++ enc, accTails)
+      ) init encoded
+    heads ++ tails
 
-mutual
-
-  def encode (type : ABIType) (value : ABIValue) : Except Error ByteArray :=
-    match type, value with
-    | .uint s, .uint v =>
+/-- The ABIVisitor instance for encoding. -/
+instance : ABIVisitor EncoderEntry where
+  onUint s := (false, λ v => match v with
+    | .uint v' =>
       let b := s.len * 8
-      if v ≥ 2 ^ b then Except.error (.uintExceeds b v)
-      else Except.ok (uint256ToBytes v)
-    | .int s, .int v =>
+      if v' < 2 ^ b then .ok (uint256ToBytes v')
+      else .error (.uintExceeds b v')
+    | _ => .error .typeValueMismatch)
+
+  onInt s := (false, λ v => match v with
+    | .int v' =>
       let b := s.len * 8
       let half := 2 ^ (b - 1)
-      if v < -(half : Int) || v ≥ (half : Int) then
-        Except.error (.intOutOfRange b v)
-      else Except.ok (intToBytes v s.len)
-    | .bool, .bool v => Except.ok (uint256ToBytes (if v then 1 else 0))
-    | .bytesM s, .bytes v =>
-      if v.size ≠ s.len then Except.error (.fixedBytesSize s.len v.size)
-      else Except.ok (padRight v 32)
-    | .address, .address v =>
-      if v.size ≠ 20 then Except.error (.addressSize v.size)
-      else Except.ok (padLeft v 32)
-    | .bytes, .bytes v =>
-      if _ : v.size < 2 ^ 256 then
-        Except.ok (uint256ToBytes v.size ++ padRight v (roundUp32 v.size))
+      if v' < -(half : Int) || v' ≥ (half : Int) then
+        .error (.intOutOfRange b v')
+      else .ok (intToBytes v' s.len)
+    | _ => .error .typeValueMismatch)
+
+  onBool := (false, λ v => match v with
+    | .bool v' => .ok (uint256ToBytes (if v' then 1 else 0))
+    | _ => .error .typeValueMismatch)
+
+  onAddress := (false, λ v => match v with
+    | .address v' =>
+      if v'.size = 20 then .ok (padLeft v' 32)
+      else .error (.addressSize v'.size)
+    | _ => .error .typeValueMismatch)
+
+  onFixedBytes s := (false, λ v => match v with
+    | .bytes v' =>
+      if v'.size = s.len then .ok (padRight v' 32)
+      else .error (.fixedBytesSize s.len v'.size)
+    | _ => .error .typeValueMismatch)
+
+  onBytes := (true, λ v => match v with
+    | .bytes v' =>
+      if v'.size < 2 ^ 256 then
+        .ok (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size))
+      else .error (.dataTooLong v'.size)
+    | _ => .error .typeValueMismatch)
+
+  onString := (true, λ v => match v with
+    | .string v' =>
+      let utf8 := v'.toUTF8
+      if utf8.size < 2 ^ 256 then
+        .ok (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size))
+      else .error (.dataTooLong utf8.size)
+    | _ => .error .typeValueMismatch)
+
+  onArray {e} (entry : EncoderEntry e) : EncoderEntry (.array e) :=
+    let (elemDyn, elemEnc) := entry
+    (true, λ v => match v with
+    | .array vals =>
+      if _ : vals.length < 2 ^ 256 then
+        let encoded : Except Error (List ByteArray) :=
+          vals.foldr (λ v acc => (elemEnc v) >>= λ encd => acc >>= λ rest => .ok (encd :: rest)) (.ok [])
+        encoded >>= λ encd =>
+        let packed := arrayPack elemDyn encd
+        .ok (uint256ToBytes vals.length ++ packed)
+      else .error (.arrayLengthOverflow vals.length)
+    | _ => .error .typeValueMismatch)
+
+  onFixedArray n {e} (entry : EncoderEntry e) : EncoderEntry (.fixedArray n e) :=
+    let (elemDyn, elemEnc) := entry
+    (elemDyn, λ v => match v with
+    | .array vals =>
+      if vals.length ≠ n then .error (.arrayElemCount n vals.length)
       else
-        Except.error (.dataTooLong v.size)
-    | .string, .string v =>
-      let utf8 := v.toUTF8
-      if _ : utf8.size < 2 ^ 256 then
-        Except.ok (uint256ToBytes utf8.size ++ padRight utf8 (roundUp32 utf8.size))
-      else
-        Except.error (.dataTooLong utf8.size)
-    | .array elemType sz, .array vals =>
-      if !isDynamic elemType then
-        match sz with
-        | some n =>
-          if vals.length ≠ n then
-            Except.error (.arrayElemCount n vals.length)
-          else
-            match encodeFixedArrayStatic elemType vals ByteArray.empty with
-            | Except.ok enc =>
-              Except.ok enc
-            | Except.error e => Except.error e
-        | none =>
-          if _ : vals.length < 2 ^ 256 then
-            match encodeFixedArrayStatic elemType vals ByteArray.empty with
-            | Except.ok enc =>
-              Except.ok (uint256ToBytes vals.length ++ enc)
-            | Except.error e => Except.error e
-          else
-            Except.error (.arrayLengthOverflow vals.length)
-      else
-        match encodeFixedArrayDynamic elemType vals with
-        | Except.ok enc =>
-          match sz with
-          | none =>
-            if _ : vals.length < 2 ^ 256 then
-              Except.ok (uint256ToBytes vals.length ++ enc)
-            else
-              Except.error (.arrayLengthOverflow vals.length)
-          | some _ => Except.ok enc
-        | Except.error e => Except.error e
-    | _, _ => Except.error .typeValueMismatch
-    termination_by (abiSize type, 0, 0)
-    decreasing_by
-      all_goals
-        first
-        | apply Prod.Lex.left; exact abiSize_lt_array elemType sz
-        | apply Prod.Lex.left; simp [abiSize]
+        let encoded : Except Error (List ByteArray) :=
+          vals.foldr (λ v acc => (elemEnc v) >>= λ encd => acc >>= λ rest => .ok (encd :: rest)) (.ok [])
+        encoded >>= λ encd =>
+        .ok (arrayPack elemDyn encd)
+    | _ => .error .typeValueMismatch)
 
-  def encodeFixedArrayStatic (elemType : ABIType) (vals : List ABIValue) (acc : ByteArray) : Except Error ByteArray :=
-    match vals with
-    | [] => Except.ok acc
-    | v :: rest =>
-      match encode elemType v with
-      | Except.ok enc => encodeFixedArrayStatic elemType rest (acc ++ enc)
-      | Except.error e => Except.error e
-    termination_by (abiSize elemType, 1, vals.length)
-    decreasing_by
-      · apply Prod.Lex.right (a := abiSize elemType)
-        apply Prod.Lex.left; omega
-      · apply Prod.Lex.right (a := abiSize elemType)
-        apply Prod.Lex.right (a := 1)
-        simp
+  onTuple {ts} (all : All EncoderEntry ts) : EncoderEntry (.tuple ts) :=
+    let headSizes := ts.map headSize
+    let dynamics := ts.map isDynamic
+    let hasDynamic := dynamics.any id
+    (hasDynamic, λ v => match v with
+    | .tuple vs =>
+      let rec go (types' : List ABIType) (all' : All EncoderEntry types') (vals : List ABIValue)
+          : Except Error (List (Bool × ByteArray)) :=
+        match types', all', vals with
+        | [], All.nil, [] => .ok []
+        | (_ :: ts''), All.cons (dyn, enc) rest, v :: vs' =>
+          (enc v) >>= λ bytes =>
+          go ts'' rest vs' >>= λ tail => .ok ((dyn, bytes) :: tail)
+        | _, _, _ => .error .typeValueMismatch
+      go ts all vs >>= λ encd =>
+      .ok (tuplePack headSizes dynamics encd)
+    | _ => .error .typeValueMismatch)
 
-  def encodeFixedArrayDynamic (elemType : ABIType) (vals : List ABIValue) : Except Error ByteArray :=
-    let headAreaSize := if vals.length = 0 then 32 else vals.length * 32
-    match encodeFixedArrayCollect elemType vals [] with
-    | Except.ok tails =>
-      let init : Nat × ByteArray × ByteArray := (headAreaSize, ByteArray.empty, ByteArray.empty)
-      let (_, heads, tailsBytes) :=
-        List.foldl (fun (acc : Nat × ByteArray × ByteArray) (i_tail : Nat × ByteArray) =>
-          let (offset, heads, accTails) := acc
-          let (_, tailEnc) := i_tail
-          (offset + roundUp32 tailEnc.size, heads ++ uint256ToBytes offset, accTails ++ tailEnc)
-        ) init (List.zip (List.range vals.length) tails)
-      Except.ok (heads ++ tailsBytes)
-    | Except.error e => Except.error e
-    termination_by (abiSize elemType, 2, vals.length)
-    decreasing_by
-      · apply Prod.Lex.right (a := abiSize elemType)
-        apply Prod.Lex.left; omega
+/-- Encode any ABI value given its type. -/
+def encode (t : ABIType) (v : ABIValue) : Except Error ByteArray :=
+  (foldABIType EncoderEntry t).2 v
 
-  def encodeFixedArrayCollect (elemType : ABIType) (vals : List ABIValue) (acc : List ByteArray) : Except Error (List ByteArray) :=
-    match vals with
-    | [] => Except.ok acc.reverse
-    | v :: rest =>
-      match encode elemType v with
-      | Except.ok enc => encodeFixedArrayCollect elemType rest (enc :: acc)
-      | Except.error e => Except.error e
-    termination_by (abiSize elemType, 1, vals.length)
-    decreasing_by
-      · apply Prod.Lex.right (a := abiSize elemType)
-        apply Prod.Lex.left; omega
-      · apply Prod.Lex.right (a := abiSize elemType)
-        apply Prod.Lex.right (a := 1)
-        simp
-
-  def encodeTupleElems (items : List (ABIType × ABIValue)) : Except Error ByteArray :=
-    let hasDynamic := items.any (fun (t, _) => isDynamic t)
-    if !hasDynamic then encodeTupleElemsStatic items ByteArray.empty
-    else encodeTupleElemsDynamic items
-
-  def encodeTupleElemsStatic (xs : List (ABIType × ABIValue)) (acc : ByteArray) : Except Error ByteArray :=
-    match xs with
-    | [] => Except.ok acc
-    | (t, v) :: rest =>
-      match encode t v with
-      | Except.ok enc => encodeTupleElemsStatic rest (acc ++ enc)
-      | Except.error e => Except.error e
-    termination_by (List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst xs), 1, xs.length)
-    decreasing_by
-      all_goals
-        first
-        | apply Prod.Lex.left; exact list_foldl_lt_cons t rest
-        | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (t :: List.map Prod.fst rest))
-          apply Prod.Lex.left; omega
-  def encodeTupleElemsDynamic (items : List (ABIType × ABIValue)) : Except Error ByteArray :=
-    let headAreaSize := items.foldl (fun acc (t, _) => acc + headSize t) 0
-    match encodeTupleElemsCollect items [] with
-    | Except.ok processed =>
-      let init : Nat × ByteArray × ByteArray := (headAreaSize, ByteArray.empty, ByteArray.empty)
-      let (_, heads, tails) :=
-        List.foldl (fun (acc : Nat × ByteArray × ByteArray) (elem : Bool × ByteArray) =>
-          let (offset, heads, accTails) := acc
-          let (isDyn, enc) := elem
-          if isDyn then (offset + roundUp32 enc.size, heads ++ uint256ToBytes offset, accTails ++ enc)
-          else (offset, heads ++ enc, accTails)
-        ) init processed
-      Except.ok (heads ++ tails)
-    | Except.error e => Except.error e
-
-  def encodeTupleElemsCollect (xs : List (ABIType × ABIValue)) (acc : List (Bool × ByteArray)) : Except Error (List (Bool × ByteArray)) :=
-    match xs with
-    | [] => Except.ok acc.reverse
-    | (t, v) :: rest =>
-      match encode t v with
-      | Except.ok enc => encodeTupleElemsCollect rest ((isDynamic t, enc) :: acc)
-      | Except.error e => Except.error e
-    termination_by (List.foldl (fun acc t => acc + abiSize t) 0 (List.map Prod.fst xs), 1, xs.length)
-    decreasing_by
-      all_goals
-        first
-        | apply Prod.Lex.left; exact list_foldl_lt_cons t rest
-        | apply Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 (t :: List.map Prod.fst rest))
-          apply Prod.Lex.left; omega
-end
-
-
+/-- Encode function arguments as a tuple. -/
 def encodeArgs (types : List ABIType) (values : List ABIValue) : Except Error ByteArray :=
   if types.length ≠ values.length then
-    Except.error (.argCountMismatch types.length values.length)
+    .error (.argCountMismatch types.length values.length)
   else
-    encodeTupleElems (List.zip types values)
+    encode (.tuple types) (.tuple values)
 
 end EvmAbi.ABI.Encode

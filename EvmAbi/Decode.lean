@@ -1,5 +1,5 @@
 /-
-# ABI Decoding
+# ABI Decoding via ABIVisitor
 -/
 
 import EvmAbi.ABI
@@ -8,221 +8,176 @@ open EvmAbi.ABI
 
 namespace EvmAbi.ABI.Decode
 
+/-- DecoderEntry t = decoder function for type t. -/
+def DecoderEntry (_t : ABIType) : Type := ByteArray → Nat → Except Error (ABIValue × Nat)
+
+/-- Decode dynamic bytes. -/
 def decodeDynamicBytes (data : ByteArray) (offset : Nat) : Except Error (ABIValue × Nat) :=
-  if offset + 32 > data.size then
-    Except.error (.dataTooShortForLen offset)
+  if offset + 32 > data.size then .error (.dataTooShortForLen offset)
   else
     let len := bytesToNat (data.extract offset (offset + 32))
     let dataStart := offset + 32
-    if dataStart + len > data.size then
-      Except.error (.dataTooShortForBytes dataStart len)
+    if dataStart + len > data.size then .error (.dataTooShortForBytes dataStart len)
     else
       let val := data.extract dataStart (dataStart + len)
       let consumed := 32 + roundUp32 len
-      Except.ok (.bytes val, offset + consumed)
+      .ok (.bytes val, offset + consumed)
 
+/-- Decode dynamic string. -/
 def decodeDynamicString (data : ByteArray) (offset : Nat) : Except Error (ABIValue × Nat) :=
-  (decodeDynamicBytes data offset).map (fun (v, off) =>
+  (decodeDynamicBytes data offset).map (λ (v, off) =>
     match v with
     | .bytes b => (.string (String.fromUTF8! b), off)
     | v => (v, off))
 
+/-- Decode static array elements: sequential decode at advancing offsets.
+    Inner loop with explicit termination on (n - i). -/
+def decodeStaticElemsGo (dec : ByteArray → Nat → Except Error (ABIValue × Nat))
+    (n : Nat) (i : Nat) (pos : Nat) (data : ByteArray) (acc : List ABIValue)
+    : Except Error (List ABIValue × Nat) :=
+  if _ : i < n then
+    dec data pos >>= λ (v, newPos) =>
+    decodeStaticElemsGo dec n (i + 1) newPos data (v :: acc)
+  else .ok (acc.reverse, pos)
+termination_by n - i
+decreasing_by omega
 
-mutual
+def decodeStaticElems (dec : ByteArray → Nat → Except Error (ABIValue × Nat))
+    (n : Nat) (data : ByteArray) (off : Nat) : Except Error (List ABIValue × Nat) :=
+  decodeStaticElemsGo dec n 0 off data []
 
-  def decode (type : ABIType) (data : ByteArray) (offset : Nat) : Except Error (ABIValue × Nat) :=
-    match type with
-    | .uint s =>
-      let b := s.len * 8
-      if offset + 32 > data.size then
-        Except.error (.dataTooShort (s!"uint{b}") offset)
-      else
-        let rawVal := bytesToNat (data.extract offset (offset + 32))
-        if rawVal ≥ 2 ^ b then
-          Except.error (.uintDecodedExceeds b rawVal)
-        else Except.ok (.uint rawVal, offset + 32)
-    | .int s =>
-      let b := s.len * 8
-      if offset + 32 > data.size then
-        Except.error (.dataTooShort (s!"int{b}") offset)
-      else
-        let rawVal := bytesToNat (data.extract offset (offset + 32))
-        let masked := rawVal % (2 ^ b)
-        let half := 2 ^ (b - 1)
-        if masked < half then Except.ok (.int (Int.ofNat masked), offset + 32)
-        else Except.ok (.int (-(Int.ofNat (2 ^ b - masked))), offset + 32)
-    | .bool =>
-      if offset + 32 > data.size then
-        Except.error (.dataTooShort "bool" offset)
-      else
-        let rawVal := bytesToNat (data.extract offset (offset + 32))
-        if rawVal = 0 then Except.ok (.bool false, offset + 32)
-        else if rawVal = 1 then Except.ok (.bool true, offset + 32)
-        else Except.error (.boolInvalidValue rawVal)
-    | .bytesM s =>
-      if offset + 32 > data.size then
-        Except.error (.dataTooShort (s!"bytes{s.len}") offset)
-      else
-        let val := data.extract offset (offset + s.len)
-        Except.ok (.bytes val, offset + 32)
-    | .address =>
-      if offset + 32 > data.size then
-        Except.error (.dataTooShort "address" offset)
-      else
-        let val := data.extract (offset + 12) (offset + 32)
-        Except.ok (.address val, offset + 32)
-    | .bytes => decodeDynamicBytes data offset
-    | .string => decodeDynamicString data offset
-    | .array elemType _optSize =>
-      match _optSize with
-      | some size =>
-        match decodeFixedArray elemType size data offset with
-        | Except.ok (vals, endOff) =>
-          Except.ok (.array vals, endOff)
-        | Except.error e => Except.error e
-      | none => decodeDynamicArray elemType data offset
-    | .tuple elems =>
-      match decodeTupleElems elems data offset with
-      | Except.ok (vals, endOff) => Except.ok (.tuple vals, endOff)
-      | Except.error e => Except.error e
-    termination_by (abiSize type, 0, 0)
-    decreasing_by
-      · apply Prod.Lex.left; apply abiSize_lt_array
-      · apply Prod.Lex.left; apply abiSize_lt_array
-      · have h_lt : List.foldl (fun acc t => acc + abiSize t) 0 elems < abiSize (.tuple elems) := by
-          simp [abiSize]
-        apply Prod.Lex.left; exact h_lt
-
-  /-- Iterate decoding static array elements: call decode at each offset, collect values. -/
-  def decodeFixedArray_goStatic (elemType : ABIType) (n : Nat) (data : ByteArray)
-      (i : Nat) (off : Nat) (acc : List ABIValue) : Except Error (List ABIValue × Nat) :=
-    if i ≥ n then Except.ok (acc.reverse, off)
+/-- Decode dynamic array elements: read head pointers, decode from tails.
+    Inner loop with explicit termination on (n - i). -/
+def decodeDynamicElemsGo (dec : ByteArray → Nat → Except Error (ABIValue × Nat))
+    (n : Nat) (i : Nat) (off : Nat) (data : ByteArray) (vals : List ABIValue) (maxEnd : Nat)
+    : Except Error (List ABIValue × Nat) :=
+  if _ : i < n then
+    let headOff := off + i * 32
+    if headOff + 32 > data.size then .error (.dataTooShortForHead headOff)
     else
-      match decode elemType data off with
-      | Except.ok (v, newOff) => decodeFixedArray_goStatic elemType n data (i + 1) newOff (v :: acc)
-      | Except.error e => Except.error e
-    termination_by (abiSize elemType, 1, n - i)
-    decreasing_by
-      · apply Prod.Lex.right (a := abiSize elemType)
-        apply Prod.Lex.left; omega
-      · apply Prod.Lex.right (a := abiSize elemType)
-        apply Prod.Lex.right (a := 1); omega
+      let rawOffset := bytesToNat (data.extract headOff (headOff + 32))
+      let tailOff := off + rawOffset
+      dec data tailOff >>= λ (v, newOff) =>
+      decodeDynamicElemsGo dec n (i + 1) off data (v :: vals) (max newOff maxEnd)
+  else .ok (vals.reverse, maxEnd)
+termination_by n - i
+decreasing_by omega
 
-  /-- Iterate decoding dynamic array elements: read head pointers, decode from tails. -/
-  def decodeFixedArray_goDynamic (elemType : ABIType) (n : Nat) (data : ByteArray) (offset : Nat)
-      (i : Nat) (vals : List ABIValue) (maxEnd : Nat) : Except Error (List ABIValue × Nat) :=
-    if i ≥ n then Except.ok (vals.reverse, maxEnd)
+def decodeDynamicElems (dec : ByteArray → Nat → Except Error (ABIValue × Nat))
+    (n : Nat) (data : ByteArray) (off : Nat) : Except Error (List ABIValue × Nat) :=
+  decodeDynamicElemsGo dec n 0 off data [] (off + n * 32)
+
+/-- Decode array elements, dispatching on dynamic/static. -/
+def decodeArrayElems (dec : ByteArray → Nat → Except Error (ABIValue × Nat))
+    (isDyn : Bool) (n : Nat) (data : ByteArray) (off : Nat) : Except Error (List ABIValue × Nat) :=
+  if isDyn then decodeDynamicElems dec n data off
+  else decodeStaticElems dec n data off
+
+/-- Decode all-static tuple: sequential decode. -/
+def decodeTupleStatic (all : All DecoderEntry ts') (data : ByteArray) (off : Nat) (acc : List ABIValue)
+    : Except Error (List ABIValue × Nat) :=
+  match all with
+  | All.nil => .ok (acc.reverse, off)
+  | All.cons dec' rest =>
+    dec' data off >>= λ (v, newOff) =>
+    decodeTupleStatic rest data newOff (v :: acc)
+
+/-- Decode mixed dynamic/static tuple: read heads, resolve tails. -/
+def decodeTupleDynamic (all : All DecoderEntry ts') (fullTs : List ABIType) (ts : List ABIType) (data : ByteArray)
+    (offset : Nat) (i : Nat) (acc : List ABIValue) (maxEnd : Nat)
+    : Except Error (List ABIValue × Nat) :=
+  match all, ts with
+  | All.nil, [] => .ok (acc.reverse, maxEnd)
+  | All.cons dec' rest, (t :: ts'') =>
+    let headOff := offset + (fullTs.take i).foldl (λ acc t => acc + headSize t) 0
+    if headOff + 32 > data.size then .error (.dataTooShortForHead headOff)
     else
-      let headOff := offset + i * 32
-      if headOff + 32 > data.size then
-        Except.error (.dataTooShortForHead headOff)
-      else
+      if isDynamic t then
         let rawOffset := bytesToNat (data.extract headOff (headOff + 32))
         let tailOff := offset + rawOffset
-        match decode elemType data tailOff with
-        | Except.ok (v, newOff) => decodeFixedArray_goDynamic elemType n data offset (i + 1) (v :: vals) (max newOff maxEnd)
-        | Except.error e => Except.error e
-    termination_by (abiSize elemType, 1, n - i)
-    decreasing_by
-      · apply Prod.Lex.right (a := abiSize elemType)
-        apply Prod.Lex.left; omega
-      · apply Prod.Lex.right (a := abiSize elemType)
-        apply Prod.Lex.right (a := 1); omega
+        dec' data tailOff >>= λ (v, newOff) =>
+        decodeTupleDynamic rest fullTs ts'' data offset (i + 1) (v :: acc) (max maxEnd newOff)
+      else
+        dec' data headOff >>= λ (v, _) =>
+        decodeTupleDynamic rest fullTs ts'' data offset (i + 1) (v :: acc) maxEnd
+  | _, _ => .error .typeValueMismatch
 
-  def decodeFixedArray (elemType : ABIType) (n : Nat) (data : ByteArray) (offset : Nat)
-      : Except Error (List ABIValue × Nat) :=
-    if !isDynamic elemType then
-      decodeFixedArray_goStatic elemType n data 0 offset []
+/-- The ABIVisitor instance for decoding. -/
+instance : ABIVisitor DecoderEntry where
+  onUint s := λ data offset =>
+    if offset + 32 > data.size then .error (.dataTooShort "uint" offset)
     else
-      let headAreaSize := n * 32
-      decodeFixedArray_goDynamic elemType n data offset 0 [] (offset + headAreaSize)
-    termination_by (abiSize elemType, 2, n)
+      let rawVal := bytesToNat (data.extract offset (offset + 32))
+      let b := s.len * 8
+      if rawVal ≥ 2 ^ b then .error (.uintDecodedExceeds b rawVal)
+      else .ok (.uint rawVal, offset + 32)
 
-  def decodeDynamicArray (elemType : ABIType) (data : ByteArray) (offset : Nat)
-      : Except Error (ABIValue × Nat) :=
-    if offset + 32 > data.size then
-      Except.error (.dataTooShortForArrayLen offset)
+  onInt s := λ data offset =>
+    if offset + 32 > data.size then .error (.dataTooShort "int" offset)
+    else
+      let rawVal := bytesToNat (data.extract offset (offset + 32))
+      let b := s.len * 8
+      let masked := rawVal % (2 ^ b)
+      let half := 2 ^ (b - 1)
+      if masked < half then .ok (.int (Int.ofNat masked), offset + 32)
+      else .ok (.int (-(Int.ofNat (2 ^ b - masked))), offset + 32)
+
+  onBool := λ data offset =>
+    if offset + 32 > data.size then .error (.dataTooShort "bool" offset)
+    else
+      let rawVal := bytesToNat (data.extract offset (offset + 32))
+      if rawVal = 0 then .ok (.bool false, offset + 32)
+      else if rawVal = 1 then .ok (.bool true, offset + 32)
+      else .error (.boolInvalidValue rawVal)
+
+  onAddress := λ data offset =>
+    if offset + 32 > data.size then .error (.dataTooShort "address" offset)
+    else
+      let val := data.extract (offset + 12) (offset + 32)
+      .ok (.address val, offset + 32)
+
+  onFixedBytes s := λ data offset =>
+    if offset + 32 > data.size then .error (.dataTooShort "bytes" offset)
+    else
+      let val := data.extract offset (offset + s.len)
+      .ok (.bytes val, offset + 32)
+
+  onBytes := decodeDynamicBytes
+  onString := decodeDynamicString
+
+  onArray {e} (dec : DecoderEntry e) : DecoderEntry (.array e) :=
+    λ data offset =>
+    if offset + 32 > data.size then .error (.dataTooShortForArrayLen offset)
     else
       let len := bytesToNat (data.extract offset (offset + 32))
       let arrayOffset := offset + 32
-      match decodeFixedArray elemType len data arrayOffset with
-      | Except.ok (vals, endOff) =>
-        Except.ok (.array vals, endOff)
-      | Except.error e => Except.error e
-    termination_by (abiSize elemType, 3, 0)
+      decodeArrayElems dec (isDynamic e) len data arrayOffset >>= λ (vals, endOff) =>
+      .ok (.array vals, endOff)
 
-  /-- Iterate decoding static tuple elements (all non-dynamic): decode at sequential offsets. -/
-  def decodeTupleElems_goStatic (types : List ABIType) (data : ByteArray) (offset : Nat)
-      (ts : List ABIType) (off : Nat) (acc : List ABIValue) : Except Error (List ABIValue × Nat) :=
-    match ts with
-    | [] => Except.ok (acc.reverse, off)
-    | t :: rest =>
-      match decode t data off with
-      | Except.ok (v, newOff) => decodeTupleElems_goStatic types data offset rest newOff (v :: acc)
-      | Except.error e => Except.error e
-    termination_by (List.foldl (fun acc t => acc + abiSize t) 0 ts, 1, ts.length)
-    decreasing_by
-      · let total_fs := List.foldl (fun acc t => acc + abiSize t) 0 (t :: rest)
-        have h_sz_le : abiSize t ≤ total_fs := mem_foldl_le t (t :: rest) (by simp)
-        by_cases h_lt : abiSize t < total_fs
-        · apply Prod.Lex.left; exact h_lt
-        · have h_eq : abiSize t = total_fs := by omega
-          rw [h_eq]
-          apply Prod.Lex.right; apply Prod.Lex.left; omega
-      · apply Prod.Lex.left; exact list_foldl_lt_cons_abi t rest
+  onFixedArray n {e} (dec : DecoderEntry e) : DecoderEntry (.fixedArray n e) :=
+    λ data offset =>
+    decodeArrayElems dec (isDynamic e) n data offset >>= λ (vals, endOff) =>
+    .ok (.array vals, endOff)
 
-  /-- Iterate decoding dynamic tuple elements: read head pointers, decode from tails. -/
-  def decodeTupleElems_goDynamic (types : List ABIType) (data : ByteArray) (offset : Nat)
-      (i : Nat) (vals : List ABIValue) (maxEnd : Nat) : Except Error (List ABIValue × Nat) :=
-    if h : i ≥ types.length then Except.ok (vals.reverse, maxEnd)
+  onTuple {ts} (all : All DecoderEntry ts) : DecoderEntry (.tuple ts) :=
+    λ data offset =>
+    if !(ts.any isDynamic) then
+      decodeTupleStatic all data offset [] >>= λ (vals, _) =>
+      .ok (.tuple vals, offset + ts.foldl (λ acc t => acc + headSize t) 0)
     else
-      let headOff := offset + (types.take i).foldl (fun acc t => acc + headSize t) 0
-      if headOff + 32 > data.size then
-        Except.error (.dataTooShortForHead headOff)
-      else
-        let hi : i < types.length := by omega
-        let t := types.get ⟨i, hi⟩
-        if isDynamic t then
-          let rawOffset := bytesToNat (data.extract headOff (headOff + 32))
-          let tailOff := offset + rawOffset
-          match decode t data tailOff with
-          | Except.ok (v, newOff) => decodeTupleElems_goDynamic types data offset (i + 1) (v :: vals) (max maxEnd newOff)
-          | Except.error e => Except.error e
-        else
-          match decode t data headOff with
-          | Except.ok (v, _) => decodeTupleElems_goDynamic types data offset (i + 1) (v :: vals) maxEnd
-          | Except.error e => Except.error e
-    termination_by (List.foldl (fun acc t => acc + abiSize t) 0 types, 1, types.length - i)
-    decreasing_by
-      all_goals
-        first
-        | let total := List.foldl (fun acc t => acc + abiSize t) 0 types
-          let t := types.get ⟨i, hi⟩
-          have hm : types.get ⟨i, hi⟩ ∈ types :=
-            List.getElem_mem (l := types) (h := hi)
-          have h_sz_le : abiSize t ≤ total := mem_foldl_le t types hm
-          by_cases h_lt : abiSize t < total
-          · apply Prod.Lex.left; exact h_lt
-          · have h_eq : abiSize t = total := by omega
-            rw [h_eq]
-            apply Prod.Lex.right; apply Prod.Lex.left; omega
-        | refine Prod.Lex.right (a := List.foldl (fun acc t => acc + abiSize t) 0 types)
-            (Prod.Lex.right (a := 1) (by omega))
-  def decodeTupleElems (types : List ABIType) (data : ByteArray) (offset : Nat)
-      : Except Error (List ABIValue × Nat) :=
-    let hasDynamic := types.any isDynamic
-    if !hasDynamic then
-      decodeTupleElems_goStatic types data offset types offset []
-    else
-      let totalHeadSize := types.foldl (fun acc t => acc + headSize t) 0
-      decodeTupleElems_goDynamic types data offset 0 [] (offset + totalHeadSize)
-    termination_by (List.foldl (fun acc t => acc + abiSize t) 0 types, 3, types.length)
+      let totalHeadSize := ts.foldl (λ acc t => acc + headSize t) 0
+      decodeTupleDynamic all ts ts data offset 0 [] (offset + totalHeadSize) >>= λ (vals, endOff) =>
+      .ok (.tuple vals, endOff)
 
-end
+/-- Decode any ABI value from bytes. -/
+def decode (t : ABIType) (data : ByteArray) (offset : Nat := 0) : Except Error (ABIValue × Nat) :=
+  foldABIType DecoderEntry t data offset
 
+/-- Decode function arguments from a tuple encoding. -/
 def decodeArgs (types : List ABIType) (data : ByteArray) (offset : Nat := 0) : Except Error (List ABIValue) :=
-  match decodeTupleElems types data offset with
-  | Except.ok (vals, _) => Except.ok vals
-  | Except.error e => Except.error e
+  decode (.tuple types) data offset >>= λ (v, _) =>
+  match v with
+  | .tuple vs => .ok vs
+  | _ => .error .typeValueMismatch
 
 end EvmAbi.ABI.Decode
