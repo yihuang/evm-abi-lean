@@ -177,7 +177,7 @@ theorem sizeOf_tuple_lt_tuple_cons (t : ABIType) (ts : List ABIType) : sizeOf (A
 
 mutual
 
-  def foldABIType (φ : ABIType → Type) [inst : ABIVisitor φ] (t : ABIType) : φ t :=
+  @[simp] def foldABIType (φ : ABIType → Type) [inst : ABIVisitor φ] (t : ABIType) : φ t :=
     match t with
     | .uint s         => inst.onUint s
     | .int s          => inst.onInt s

@@ -103,7 +103,7 @@ def decodeTupleDynamic (all : All DecoderEntry ts') (fullTs : List ABIType) (ts 
   | _, _ => .error .typeValueMismatch
 
 /-- The ABIVisitor instance for decoding. -/
-instance : ABIVisitor DecoderEntry where
+@[simp] instance : ABIVisitor DecoderEntry where
   onUint s := λ data offset =>
     if offset + 32 > data.size then .error (.dataTooShort "uint" offset)
     else

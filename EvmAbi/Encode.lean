@@ -41,7 +41,7 @@ def tuplePack (headSizes : List Nat) (dynamics : List Bool) (encoded : List (Boo
     heads ++ tails
 
 /-- The ABIVisitor instance for encoding. -/
-instance : ABIVisitor EncoderEntry where
+@[simp] instance : ABIVisitor EncoderEntry where
   onUint s := (false, λ v => match v with
     | .uint v' =>
       let b := s.len * 8
