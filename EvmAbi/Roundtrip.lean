@@ -95,7 +95,36 @@ theorem roundtrip_bool (v : ABIValue) (data : ByteArray)
 
 theorem roundtrip_address (v : ABIValue) (data : ByteArray)
     (henc : encode .address v = Except.ok data) : decode .address data 0 = Except.ok (v, data.size) := by
-  sorry
+  match v with
+  | .address v' =>
+    unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
+    by_cases hsize : v'.size ≠ 20
+    · simp [hsize] at henc
+    · have hsize20 : v'.size = 20 := by omega
+      simp [hsize20] at henc
+      have hd : padLeft v' 32 = data := henc
+      subst hd
+      unfold decode; unfold foldABIType; delta instABIVisitorDecoderEntry; dsimp
+      have h_extract : (padLeft v' 32).extract 12 32 = v' := padLeft_extract_address v' hsize20
+      have h_sz : (padLeft v' 32).size = 32 := by
+        unfold padLeft; simp [hsize20, zeros_size]
+      simp [hsize20, h_extract, h_sz]
+  | x =>
+    unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
+    cases x with
+    | address v' =>
+      by_cases hsize : v'.size ≠ 20
+      · simp [hsize] at henc
+      · have hsize20 : v'.size = 20 := by omega
+        simp [hsize20] at henc
+        have hd : padLeft v' 32 = data := henc
+        subst hd
+        unfold decode; unfold foldABIType; delta instABIVisitorDecoderEntry; dsimp
+        have h_extract : (padLeft v' 32).extract 12 32 = v' := padLeft_extract_address v' hsize20
+        have h_sz : (padLeft v' 32).size = 32 := by
+          unfold padLeft; simp [hsize20, zeros_size]
+        simp [hsize20, h_extract, h_sz]
+    | _ => simp at henc
 
 theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray)
     (henc : encode (.int s) (ABIValue.int v') = Except.ok data) : decode (.int s) data 0 = Except.ok (ABIValue.int v', data.size) := by
