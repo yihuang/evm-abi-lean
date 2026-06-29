@@ -11,7 +11,38 @@ set_option autoImplicit false
 structure RoundtripVisitor (t : ABIType) : Type where
   roundtrip : ∀ (v : ABIValue) (data : ByteArray), encode t v = Except.ok data → decode t data 0 = Except.ok (v, data.size)
 
+/-! ## Dynamic bytes/string helpers -/
+
+private lemma dynamicRoundtrip_preamble (b : ByteArray) (hb256 : b.size < 2 ^ 256) :
+    (uint256ToBytes b.size).size = 32 ∧ (padRight b (roundUp32 b.size)).size = roundUp32 b.size ∧
+    b.size ≤ roundUp32 b.size ∧ (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size ∧
+    bytesToNat ((uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 0 32) = b.size ∧
+    (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 32 (32 + b.size) = b := by
+  have ha_sz : (uint256ToBytes b.size).size = 32 := uint256ToBytes_size b.size (natToBytes_size_bound b.size hb256)
+  have h_roundUp_ge : b.size ≤ roundUp32 b.size := by unfold roundUp32; omega
+  have h_pad_sz : (padRight b (roundUp32 b.size)).size = roundUp32 b.size := by
+    unfold padRight; split; omega; simp [zeros_size]; omega
+  have h_size : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size := by simp [ha_sz, h_pad_sz]
+  have h_len : bytesToNat ((uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 0 32) = b.size := by
+    rw [← ha_sz, extract_first_n, bytesToNat_uint256ToBytes b.size]
+  have h_extract_val : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 32 (32 + b.size) = b := roundtrip_bytes_val b hb256
+  exact ⟨ha_sz, h_pad_sz, h_roundUp_ge, h_size, h_len, h_extract_val⟩
+
+private lemma decodeDynamicBytes_roundtrip (v' : ByteArray) (hv256 : v'.size < 2 ^ 256) (data : ByteArray)
+    (hdata : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) :
+    decodeDynamicBytes data 0 = Except.ok (.bytes v', data.size) := by
+  rw [hdata]; rcases dynamicRoundtrip_preamble v' hv256 with ⟨_, _, h_roundUp_ge, h_size, h_len, h_extract_val⟩
+  unfold decodeDynamicBytes; simp [h_size, h_len, h_extract_val, h_roundUp_ge]
+
+private lemma decodeDynamicString_roundtrip (v' : String) (hv256 : v'.toUTF8.size < 2 ^ 256) (data : ByteArray)
+    (hdata : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) :
+    decodeDynamicString data 0 = Except.ok (.string v', data.size) := by
+  rw [decodeDynamicString, decodeDynamicBytes_roundtrip v'.toUTF8 hv256 data hdata]
+  simp [Except.map]; have h : v'.toByteArray = v'.toUTF8 := rfl; rw [h, fromUTF8!_toUTF8 v']
+
 /-! ## Atomic proofs -/
+/- Each theorem uses `match v` to pattern-match. The fallback `x` case
+   derives a contradiction by showing encode must fail for wrong types. -/
 
 theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray)
     (henc : encode (.uint s) v = Except.ok data) : decode (.uint s) data 0 = Except.ok (v, data.size) := by
@@ -126,10 +157,6 @@ theorem roundtrip_address (v : ABIValue) (data : ByteArray)
         simp [hsize20, h_extract, h_sz]
     | _ => simp at henc
 
-theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray)
-    (henc : encode (.int s) (ABIValue.int v') = Except.ok data) : decode (.int s) data 0 = Except.ok (ABIValue.int v', data.size) := by
-  sorry
-
 theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
     (henc : encode (.fixedBytes s) v = Except.ok data) : decode (.fixedBytes s) data 0 = Except.ok (v, data.size) := by
   match v with
@@ -161,11 +188,101 @@ theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
 
 theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
     (henc : encode .bytes v = Except.ok data) : decode .bytes data 0 = Except.ok (v, data.size) := by
-  sorry
+  have h256_eq : (2 : ℕ) ^ 256 = 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by native_decide
+  cases v with
+  | bytes v' =>
+    by_cases hv256 : v'.size < 2 ^ 256
+    · have hval : encode .bytes (ABIValue.bytes v') = Except.ok (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) := by
+        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp; simpa [h256_eq, hv256]
+      have hd : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size) := by
+        injection hval.symm.trans henc; symm; assumption
+      rw [hd]
+      unfold decode; unfold foldABIType; delta instABIVisitorDecoderEntry; dsimp
+      exact decodeDynamicBytes_roundtrip v' hv256 (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) rfl
+    · have hval : encode .bytes (ABIValue.bytes v') = Except.error (.dataTooLong v'.size) := by
+        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+        have h_ge : ¬ v'.size < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
+          rw [← h256_eq]; exact hv256
+        simp [h_ge]
+      rw [hval] at henc; simp at henc
+  | uint n =>
+    have h_wrong : encode .bytes (ABIValue.uint n) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | bool b =>
+    have h_wrong : encode .bytes (ABIValue.bool b) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | address a =>
+    have h_wrong : encode .bytes (ABIValue.address a) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | int i =>
+    have h_wrong : encode .bytes (ABIValue.int i) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | string s =>
+    have h_wrong : encode .bytes (ABIValue.string s) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | array arr =>
+    have h_wrong : encode .bytes (ABIValue.array arr) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | tuple tup =>
+    have h_wrong : encode .bytes (ABIValue.tuple tup) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
 
 theorem roundtrip_string (v : ABIValue) (data : ByteArray)
     (henc : encode .string v = Except.ok data) : decode .string data 0 = Except.ok (v, data.size) := by
-  sorry
+  have h256_eq : (2 : ℕ) ^ 256 = 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by native_decide
+  cases v with
+  | string v' =>
+    by_cases huv256 : v'.toUTF8.size < 2 ^ 256
+    · have hval : encode .string (ABIValue.string v') = Except.ok (uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) := by
+        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp; simpa [h256_eq, huv256]
+      have hd : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size) := by
+        injection hval.symm.trans henc; symm; assumption
+      rw [hd]
+      unfold decode; unfold foldABIType; delta instABIVisitorDecoderEntry; dsimp
+      exact decodeDynamicString_roundtrip v' huv256 (uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) rfl
+    · have hval : encode .string (ABIValue.string v') = Except.error (.dataTooLong v'.toUTF8.size) := by
+        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+        have h_ge : ¬ v'.toUTF8.size < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
+          rw [← h256_eq]; exact huv256
+        have h_ge' : ¬ v'.utf8ByteSize < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
+          simpa using h_ge
+        simp [h_ge']
+      rw [hval] at henc; simp at henc
+  | uint n =>
+    have h_wrong : encode .string (ABIValue.uint n) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | bool b =>
+    have h_wrong : encode .string (ABIValue.bool b) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | address a =>
+    have h_wrong : encode .string (ABIValue.address a) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | int i =>
+    have h_wrong : encode .string (ABIValue.int i) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | bytes b =>
+    have h_wrong : encode .string (ABIValue.bytes b) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | array arr =>
+    have h_wrong : encode .string (ABIValue.array arr) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
+  | tuple tup =>
+    have h_wrong : encode .string (ABIValue.tuple tup) = Except.error .typeValueMismatch := by
+      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+    rw [h_wrong] at henc; simp at henc
 
 /-! ## Int helper lemmas -/
 
@@ -184,43 +301,45 @@ theorem decode_intToBytes (s : ByteSize) (v' : Int)
     decode (.int s) (intToBytes v' s.len) 0 = Except.ok (ABIValue.int v', (intToBytes v' s.len).size) := by
   sorry
 
-/-! ## Dynamic bytes/string helpers -/
-
-private lemma dynamicRoundtrip_preamble (b : ByteArray) (hb256 : b.size < 2 ^ 256) :
-    (uint256ToBytes b.size).size = 32 ∧ (padRight b (roundUp32 b.size)).size = roundUp32 b.size ∧
-    b.size ≤ roundUp32 b.size ∧ (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size ∧
-    bytesToNat ((uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 0 32) = b.size ∧
-    (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 32 (32 + b.size) = b := by
-  have ha_sz : (uint256ToBytes b.size).size = 32 := uint256ToBytes_size b.size (natToBytes_size_bound b.size hb256)
-  have h_roundUp_ge : b.size ≤ roundUp32 b.size := by unfold roundUp32; omega
-  have h_pad_sz : (padRight b (roundUp32 b.size)).size = roundUp32 b.size := by
-    unfold padRight; split; omega; simp [zeros_size]; omega
-  have h_size : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size := by simp [ha_sz, h_pad_sz]
-  have h_len : bytesToNat ((uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 0 32) = b.size := by
-    rw [← ha_sz, extract_first_n, bytesToNat_uint256ToBytes b.size]
-  have h_extract_val : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 32 (32 + b.size) = b := roundtrip_bytes_val b hb256
-  exact ⟨ha_sz, h_pad_sz, h_roundUp_ge, h_size, h_len, h_extract_val⟩
-
-private lemma decodeDynamicBytes_roundtrip (v' : ByteArray) (hv256 : v'.size < 2 ^ 256) (data : ByteArray)
-    (hdata : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) :
-    decodeDynamicBytes data 0 = Except.ok (.bytes v', data.size) := by
-  rw [hdata]; rcases dynamicRoundtrip_preamble v' hv256 with ⟨_, _, h_roundUp_ge, h_size, h_len, h_extract_val⟩
-  unfold decodeDynamicBytes; simp [h_size, h_len, h_extract_val, h_roundUp_ge]
-
-private lemma decodeDynamicString_roundtrip (v' : String) (hv256 : v'.toUTF8.size < 2 ^ 256) (data : ByteArray)
-    (hdata : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) :
-    decodeDynamicString data 0 = Except.ok (.string v', data.size) := by
-  rw [decodeDynamicString, decodeDynamicBytes_roundtrip v'.toUTF8 hv256 data hdata]
-  simp [Except.map]; have h : v'.toByteArray = v'.toUTF8 := rfl; rw [h, fromUTF8!_toUTF8 v']
+theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray)
+    (henc : encode (.int s) (ABIValue.int v') = Except.ok data) : decode (.int s) data 0 = Except.ok (ABIValue.int v', data.size) := by
+  sorry
 
 /-! ## ABIVisitor instance -/
 
 instance : ABIVisitor RoundtripVisitor where
   onUint s := ⟨roundtrip_uint s⟩
   onInt s := ⟨λ v data henc => by
-    match v with
-    | .int v' => exact roundtrip_int s v' data henc
-    | x => sorry⟩
+    cases v with
+    | int v' => exact roundtrip_int s v' data henc
+    | uint n =>
+      have h_wrong : encode (.int s) (ABIValue.uint n) = Except.error .typeValueMismatch := by
+        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      rw [h_wrong] at henc; simp at henc
+    | bool b =>
+      have h_wrong : encode (.int s) (ABIValue.bool b) = Except.error .typeValueMismatch := by
+        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      rw [h_wrong] at henc; simp at henc
+    | address a =>
+      have h_wrong : encode (.int s) (ABIValue.address a) = Except.error .typeValueMismatch := by
+        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      rw [h_wrong] at henc; simp at henc
+    | bytes b =>
+      have h_wrong : encode (.int s) (ABIValue.bytes b) = Except.error .typeValueMismatch := by
+        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      rw [h_wrong] at henc; simp at henc
+    | string s' =>
+      have h_wrong : encode (.int s) (ABIValue.string s') = Except.error .typeValueMismatch := by
+        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      rw [h_wrong] at henc; simp at henc
+    | array arr =>
+      have h_wrong : encode (.int s) (ABIValue.array arr) = Except.error .typeValueMismatch := by
+        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      rw [h_wrong] at henc; simp at henc
+    | tuple tup =>
+      have h_wrong : encode (.int s) (ABIValue.tuple tup) = Except.error .typeValueMismatch := by
+        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      rw [h_wrong] at henc; simp at henc⟩
   onBool := ⟨roundtrip_bool⟩
   onAddress := ⟨roundtrip_address⟩
   onFixedBytes s := ⟨roundtrip_fixedBytes s⟩
