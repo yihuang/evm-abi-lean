@@ -11,6 +11,22 @@ namespace EvmAbi.ABI.Encode
 /-- EncoderEntry t = (isDynamic, encoder function) for type t. -/
 def EncoderEntry (_t : ABIType) : Type := Bool × (ABIValue → Except Error ByteArray)
 
+/- Encode a list of values using an element encoder (explicit recursion for proofs). -/
+def encodeListElems (elemEnc : ABIValue → Except Error ByteArray) : List ABIValue → Except Error (List ByteArray)
+  | [] => Except.ok []
+  | v :: vs => do
+    let enc_v ← elemEnc v
+    let enc_rest ← encodeListElems elemEnc vs
+    Except.ok (enc_v :: enc_rest)
+
+/-- Theorem: encodeListElems equals the foldr version used previously. -/
+theorem encodeListElems_foldr_eq (elemEnc : ABIValue → Except Error ByteArray) (vals : List ABIValue) :
+    encodeListElems elemEnc vals = vals.foldr (λ v acc => (elemEnc v) >>= λ encd => acc >>= λ rest => .ok (encd :: rest)) (.ok []) := by
+  induction vals with
+  | nil => rfl
+  | cons v vs ih =>
+    simp [encodeListElems, ih]
+
 /-- Pack encoded array elements. -/
 def arrayPack (elemDynamic : Bool) (encoded : List ByteArray) : ByteArray :=
   if !elemDynamic then
@@ -39,8 +55,7 @@ def tuplePack (headSizes : List Nat) (dynamics : List Bool) (encoded : List (Boo
         else (offset, heads ++ enc, accTails)
       ) init encoded
     heads ++ tails
-
-/-- The ABIVisitor instance for encoding. -/
+/-! ## The ABIVisitor instance for encoding. -/
 @[simp] instance : ABIVisitor EncoderEntry where
   onUint s := (false, λ v => match v with
     | .uint v' =>
@@ -94,9 +109,7 @@ def tuplePack (headSizes : List Nat) (dynamics : List Bool) (encoded : List (Boo
     (true, λ v => match v with
     | .array vals =>
       if _ : vals.length < 2 ^ 256 then
-        let encoded : Except Error (List ByteArray) :=
-          vals.foldr (λ v acc => (elemEnc v) >>= λ encd => acc >>= λ rest => .ok (encd :: rest)) (.ok [])
-        encoded >>= λ encd =>
+        encodeListElems elemEnc vals >>= λ encd =>
         let packed := arrayPack elemDyn encd
         .ok (uint256ToBytes vals.length ++ packed)
       else .error (.arrayLengthOverflow vals.length)
@@ -108,9 +121,7 @@ def tuplePack (headSizes : List Nat) (dynamics : List Bool) (encoded : List (Boo
     | .array vals =>
       if vals.length ≠ n then .error (.arrayElemCount n vals.length)
       else
-        let encoded : Except Error (List ByteArray) :=
-          vals.foldr (λ v acc => (elemEnc v) >>= λ encd => acc >>= λ rest => .ok (encd :: rest)) (.ok [])
-        encoded >>= λ encd =>
+        encodeListElems elemEnc vals >>= λ encd =>
         .ok (arrayPack elemDyn encd)
     | _ => .error .typeValueMismatch)
 
