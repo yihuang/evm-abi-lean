@@ -1423,3 +1423,144 @@ instance : ABIVisitor RoundtripVisitor where
 theorem roundtrip (t : ABIType) (v : ABIValue) (data : ByteArray)
     (henc : encode t v = Except.ok data) : decode t data 0 = Except.ok (v, data.size) :=
   (foldABIType RoundtripVisitor t).roundtrip v data henc
+
+/-! ## Dynamic-element groundwork (for the well-formedness-conditioned roundtrip)
+
+The dynamic-element roundtrips (dyn array/fixedArray/tuple) are false as stated (see the
+documented `sorry`s in the visitor): an encode can succeed while producing head pointers
+`≥ 2^256`, which `uint256ToBytes` renders as >32-byte heads, corrupting the layout the decoder
+relies on. Under a well-formedness bound (`enc.size < 2^256`, so every offset fits in 32 bytes)
+they hold. The lemmas below are the verified core of that argument — in particular
+`ddeg_concat`, which shows `decodeDynamicElemsGo` recovers the values from the head/tail layout.
+Wiring these into a WF-conditioned visitor (plus an element-alignment `szdvd` fact and the
+`decodeTupleDynamic` analogue) remains; see the `abi-lean-roundtrip-status` note. -/
+
+theorem roundUp32_dvd (n : Nat) : 32 ∣ roundUp32 n := ⟨(n+31)/32, by unfold roundUp32; ring⟩
+
+theorem roundUp32_eq_of_dvd (n : Nat) (h : 32 ∣ n) : roundUp32 n = n := by
+  obtain ⟨k, rfl⟩ := h; unfold roundUp32; rw [show (32*k+31)/32 = k from by omega]; ring
+
+theorem uint256ToBytes_size32 (v : Nat) (hv : v < 2 ^ 256) : (uint256ToBytes v).size = 32 :=
+  uint256ToBytes_size v (natToBytes_size_bound v hv)
+
+/-- The running head-pointer offsets written by `arrayPack` for a dynamic array. -/
+def dynHeadsFrom (off : Nat) : List ByteArray → List ByteArray
+  | [] => []
+  | e :: es => uint256ToBytes off :: dynHeadsFrom (off + roundUp32 e.size) es
+
+theorem dynHeadsFrom_cons (off : Nat) (e : ByteArray) (es : List ByteArray) :
+    dynHeadsFrom off (e :: es) = uint256ToBytes off :: dynHeadsFrom (off + roundUp32 e.size) es := rfl
+
+theorem concat_size_dvd (encd : List ByteArray) (h : ∀ b ∈ encd, 32 ∣ b.size) :
+    32 ∣ (encd.foldl (·++·) ByteArray.empty).size := by
+  induction encd with
+  | nil => simp
+  | cons x xs ih =>
+    rw [ba_foldl_cons, ByteArray.size_append]
+    exact Nat.dvd_add (h x (by simp)) (ih (fun b hb => h b (by simp [hb])))
+
+theorem dynHeadsFrom_size (l : List ByteArray) :
+    ∀ (off : Nat), off + (l.foldl (·++·) ByteArray.empty).size < 2^256 → (∀ b ∈ l, 32 ∣ b.size) →
+    ((dynHeadsFrom off l).foldl (·++·) ByteArray.empty).size = 32 * l.length := by
+  induction l with
+  | nil => intro off _ _; simp [dynHeadsFrom]
+  | cons e es ih =>
+    intro off hb halign
+    rw [dynHeadsFrom_cons, ba_foldl_cons, ByteArray.size_append]
+    have hofflt : off < 2^256 := by rw [ba_foldl_cons, ByteArray.size_append] at hb; omega
+    rw [uint256ToBytes_size32 off hofflt]
+    have hru : roundUp32 e.size = e.size := roundUp32_eq_of_dvd e.size (halign e (by simp))
+    have hb' : (off + e.size) + (es.foldl (·++·) ByteArray.empty).size < 2^256 := by
+      rw [ba_foldl_cons, ByteArray.size_append] at hb; omega
+    rw [hru, ih (off + e.size) hb' (fun b hbm => halign b (by simp [hbm]))]
+    simp [List.length_cons]; ring
+
+/-- Core dynamic-element decode: `decodeDynamicElemsGo` recovers the values, given that the head
+    region (a grid of 32-byte pointers) and the contiguous tail region are present in `data` and
+    all offsets fit in 32 bytes (`curTail + tails.size < 2^256`). -/
+theorem ddeg_concat (e : ABIType) (data : ByteArray)
+    (hrt : ∀ (v : ABIValue) (ev : ByteArray) (o : Nat), ev.size < 2^256 → encode e v = Except.ok ev →
+      data.extract o (o + ev.size) = ev → (foldABIType DecoderEntry e) data o = Except.ok (v, o + ev.size))
+    (hdvd : ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode e v = Except.ok ev → 32 ∣ ev.size) :
+    ∀ (vs : List ABIValue) (encd : List ByteArray) (i n off curTail maxEnd : Nat) (vals : List ABIValue),
+      encodeListElems (encode e) vs = Except.ok encd →
+      n = i + vs.length →
+      maxEnd = off + curTail →
+      curTail + (encd.foldl (·++·) ByteArray.empty).size < 2^256 →
+      (∀ b ∈ encd, 32 ∣ b.size) →
+      off + n * 32 ≤ data.size →
+      data.extract (off + i * 32) (off + i * 32 + 32 * encd.length) = (dynHeadsFrom curTail encd).foldl (·++·) ByteArray.empty →
+      data.extract (off + curTail) (off + curTail + (encd.foldl (·++·) ByteArray.empty).size) = encd.foldl (·++·) ByteArray.empty →
+      decodeDynamicElemsGo (foldABIType DecoderEntry e) n i off data vals maxEnd
+        = Except.ok (vals.reverse ++ vs, off + curTail + (encd.foldl (·++·) ByteArray.empty).size) := by
+  intro vs
+  induction vs with
+  | nil =>
+    intro encd i n off curTail maxEnd vals henc hn hmax _ _ _ _ _
+    simp only [encodeListElems, Except.ok.injEq] at henc; subst henc
+    simp only [List.foldl_nil, ByteArray.size_empty, Nat.add_zero, List.append_nil]
+    unfold decodeDynamicElemsGo
+    have hni : ¬ i < n := by simp only [List.length_nil, Nat.add_zero] at hn; omega
+    rw [dif_neg hni, hmax]
+  | cons v rest ih =>
+    intro encd i n off curTail maxEnd vals henc hn hmax hbound halign hsize hheads htails
+    obtain ⟨ev, er, hev, her, rfl⟩ := encodeListElems_cons_ok e v rest encd henc
+    have hru_ev : roundUp32 ev.size = ev.size := roundUp32_eq_of_dvd ev.size (halign ev (by simp))
+    have hcurTail_lt : curTail < 2^256 := by rw [ba_foldl_cons, ByteArray.size_append] at hbound; omega
+    have hev_lt : ev.size < 2^256 := by rw [ba_foldl_cons, ByteArray.size_append] at hbound; omega
+    have hP32 : (uint256ToBytes curTail).size = 32 := uint256ToBytes_size32 curTail hcurTail_lt
+    have hlen1 : ((ev :: er).length : Nat) = er.length + 1 := by simp
+    have hni : i < n := by simp only [List.length_cons] at hn; omega
+    have hheads_exp : (dynHeadsFrom curTail (ev :: er)).foldl (·++·) ByteArray.empty
+        = uint256ToBytes curTail ++ (dynHeadsFrom (curTail + ev.size) er).foldl (·++·) ByteArray.empty := by
+      rw [dynHeadsFrom_cons, ba_foldl_cons, hru_ev]
+    rw [hlen1] at hheads
+    rw [hheads_exp] at hheads
+    have hheadchunk : data.extract (off + i * 32) (off + i * 32 + 32) = uint256ToBytes curTail := by
+      have e0 : (data.extract (off + i * 32) (off + i * 32 + 32 * (er.length + 1))).extract 0 32
+          = data.extract (off + i * 32) (off + i * 32 + 32) := by
+        rw [ByteArray.extract_extract, Nat.add_zero,
+            show min (off + i * 32 + 32) (off + i * 32 + 32 * (er.length + 1)) = off + i * 32 + 32 from by omega]
+      rw [← e0, hheads, ← hP32]; exact ByteArray.extract_append_eq_left rfl
+    have htails_exp : (ev :: er).foldl (·++·) ByteArray.empty = ev ++ er.foldl (·++·) ByteArray.empty := ba_foldl_cons ev er
+    rw [htails_exp] at htails
+    have htailchunk : data.extract (off + curTail) (off + curTail + ev.size) = ev := by
+      have e0 : (data.extract (off + curTail) (off + curTail + (ev ++ er.foldl (·++·) ByteArray.empty).size)).extract 0 ev.size
+          = data.extract (off + curTail) (off + curTail + ev.size) := by
+        rw [ByteArray.extract_extract, Nat.add_zero,
+            show min (off + curTail + ev.size) (off + curTail + (ev ++ er.foldl (·++·) ByteArray.empty).size) = off + curTail + ev.size from by rw [ByteArray.size_append]; omega]
+      rw [← e0, htails, ByteArray.extract_append_eq_left rfl]
+    have hdec_v : (foldABIType DecoderEntry e) data (off + curTail) = Except.ok (v, off + curTail + ev.size) :=
+      hrt v ev (off + curTail) hev_lt hev htailchunk
+    unfold decodeDynamicElemsGo
+    rw [dif_pos hni]
+    have hheadbound : ¬ (off + i * 32 + 32 > data.size) := by omega
+    rw [if_neg hheadbound]
+    simp only [hheadchunk, bytesToNat_uint256ToBytes]
+    rw [hdec_v]
+    show decodeDynamicElemsGo (foldABIType DecoderEntry e) n (i + 1) off data (v :: vals) (max (off + curTail + ev.size) maxEnd) = _
+    rw [show max (off + curTail + ev.size) maxEnd = off + (curTail + ev.size) from by rw [hmax]; omega]
+    have hbound' : (curTail + ev.size) + (er.foldl (·++·) ByteArray.empty).size < 2^256 := by
+      rw [ba_foldl_cons, ByteArray.size_append] at hbound; omega
+    have hheads' : data.extract (off + (i + 1) * 32) (off + (i + 1) * 32 + 32 * er.length) = (dynHeadsFrom (curTail + ev.size) er).foldl (·++·) ByteArray.empty := by
+      have hYsz : ((dynHeadsFrom (curTail + ev.size) er).foldl (·++·) ByteArray.empty).size = 32 * er.length :=
+        dynHeadsFrom_size er (curTail + ev.size) (by rw [ba_foldl_cons] at hbound; omega) (fun b hb => halign b (by simp [hb]))
+      have e0 : (data.extract (off + i * 32) (off + i * 32 + 32 * (er.length + 1))).extract 32 (32 + 32 * er.length)
+          = data.extract (off + (i + 1) * 32) (off + (i + 1) * 32 + 32 * er.length) := by
+        rw [ByteArray.extract_extract,
+            show min (off + i * 32 + (32 + 32 * er.length)) (off + i * 32 + 32 * (er.length + 1)) = off + (i + 1) * 32 + 32 * er.length from by omega,
+            show off + i * 32 + 32 = off + (i + 1) * 32 from by omega]
+      rw [← e0, hheads]
+      exact ByteArray.extract_append_eq_right hP32.symm (by rw [hP32, hYsz])
+    have htails' : data.extract (off + (curTail + ev.size)) (off + (curTail + ev.size) + (er.foldl (·++·) ByteArray.empty).size) = er.foldl (·++·) ByteArray.empty := by
+      have e0 : (data.extract (off + curTail) (off + curTail + (ev ++ er.foldl (·++·) ByteArray.empty).size)).extract ev.size (ev.size + (er.foldl (·++·) ByteArray.empty).size)
+          = data.extract (off + (curTail + ev.size)) (off + (curTail + ev.size) + (er.foldl (·++·) ByteArray.empty).size) := by
+        rw [ByteArray.extract_extract,
+            show min (off + curTail + (ev.size + (er.foldl (·++·) ByteArray.empty).size)) (off + curTail + (ev ++ er.foldl (·++·) ByteArray.empty).size) = off + (curTail + ev.size) + (er.foldl (·++·) ByteArray.empty).size from by rw [ByteArray.size_append]; omega,
+            show off + curTail + ev.size = off + (curTail + ev.size) from by omega]
+      rw [← e0, htails]; exact ByteArray.extract_append_eq_right rfl rfl
+    rw [ih er (i + 1) n off (curTail + ev.size) (off + (curTail + ev.size)) (v :: vals) her (by simp only [List.length_cons] at hn ⊢; omega) rfl hbound' (fun b hb => halign b (by simp [hb])) hsize hheads' htails']
+    have h1 : (v :: vals).reverse ++ rest = vals.reverse ++ v :: rest := by simp
+    have h2 : off + (curTail + ev.size) + (er.foldl (·++·) ByteArray.empty).size = off + curTail + ((ev :: er).foldl (·++·) ByteArray.empty).size := by
+      rw [ba_foldl_cons, ByteArray.size_append]; omega
+    rw [h1, h2]
