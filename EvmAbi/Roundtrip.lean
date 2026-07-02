@@ -2797,3 +2797,77 @@ theorem szdvd_fixedArray (n : Nat) (e : ABIType)
   | string _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
   | address _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
   | tuple _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+
+/-! ### Concrete end-to-end instance: the dynamic tuple `(bytes, uintN)` -/
+
+/-- A worked dynamic-tuple roundtrip: `(bytes, uintN)` under the WF interface, with every
+    per-field obligation (`hrt`/`hsize`/`hdvd`) discharged from the atomic/bytes field lemmas.
+    Demonstrates `roundtrip_tuple_wf` composing end-to-end on a realistic mixed
+    dynamic+static ABI signature. -/
+theorem roundtrip_tuple_bytes_uint (s : ByteSize) (data : ByteArray)
+    (v : ABIValue) (enc : ByteArray) (off : Nat)
+    (hwf : enc.size < 2^256)
+    (hbd : off + ([ABIType.bytes, ABIType.uint s].foldl (fun a t => a + headSize t) 0) + 32 ≤ data.size)
+    (henc : encode (.tuple [.bytes, .uint s]) v = Except.ok enc)
+    (hdata : data.extract off (off + enc.size) = enc) :
+    decode (.tuple [.bytes, .uint s]) data off = Except.ok (v, off + enc.size) := by
+  refine roundtrip_tuple_wf [.bytes, .uint s] data ?_ ?_ ?_ v enc off hwf hbd henc hdata
+  · intro t ht
+    rcases List.mem_cons.mp ht with rfl | ht
+    · exact fun v ev o _ he hd => roundtrip_off_bytes v ev data o he hd
+    · rcases List.mem_cons.mp ht with rfl | ht
+      · exact fun v ev o _ he hd => roundtrip_off_uint s v ev data o he hd
+      · exact absurd ht (by simp)
+  · intro t ht
+    rcases List.mem_cons.mp ht with rfl | ht
+    · intro hdyn; exact absurd hdyn (by simp [isDynamic])
+    · rcases List.mem_cons.mp ht with rfl | ht
+      · exact fun _ v ev he => size_eq_uint s v ev he
+      · exact absurd ht (by simp)
+  · intro t ht
+    rcases List.mem_cons.mp ht with rfl | ht
+    · exact fun v ev hlt he => szdvd_bytes v ev hlt he
+    · rcases List.mem_cons.mp ht with rfl | ht
+      · exact fun v ev _ he => by rw [size_eq_uint s v ev he]; exact headSize_dvd_32 (.uint s)
+      · exact absurd ht (by simp)
+
+/-! ### ABI function-call level roundtrip: `encodeArgs` then `decodeArgs` -/
+
+/-- The practical capstone: encoding function arguments then decoding them recovers the values.
+    Reduces to the tuple roundtrip (`encodeArgs = encode (.tuple types)`,
+    `decodeArgs = decode (.tuple types) >>= extract`). Carries the necessary WF preconditions
+    (`data.size < 2^256` and the head-area bound the dynamic tuple decoder requires). -/
+theorem roundtrip_args_wf (types : List ABIType) (data : ByteArray) (values : List ABIValue)
+    (hrt : ∀ t ∈ types, ∀ (v : ABIValue) (ev : ByteArray) (o : Nat), ev.size < 2^256 →
+      encode t v = Except.ok ev → data.extract o (o + ev.size) = ev → decode t data o = Except.ok (v, o + ev.size))
+    (hsize : ∀ t ∈ types, isDynamic t = false → ∀ (v : ABIValue) (ev : ByteArray), encode t v = Except.ok ev → ev.size = headSize t)
+    (hdvd : ∀ t ∈ types, ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode t v = Except.ok ev → 32 ∣ ev.size)
+    (hwf : data.size < 2^256)
+    (hbd : (types.foldl (fun a t => a + headSize t) 0) + 32 ≤ data.size)
+    (henc : encodeArgs types values = Except.ok data) :
+    decodeArgs types data 0 = Except.ok values := by
+  unfold encodeArgs at henc
+  split at henc
+  · exact absurd henc (by simp)
+  · have hrt_tuple : decode (.tuple types) data 0 = Except.ok (.tuple values, 0 + data.size) :=
+      roundtrip_tuple_wf types data hrt hsize hdvd (.tuple values) data 0 hwf (by simpa using hbd) henc
+        (by rw [Nat.zero_add, extract_self])
+    unfold decodeArgs
+    rw [hrt_tuple]
+    rfl
+
+/-- Concrete function-call roundtrip for the `(bytes, uintN)` argument list, reusing the
+    worked `(bytes, uintN)` tuple instance. -/
+theorem roundtrip_args_bytes_uint (s : ByteSize) (data : ByteArray) (values : List ABIValue)
+    (hwf : data.size < 2^256)
+    (hbd : ([ABIType.bytes, ABIType.uint s].foldl (fun a t => a + headSize t) 0) + 32 ≤ data.size)
+    (henc : encodeArgs [.bytes, .uint s] values = Except.ok data) :
+    decodeArgs [.bytes, .uint s] data 0 = Except.ok values := by
+  unfold encodeArgs at henc
+  split at henc
+  · exact absurd henc (by simp)
+  · have hrt_tuple := roundtrip_tuple_bytes_uint s data (.tuple values) data 0 hwf (by simpa using hbd) henc
+      (by rw [Nat.zero_add, extract_self])
+    unfold decodeArgs
+    rw [hrt_tuple]
+    rfl
