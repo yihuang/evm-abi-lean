@@ -734,7 +734,7 @@ private theorem roundtrip_off_fixedBytes (s : ByteSize) (v : ABIValue) (enc data
   case bytes ba => exact roundtrip_offset_fixedBytes s ba enc data off henc hdata
   all_goals exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
 
-private theorem roundtrip_off_bytes (v : ABIValue) (enc data : ByteArray) (off : Nat)
+theorem roundtrip_off_bytes (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .bytes v = Except.ok enc)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode .bytes data off = Except.ok (v, off + enc.size) := by
@@ -755,7 +755,7 @@ private theorem roundtrip_off_bytes (v : ABIValue) (enc data : ByteArray) (off :
         simp [h_ge])
   all_goals exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
 
-private theorem roundtrip_off_string (v : ABIValue) (enc data : ByteArray) (off : Nat)
+theorem roundtrip_off_string (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .string v = Except.ok enc)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode .string data off = Except.ok (v, off + enc.size) := by
@@ -1564,3 +1564,470 @@ theorem ddeg_concat (e : ABIType) (data : ByteArray)
     have h2 : off + (curTail + ev.size) + (er.foldl (·++·) ByteArray.empty).size = off + curTail + ((ev :: er).foldl (·++·) ByteArray.empty).size := by
       rw [ba_foldl_cons, ByteArray.size_append]; omega
     rw [h1, h2]
+
+/-! ### arrayPack characterization + size divisibility (dynamic groundwork, cont.) -/
+
+/-- The fold step used by `arrayPack` for a dynamic array (defeq to its destructuring lambda). -/
+abbrev packStep : Nat × ByteArray × ByteArray → ByteArray → Nat × ByteArray × ByteArray :=
+  fun acc enc => (acc.1 + roundUp32 enc.size, acc.2.1 ++ uint256ToBytes acc.1, acc.2.2 ++ enc)
+
+theorem packStep_fold (encd : List ByteArray) (startOff : Nat) (h0 t0 : ByteArray) :
+    encd.foldl packStep (startOff, h0, t0)
+      = (startOff + (encd.map (fun e => roundUp32 e.size)).sum,
+         h0 ++ (dynHeadsFrom startOff encd).foldl (·++·) ByteArray.empty,
+         t0 ++ encd.foldl (·++·) ByteArray.empty) := by
+  induction encd generalizing startOff h0 t0 with
+  | nil => simp [dynHeadsFrom]
+  | cons e es ih =>
+    rw [List.foldl_cons]
+    show es.foldl packStep (startOff + roundUp32 e.size, h0 ++ uint256ToBytes startOff, t0 ++ e) = _
+    rw [ih (startOff + roundUp32 e.size) (h0 ++ uint256ToBytes startOff) (t0 ++ e), dynHeadsFrom_cons,
+        ba_foldl_cons (uint256ToBytes startOff) (dynHeadsFrom (startOff + roundUp32 e.size) es),
+        ba_foldl_cons e es]
+    simp only [List.map_cons, List.sum_cons, ByteArray.append_assoc, Nat.add_assoc]
+
+/-- `arrayPack` for a dynamic array is the head-pointer grid followed by the concatenated tails. -/
+theorem arrayPack_dyn (encd : List ByteArray) :
+    arrayPack true encd
+      = (dynHeadsFrom (if encd.length = 0 then 32 else encd.length * 32) encd).foldl (·++·) ByteArray.empty
+        ++ encd.foldl (·++·) ByteArray.empty := by
+  unfold arrayPack
+  simp only [Bool.not_true, if_false]
+  rw [show (List.foldl packStep (if encd.length = 0 then 32 else encd.length * 32, ByteArray.empty, ByteArray.empty) encd) = _ from packStep_fold encd _ ByteArray.empty ByteArray.empty]
+  simp [ByteArray.empty_append]
+
+theorem uint256ToBytes_size_ge (v : Nat) : 32 ≤ (uint256ToBytes v).size := by
+  unfold uint256ToBytes padLeft; split
+  · omega
+  · rename_i h; simp only [ByteArray.size_append, zeros_size]; omega
+
+theorem dynHeadsFrom_size_ge (l : List ByteArray) : ∀ (off : Nat), 32 * l.length ≤ ((dynHeadsFrom off l).foldl (·++·) ByteArray.empty).size := by
+  induction l with
+  | nil => intro off; simp [dynHeadsFrom]
+  | cons e es ih =>
+    intro off
+    rw [dynHeadsFrom_cons, ba_foldl_cons, ByteArray.size_append]
+    have := uint256ToBytes_size_ge off
+    have := ih (off + roundUp32 e.size)
+    simp only [List.length_cons]; omega
+
+/-- Under the well-formedness bound, a dynamic array's packing is 32-aligned. -/
+theorem arrayPack_size_dvd (elemDyn : Bool) (encd : List ByteArray)
+    (hbound : (arrayPack elemDyn encd).size < 2^256) (halign : ∀ b ∈ encd, 32 ∣ b.size) :
+    32 ∣ (arrayPack elemDyn encd).size := by
+  cases elemDyn with
+  | false =>
+    have : arrayPack false encd = encd.foldl (·++·) ByteArray.empty := by simp [arrayPack]
+    rw [this]; exact concat_size_dvd encd halign
+  | true =>
+    by_cases hemp : encd = []
+    · subst hemp; rw [arrayPack_dyn]; simp [dynHeadsFrom]
+    · have hne0 : encd.length ≠ 0 := fun h => hemp (List.eq_nil_of_length_eq_zero h)
+      rw [arrayPack_dyn] at hbound ⊢
+      rw [ByteArray.size_append] at hbound ⊢
+      rw [show (if encd.length = 0 then 32 else encd.length * 32) = encd.length * 32 from by rw [if_neg hne0]] at hbound ⊢
+      have htails_dvd : 32 ∣ (encd.foldl (·++·) ByteArray.empty).size := concat_size_dvd encd halign
+      have hge : 32 * encd.length ≤ ((dynHeadsFrom (encd.length * 32) encd).foldl (·++·) ByteArray.empty).size := dynHeadsFrom_size_ge encd (encd.length * 32)
+      have hbnd : encd.length * 32 + (encd.foldl (·++·) ByteArray.empty).size < 2^256 := by omega
+      rw [dynHeadsFrom_size encd (encd.length * 32) hbnd halign]
+      exact Nat.dvd_add ⟨encd.length, rfl⟩ htails_dvd
+
+/-! ### WF-conditioned dynamic array roundtrip -/
+
+theorem mem_size_le_concat (encd : List ByteArray) (b : ByteArray) (hb : b ∈ encd) :
+    b.size ≤ (encd.foldl (·++·) ByteArray.empty).size := by
+  induction encd with
+  | nil => simp at hb
+  | cons x xs ih =>
+    rw [ba_foldl_cons, ByteArray.size_append]
+    rcases List.mem_cons.mp hb with h | h
+    · subst h; omega
+    · have := ih h; omega
+
+theorem concat_le_arrayPack (elemDyn : Bool) (encd : List ByteArray) :
+    (encd.foldl (·++·) ByteArray.empty).size ≤ (arrayPack elemDyn encd).size := by
+  cases elemDyn with
+  | false => rw [show arrayPack false encd = encd.foldl (·++·) ByteArray.empty from by simp [arrayPack]]
+  | true => rw [arrayPack_dyn, ByteArray.size_append]; omega
+
+theorem decodeStaticElemsGo_concat_wf (e : ABIType) (data : ByteArray)
+    (dec : ByteArray → Nat → Except Error (ABIValue × Nat))
+    (hdec : ∀ (v : ABIValue) (ev : ByteArray) (off : Nat), ev.size < 2^256 → encode e v = Except.ok ev →
+      data.extract off (off + ev.size) = ev → dec data off = Except.ok (v, off + ev.size)) :
+    ∀ (vs : List ABIValue) (encd : List ByteArray) (i n pos : Nat) (acc : List ABIValue),
+      n = i + vs.length →
+      encodeListElems (encode e) vs = Except.ok encd →
+      (encd.foldl (·++·) ByteArray.empty).size < 2^256 →
+      data.extract pos (pos + (encd.foldl (·++·) ByteArray.empty).size) = encd.foldl (·++·) ByteArray.empty →
+      decodeStaticElemsGo dec n i pos data acc
+        = Except.ok (acc.reverse ++ vs, pos + (encd.foldl (·++·) ByteArray.empty).size) := by
+  intro vs
+  induction vs with
+  | nil =>
+    intro encd i n pos acc hn henc _ _
+    simp only [encodeListElems, Except.ok.injEq] at henc; subst henc
+    simp only [List.foldl_nil, ByteArray.size_empty, Nat.add_zero, List.append_nil]
+    unfold decodeStaticElemsGo
+    have hni : ¬ i < n := by simp only [List.length_nil, Nat.add_zero] at hn; omega
+    simp [hni]
+  | cons v rest ih =>
+    intro encd i n pos acc hn henc hbound hslice
+    obtain ⟨ev, er, hev, her, rfl⟩ := encodeListElems_cons_ok e v rest encd henc
+    rw [ba_foldl_cons] at hslice hbound ⊢
+    have hsz : (ev ++ er.foldl (·++·) ByteArray.empty).size = ev.size + (er.foldl (·++·) ByteArray.empty).size := ByteArray.size_append
+    have hev_lt : ev.size < 2^256 := by rw [hsz] at hbound; omega
+    have hm1 : min (pos + ev.size) (pos + (ev ++ er.foldl (·++·) ByteArray.empty).size) = pos + ev.size := by rw [hsz]; omega
+    have hm2 : min (pos + (ev.size + (er.foldl (·++·) ByteArray.empty).size)) (pos + (ev ++ er.foldl (·++·) ByteArray.empty).size) = pos + ev.size + (er.foldl (·++·) ByteArray.empty).size := by rw [hsz]; omega
+    have hslice_ev : data.extract pos (pos + ev.size) = ev := by
+      have e0 : (data.extract pos (pos + (ev ++ er.foldl (·++·) ByteArray.empty).size)).extract 0 ev.size = data.extract pos (pos + ev.size) := by
+        rw [ByteArray.extract_extract, Nat.add_zero, hm1]
+      rw [← e0, hslice, ByteArray.extract_append_eq_left rfl]
+    have hslice_rest : data.extract (pos + ev.size) (pos + ev.size + (er.foldl (·++·) ByteArray.empty).size) = er.foldl (·++·) ByteArray.empty := by
+      have e0 : (data.extract pos (pos + (ev ++ er.foldl (·++·) ByteArray.empty).size)).extract ev.size (ev.size + (er.foldl (·++·) ByteArray.empty).size) = data.extract (pos + ev.size) (pos + ev.size + (er.foldl (·++·) ByteArray.empty).size) := by
+        rw [ByteArray.extract_extract, hm2]
+      rw [← e0, hslice]; exact ByteArray.extract_append_eq_right rfl rfl
+    unfold decodeStaticElemsGo
+    have hni : i < n := by simp only [List.length_cons] at hn; omega
+    rw [dif_pos hni, hdec v ev pos hev_lt hev hslice_ev]
+    show decodeStaticElemsGo dec n (i + 1) (pos + ev.size) data (v :: acc) = _
+    have hbound' : (er.foldl (·++·) ByteArray.empty).size < 2^256 := by rw [hsz] at hbound; omega
+    rw [ih er (i + 1) n (pos + ev.size) (v :: acc) (by simp only [List.length_cons] at hn ⊢; omega) her hbound' hslice_rest]
+    have h1 : (v :: acc).reverse ++ rest = acc.reverse ++ v :: rest := by simp
+    have h2 : pos + ev.size + (er.foldl (·++·) ByteArray.empty).size = pos + (ev ++ er.foldl (·++·) ByteArray.empty).size := by rw [hsz]; omega
+    rw [h1, h2]
+
+
+theorem roundtrip_array_wf (e : ABIType) (data : ByteArray)
+    (hrt : ∀ (v : ABIValue) (ev : ByteArray) (o : Nat), ev.size < 2^256 → encode e v = Except.ok ev →
+      data.extract o (o + ev.size) = ev → decode e data o = Except.ok (v, o + ev.size))
+    (hdvd : ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode e v = Except.ok ev → 32 ∣ ev.size)
+    (v : ABIValue) (enc : ByteArray) (off : Nat)
+    (hwf : enc.size < 2^256)
+    (henc : encode (.array e) v = Except.ok enc)
+    (hdata : data.extract off (off + enc.size) = enc) :
+    decode (.array e) data off = Except.ok (v, off + enc.size) := by
+  cases v with
+  | array vals =>
+    unfold encode foldABIType at henc
+    delta instABIVisitorEncoderEntry at henc
+    rcases hentry : foldABIType EncoderEntry e with ⟨elemDyn, elemEnc⟩
+    rw [hentry] at henc; dsimp at henc
+    have helem : elemEnc = encode e := by unfold encode; rw [hentry]
+    split at henc
+    · rename_i hlt
+      cases hEL : encodeListElems elemEnc vals with
+      | error x => rw [hEL] at henc; exact absurd (show Except.error x = Except.ok enc from henc) (by simp)
+      | ok encd =>
+        rw [hEL] at henc
+        have hEL' : encodeListElems (encode e) vals = Except.ok encd := by rw [← helem]; exact hEL
+        have hpack : enc = uint256ToBytes vals.length ++ arrayPack elemDyn encd :=
+          (Except.ok.inj (show Except.ok (uint256ToBytes vals.length ++ arrayPack elemDyn encd) = Except.ok enc from henc)).symm
+        have hPsz : (uint256ToBytes vals.length).size = 32 :=
+          uint256ToBytes_size vals.length (natToBytes_size_bound vals.length hlt)
+        set packed := arrayPack elemDyn encd with hpk
+        have hencsz : enc.size = 32 + packed.size := by rw [hpack, ByteArray.size_append, hPsz]
+        have hpk_lt : packed.size < 2^256 := by rw [hencsz] at hwf; omega
+        have hbound_all : off + enc.size ≤ data.size :=
+          not_gt_of_extract_eq data off enc.size (by rw [hdata]) (by rw [hencsz]; omega)
+        have hb32 : ¬ (off + 32 > data.size) := by rw [hencsz] at hbound_all; omega
+        have hm1 : min (off + 32) (off + enc.size) = off + 32 := by rw [hencsz]; omega
+        have hprefix : data.extract off (off + 32) = uint256ToBytes vals.length := by
+          have e0 : (data.extract off (off + enc.size)).extract 0 32 = data.extract off (off + 32) := by
+            rw [ByteArray.extract_extract, Nat.add_zero, hm1]
+          rw [← e0, hdata, hpack, ← hPsz]; exact ByteArray.extract_append_eq_left rfl
+        have hlen : bytesToNat (data.extract off (off + 32)) = vals.length := by
+          rw [hprefix]; exact bytesToNat_uint256ToBytes vals.length
+        have hm2 : min (off + (32 + packed.size)) (off + enc.size) = off + 32 + packed.size := by rw [hencsz]; omega
+        have hsuffix : data.extract (off + 32) (off + 32 + packed.size) = packed := by
+          have e0 : (data.extract off (off + enc.size)).extract 32 (32 + packed.size) = data.extract (off + 32) (off + 32 + packed.size) := by
+            rw [ByteArray.extract_extract, hm2]
+          rw [← e0, hdata, hpack]; exact ByteArray.extract_append_eq_right hPsz.symm (by rw [hPsz])
+        have halign : ∀ b ∈ encd, 32 ∣ b.size := fun b hb => by
+          obtain ⟨w, hw⟩ := encodeListElems_mem e vals encd hEL' b hb
+          have hble : b.size ≤ packed.size := le_trans (mem_size_le_concat encd b hb) (by rw [hpk]; exact concat_le_arrayPack elemDyn encd)
+          exact hdvd w b (by omega) hw
+        unfold decode foldABIType
+        delta instABIVisitorDecoderEntry
+        dsimp
+        rw [if_neg hb32]
+        simp only [hlen]
+        cases hdyn : isDynamic e with
+        | false =>
+          have helemF : elemDyn = false := by
+            have h := enc_fst_eq_isDynamic e; rw [hentry] at h; simp only [] at h; rw [h, hdyn]
+          have hpackc : packed = encd.foldl (·++·) ByteArray.empty := by rw [hpk, helemF]; simp [arrayPack]
+          simp only [decodeArrayElems, decodeStaticElems, Bool.false_eq_true, if_false]
+          have hslice' : data.extract (off + 32) ((off + 32) + (encd.foldl (·++·) ByteArray.empty).size) = encd.foldl (·++·) ByteArray.empty := by
+            rw [← hpackc]; exact hsuffix
+          rw [decodeStaticElemsGo_concat_wf e data (foldABIType DecoderEntry e)
+                (fun w ev o h1 h2 h3 => hrt w ev o h1 h2 h3) vals encd 0 vals.length (off + 32) []
+                (by omega) hEL' (by rw [← hpackc]; exact hpk_lt) hslice']
+          rw [show (off + 32) + (encd.foldl (·++·) ByteArray.empty).size = off + enc.size from by rw [← hpackc, hencsz]; omega]
+          rfl
+        | true =>
+          have helemT : elemDyn = true := by
+            have h := enc_fst_eq_isDynamic e; rw [hentry] at h; simp only [] at h; rw [h, hdyn]
+          simp only [decodeArrayElems, if_true, decodeDynamicElems]
+          by_cases hvemp : vals = []
+          · subst hvemp
+            simp only [encodeListElems, Except.ok.injEq] at hEL'; subst hEL'
+            have hpe : packed = ByteArray.empty := by rw [hpk, helemT, arrayPack_dyn]; simp [dynHeadsFrom]
+            simp only [List.length_nil, Nat.mul_zero, Nat.add_zero]
+            unfold decodeDynamicElemsGo
+            simp only [Nat.lt_irrefl, ↓reduceDIte, List.reverse_nil]
+            rw [show off + enc.size = off + 32 from by rw [hencsz, hpe, ByteArray.size_empty]]
+            rfl
+          · have hlenv : encd.length = vals.length := encodeListElems_length e vals encd hEL'
+            have hne0 : encd.length ≠ 0 := by rw [hlenv]; exact fun h => hvemp (List.eq_nil_of_length_eq_zero h)
+            set heads := (dynHeadsFrom (vals.length * 32) encd).foldl (·++·) ByteArray.empty with hh
+            set tails := encd.foldl (·++·) ByteArray.empty with ht
+            have hpackht : packed = heads ++ tails := by
+              rw [hh, ht, hpk, helemT, arrayPack_dyn, if_neg hne0, hlenv]
+            have hpsz : packed.size = heads.size + tails.size := by rw [hpackht, ByteArray.size_append]
+            have hge : vals.length * 32 ≤ heads.size := by
+              rw [hh]; have := dynHeadsFrom_size_ge encd (vals.length * 32); rw [hlenv] at this; omega
+            have hbnd : vals.length * 32 + tails.size < 2^256 := by omega
+            have hheads_size : heads.size = vals.length * 32 := by
+              rw [hh]; have := dynHeadsFrom_size encd (vals.length * 32) (by rw [← ht]; omega) halign; rw [hlenv] at this; omega
+            have hsuffix' : data.extract (off + 32) (off + 32 + (heads ++ tails).size) = heads ++ tails := by rw [← hpackht]; exact hsuffix
+            have hheads_ex : data.extract (off + 32) (off + 32 + heads.size) = heads := by
+              have e0 : (data.extract (off + 32) (off + 32 + (heads ++ tails).size)).extract 0 heads.size = data.extract (off + 32) (off + 32 + heads.size) := by
+                rw [ByteArray.extract_extract, Nat.add_zero, show min (off + 32 + heads.size) (off + 32 + (heads ++ tails).size) = off + 32 + heads.size from by rw [ByteArray.size_append]; omega]
+              rw [← e0, hsuffix', ByteArray.extract_append_eq_left rfl]
+            have htails_ex : data.extract (off + 32 + heads.size) (off + 32 + heads.size + tails.size) = tails := by
+              have e0 : (data.extract (off + 32) (off + 32 + (heads ++ tails).size)).extract heads.size (heads.size + tails.size) = data.extract (off + 32 + heads.size) (off + 32 + heads.size + tails.size) := by
+                rw [ByteArray.extract_extract, show min (off + 32 + (heads.size + tails.size)) (off + 32 + (heads ++ tails).size) = off + 32 + heads.size + tails.size from by rw [ByteArray.size_append]; omega]
+              rw [← e0, hsuffix']; exact ByteArray.extract_append_eq_right rfl rfl
+            have hheadseq : data.extract (off + 32 + 0 * 32) (off + 32 + 0 * 32 + 32 * encd.length) = (dynHeadsFrom (vals.length * 32) encd).foldl (·++·) ByteArray.empty := by
+              simp only [Nat.zero_mul, Nat.add_zero]
+              rw [show 32 * encd.length = heads.size from by rw [hheads_size, hlenv]; ring, ← hh]; exact hheads_ex
+            have htailseq : data.extract (off + 32 + vals.length * 32) (off + 32 + vals.length * 32 + tails.size) = tails := by
+              rw [← hheads_size]; exact htails_ex
+            rw [ddeg_concat e data hrt hdvd vals encd 0 vals.length (off + 32) (vals.length * 32) (off + 32 + vals.length * 32) []
+                  hEL' (by omega) rfl (by rw [← ht]; omega) halign (by omega) hheadseq htailseq]
+            rw [List.reverse_nil, List.nil_append,
+                show off + 32 + vals.length * 32 + tails.size = off + enc.size from by rw [hencsz, hpsz, hheads_size]; omega]
+            rfl
+
+    · exact absurd (show Except.error (Error.arrayLengthOverflow vals.length) = Except.ok enc from henc) (by simp)
+  | uint _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | int _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | bool _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | bytes _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | string _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | address _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | tuple _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+
+/-! ### Concrete WF roundtrips for the common dynamic-element arrays -/
+
+theorem szdvd_bytes (v : ABIValue) (ev : ByteArray) (_hsz : ev.size < 2^256) (henc : encode .bytes v = Except.ok ev) : 32 ∣ ev.size := by
+  cases v with
+  | bytes v' =>
+    unfold encode foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
+    split at henc
+    · rename_i hlt
+      have hev := Except.ok.inj henc
+      rw [← hev, ByteArray.size_append]
+      have hPsz : (uint256ToBytes v'.size).size = 32 := uint256ToBytes_size v'.size (natToBytes_size_bound v'.size (by assumption))
+      have hpad : (padRight v' (roundUp32 v'.size)).size = roundUp32 v'.size := by
+        unfold padRight; split
+        · have : v'.size ≤ roundUp32 v'.size := by unfold roundUp32; omega
+          omega
+        · simp [zeros_size]; unfold roundUp32; omega
+      rw [hPsz, hpad]; exact Nat.dvd_add (by norm_num) (roundUp32_dvd v'.size)
+    · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
+  | _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+
+theorem szdvd_string (v : ABIValue) (ev : ByteArray) (_hsz : ev.size < 2^256) (henc : encode .string v = Except.ok ev) : 32 ∣ ev.size := by
+  cases v with
+  | string v' =>
+    unfold encode foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
+    split at henc
+    · rename_i hlt
+      have hev := Except.ok.inj henc
+      rw [← hev, ByteArray.size_append]
+      have hPsz : (uint256ToBytes v'.toUTF8.size).size = 32 := uint256ToBytes_size v'.toUTF8.size (natToBytes_size_bound v'.toUTF8.size (by assumption))
+      have hpad : (padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)).size = roundUp32 v'.toUTF8.size := by
+        unfold padRight; split
+        · have : v'.toUTF8.size ≤ roundUp32 v'.toUTF8.size := by unfold roundUp32; omega
+          omega
+        · simp [zeros_size]; unfold roundUp32; omega
+      rw [hPsz, hpad]; exact Nat.dvd_add (by norm_num) (roundUp32_dvd v'.toUTF8.size)
+    · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
+  | _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+
+/-- `bytes[]` roundtrips under the well-formedness bound (`enc.size < 2^256`). -/
+theorem roundtrip_bytes_array_wf (v : ABIValue) (enc data : ByteArray) (off : Nat)
+    (hwf : enc.size < 2^256) (henc : encode (.array .bytes) v = Except.ok enc)
+    (hdata : data.extract off (off + enc.size) = enc) :
+    decode (.array .bytes) data off = Except.ok (v, off + enc.size) :=
+  roundtrip_array_wf .bytes data
+    (fun v ev o _ h2 h3 => roundtrip_off_bytes v ev data o h2 h3) szdvd_bytes v enc off hwf henc hdata
+
+/-- `string[]` roundtrips under the well-formedness bound (`enc.size < 2^256`). -/
+theorem roundtrip_string_array_wf (v : ABIValue) (enc data : ByteArray) (off : Nat)
+    (hwf : enc.size < 2^256) (henc : encode (.array .string) v = Except.ok enc)
+    (hdata : data.extract off (off + enc.size) = enc) :
+    decode (.array .string) data off = Except.ok (v, off + enc.size) :=
+  roundtrip_array_wf .string data
+    (fun v ev o _ h2 h3 => roundtrip_off_string v ev data o h2 h3) szdvd_string v enc off hwf henc hdata
+
+/-! ### WF-conditioned dynamic fixed-array roundtrip -/
+theorem decodeArrayElems_zero (dec : ByteArray → Nat → Except Error (ABIValue × Nat)) (isDyn : Bool) (data : ByteArray) (off : Nat) :
+    decodeArrayElems dec isDyn 0 data off = Except.ok ([], off) := by
+  unfold decodeArrayElems
+  cases isDyn with
+  | false => simp only [Bool.false_eq_true, if_false]; unfold decodeStaticElems decodeStaticElemsGo; simp
+  | true => simp only [if_true]; unfold decodeDynamicElems decodeDynamicElemsGo; simp
+
+theorem roundtrip_fixedArray_wf (n : Nat) (e : ABIType) (data : ByteArray)
+    (hrt : ∀ (v : ABIValue) (ev : ByteArray) (o : Nat), ev.size < 2^256 → encode e v = Except.ok ev →
+      data.extract o (o + ev.size) = ev → decode e data o = Except.ok (v, o + ev.size))
+    (hdvd : ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode e v = Except.ok ev → 32 ∣ ev.size)
+    (v : ABIValue) (enc : ByteArray) (off : Nat)
+    (hwf : enc.size < 2^256)
+    (henc : encode (.fixedArray n e) v = Except.ok enc)
+    (hdata : data.extract off (off + enc.size) = enc) :
+    decode (.fixedArray n e) data off = Except.ok (v, off + enc.size) := by
+  cases v with
+  | array vals =>
+    unfold encode foldABIType at henc
+    delta instABIVisitorEncoderEntry at henc
+    rcases hentry : foldABIType EncoderEntry e with ⟨elemDyn, elemEnc⟩
+    rw [hentry] at henc; dsimp at henc
+    have helem : elemEnc = encode e := by unfold encode; rw [hentry]
+    by_cases hlen : vals.length = n
+    · rw [if_neg (not_not_intro hlen)] at henc
+      cases hEL : encodeListElems elemEnc vals with
+      | error x => rw [hEL] at henc; exact absurd (show Except.error x = Except.ok enc from henc) (by simp)
+      | ok encd =>
+        rw [hEL] at henc
+        have hEL' : encodeListElems (encode e) vals = Except.ok encd := by rw [← helem]; exact hEL
+        have hpack : enc = arrayPack elemDyn encd :=
+          (Except.ok.inj (show Except.ok (arrayPack elemDyn encd) = Except.ok enc from henc)).symm
+        have halign : ∀ b ∈ encd, 32 ∣ b.size := fun b hb => by
+          obtain ⟨w, hw⟩ := encodeListElems_mem e vals encd hEL' b hb
+          have hble : b.size ≤ enc.size := by rw [hpack]; exact le_trans (mem_size_le_concat encd b hb) (concat_le_arrayPack elemDyn encd)
+          exact hdvd w b (by omega) hw
+        unfold decode foldABIType
+        delta instABIVisitorDecoderEntry
+        dsimp
+        cases hdyn : isDynamic e with
+        | false =>
+          have helemF : elemDyn = false := by
+            have h := enc_fst_eq_isDynamic e; rw [hentry] at h; simp only [] at h; rw [h, hdyn]
+          have hpackc : enc = encd.foldl (·++·) ByteArray.empty := by rw [hpack, helemF]; simp [arrayPack]
+          simp only [decodeArrayElems, decodeStaticElems, Bool.false_eq_true, if_false]
+          rw [decodeStaticElemsGo_concat_wf e data (foldABIType DecoderEntry e)
+                (fun w ev o h1 h2 h3 => hrt w ev o h1 h2 h3) vals encd 0 n off []
+                (by omega) hEL' (by rw [← hpackc]; exact hwf) (by rw [← hpackc]; exact hdata)]
+          rw [show off + (encd.foldl (·++·) ByteArray.empty).size = off + enc.size from by rw [← hpackc]]
+          rfl
+        | true =>
+          have helemT : elemDyn = true := by
+            have h := enc_fst_eq_isDynamic e; rw [hentry] at h; simp only [] at h; rw [h, hdyn]
+          by_cases hvemp : vals = []
+          · subst hvemp
+            simp only [encodeListElems, Except.ok.injEq] at hEL'; subst hEL'
+            have hn0 : n = 0 := by simpa using hlen.symm
+            subst hn0
+            have hee : enc.size = 0 := by rw [hpack, helemT, arrayPack_dyn]; simp [dynHeadsFrom]
+            rw [decodeArrayElems_zero, show off + enc.size = off from by omega]
+            rfl
+          · simp only [decodeArrayElems, if_true, decodeDynamicElems]
+            have hlenv : encd.length = vals.length := encodeListElems_length e vals encd hEL'
+            have hne0 : encd.length ≠ 0 := by rw [hlenv]; exact fun h => hvemp (List.eq_nil_of_length_eq_zero h)
+            set heads := (dynHeadsFrom (vals.length * 32) encd).foldl (·++·) ByteArray.empty with hh
+            set tails := encd.foldl (·++·) ByteArray.empty with ht
+            have hpackht : enc = heads ++ tails := by
+              rw [hh, ht, hpack, helemT, arrayPack_dyn, if_neg hne0, hlenv]
+            have hpsz : enc.size = heads.size + tails.size := by rw [hpackht, ByteArray.size_append]
+            have hge : vals.length * 32 ≤ heads.size := by
+              rw [hh]; have := dynHeadsFrom_size_ge encd (vals.length * 32); rw [hlenv] at this; omega
+            have hbnd : vals.length * 32 + tails.size < 2^256 := by omega
+            have hheads_size : heads.size = vals.length * 32 := by
+              rw [hh]; have := dynHeadsFrom_size encd (vals.length * 32) (by rw [← ht]; omega) halign; rw [hlenv] at this; omega
+            have hsuffix' : data.extract off (off + (heads ++ tails).size) = heads ++ tails := by rw [← hpackht]; exact hdata
+            have hheads_ex : data.extract off (off + heads.size) = heads := by
+              have e0 : (data.extract off (off + (heads ++ tails).size)).extract 0 heads.size = data.extract off (off + heads.size) := by
+                rw [ByteArray.extract_extract, Nat.add_zero, show min (off + heads.size) (off + (heads ++ tails).size) = off + heads.size from by rw [ByteArray.size_append]; omega]
+              rw [← e0, hsuffix', ByteArray.extract_append_eq_left rfl]
+            have htails_ex : data.extract (off + heads.size) (off + heads.size + tails.size) = tails := by
+              have e0 : (data.extract off (off + (heads ++ tails).size)).extract heads.size (heads.size + tails.size) = data.extract (off + heads.size) (off + heads.size + tails.size) := by
+                rw [ByteArray.extract_extract, show min (off + (heads.size + tails.size)) (off + (heads ++ tails).size) = off + heads.size + tails.size from by rw [ByteArray.size_append]; omega]
+              rw [← e0, hsuffix']; exact ByteArray.extract_append_eq_right rfl rfl
+            have hheadseq : data.extract (off + 0 * 32) (off + 0 * 32 + 32 * encd.length) = (dynHeadsFrom (vals.length * 32) encd).foldl (·++·) ByteArray.empty := by
+              simp only [Nat.zero_mul, Nat.add_zero]
+              rw [show 32 * encd.length = heads.size from by rw [hheads_size, hlenv]; ring, ← hh]; exact hheads_ex
+            have htailseq : data.extract (off + vals.length * 32) (off + vals.length * 32 + tails.size) = tails := by
+              rw [← hheads_size]; exact htails_ex
+            have hvpos : vals.length ≠ 0 := by rw [← hlenv]; exact hne0
+            have hbound_all : off + enc.size ≤ data.size :=
+              not_gt_of_extract_eq data off enc.size (by rw [hdata]) (by omega)
+            rw [show n = vals.length from hlen.symm]
+            rw [ddeg_concat e data hrt hdvd vals encd 0 vals.length off (vals.length * 32) (off + vals.length * 32) []
+                  hEL' (by omega) rfl (by rw [← ht]; omega) halign (by omega) hheadseq htailseq]
+            rw [List.reverse_nil, List.nil_append,
+                show off + vals.length * 32 + tails.size = off + enc.size from by rw [hpsz, hheads_size]; omega]
+            rfl
+    · rw [if_pos (by simpa using hlen)] at henc
+      exact absurd (show Except.error (Error.arrayElemCount n vals.length) = Except.ok enc from henc) (by simp)
+  | uint _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | int _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | bool _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | bytes _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | string _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | address _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | tuple _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+
+/-! ### General array szdvd + nested composition demo -/
+-- general array szdvd, given element alignment
+theorem szdvd_array (e : ABIType)
+    (hdvd_e : ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode e v = Except.ok ev → 32 ∣ ev.size)
+    (v : ABIValue) (ev : ByteArray) (hsz : ev.size < 2^256) (henc : encode (.array e) v = Except.ok ev) :
+    32 ∣ ev.size := by
+  cases v with
+  | array vals =>
+    unfold encode foldABIType at henc
+    delta instABIVisitorEncoderEntry at henc
+    rcases hentry : foldABIType EncoderEntry e with ⟨elemDyn, elemEnc⟩
+    rw [hentry] at henc; dsimp at henc
+    have helem : elemEnc = encode e := by unfold encode; rw [hentry]
+    split at henc
+    · rename_i hlt
+      cases hEL : encodeListElems elemEnc vals with
+      | error x => rw [hEL] at henc; exact absurd (show Except.error x = Except.ok ev from henc) (by simp)
+      | ok encd =>
+        rw [hEL] at henc
+        have hEL' : encodeListElems (encode e) vals = Except.ok encd := by rw [← helem]; exact hEL
+        have hpack : ev = uint256ToBytes vals.length ++ arrayPack elemDyn encd :=
+          (Except.ok.inj (show Except.ok (uint256ToBytes vals.length ++ arrayPack elemDyn encd) = Except.ok ev from henc)).symm
+        have hPsz : (uint256ToBytes vals.length).size = 32 :=
+          uint256ToBytes_size vals.length (natToBytes_size_bound vals.length hlt)
+        have hencsz : ev.size = 32 + (arrayPack elemDyn encd).size := by rw [hpack, ByteArray.size_append, hPsz]
+        have halign : ∀ b ∈ encd, 32 ∣ b.size := fun b hb => by
+          obtain ⟨w, hw⟩ := encodeListElems_mem e vals encd hEL' b hb
+          have hble : b.size ≤ ev.size := by
+            rw [hpack, ByteArray.size_append]
+            have := le_trans (mem_size_le_concat encd b hb) (concat_le_arrayPack elemDyn encd)
+            omega
+          exact hdvd_e w b (by omega) hw
+        rw [hencsz]
+        exact Nat.dvd_add (by norm_num) (arrayPack_size_dvd elemDyn encd (by omega) halign)
+    · exact absurd (show Except.error (Error.arrayLengthOverflow vals.length) = Except.ok ev from henc) (by simp)
+  | uint _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | int _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | bool _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | bytes _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | string _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | address _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | tuple _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+
+/-- Nested `bytes[][]` roundtrips under the bound — demonstrates the WF results compose. -/
+theorem roundtrip_bytes_array_array_wf (v : ABIValue) (enc data : ByteArray) (off : Nat)
+    (hwf : enc.size < 2^256) (henc : encode (.array (.array .bytes)) v = Except.ok enc)
+    (hdata : data.extract off (off + enc.size) = enc) :
+    decode (.array (.array .bytes)) data off = Except.ok (v, off + enc.size) :=
+  roundtrip_array_wf (.array .bytes) data
+    (fun v ev o hsz h2 h3 => roundtrip_bytes_array_wf v ev data o hsz h2 h3)
+    (szdvd_array .bytes szdvd_bytes) v enc off hwf henc hdata
