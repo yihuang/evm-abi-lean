@@ -1126,7 +1126,7 @@ theorem dynHeadsFrom_size (l : List ByteArray) :
 theorem ddeg_concat (e : ABIType) (data : ByteArray)
     (hrt : ∀ (v : ABIValue) (ev : ByteArray) (o : Nat), ev.size < 2^256 → encode e v = Except.ok ev →
       data.extract o (o + ev.size) = ev → (foldABIType DecoderEntry e) data o = Except.ok (v, o + ev.size))
-    (_hdvd : ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode e v = Except.ok ev → 32 ∣ ev.size) :
+    :
     ∀ (vs : List ABIValue) (encd : List ByteArray) (i n off curTail maxEnd : Nat) (vals : List ABIValue),
       encodeListElems (encode e) vs = Except.ok encd →
       n = i + vs.length →
@@ -1417,7 +1417,7 @@ theorem roundtrip_array_wf (e : ABIType) (data : ByteArray)
               rw [show 32 * encd.length = heads.size from by rw [hheads_size, hlenv]; ring, ← hh]; exact hheads_ex
             have htailseq : data.extract (off + 32 + vals.length * 32) (off + 32 + vals.length * 32 + tails.size) = tails := by
               rw [← hheads_size]; exact htails_ex
-            rw [ddeg_concat e data hrt hdvd vals encd 0 vals.length (off + 32) (vals.length * 32) (off + 32 + vals.length * 32) []
+            rw [ddeg_concat e data hrt vals encd 0 vals.length (off + 32) (vals.length * 32) (off + 32 + vals.length * 32) []
                   hEL' (by omega) rfl (by rw [← ht]; omega) halign (by omega) hheadseq htailseq]
             rw [List.reverse_nil, List.nil_append,
                 show off + 32 + vals.length * 32 + tails.size = off + enc.size from by rw [hencsz, hpsz, hheads_size]; omega]
@@ -1567,7 +1567,7 @@ theorem roundtrip_fixedArray_wf (n : Nat) (e : ABIType) (data : ByteArray)
             have hbound_all : off + enc.size ≤ data.size :=
               not_gt_of_extract_eq data off enc.size (by rw [hdata]) (by omega)
             rw [show n = vals.length from hlen.symm]
-            rw [ddeg_concat e data hrt hdvd vals encd 0 vals.length off (vals.length * 32) (off + vals.length * 32) []
+            rw [ddeg_concat e data hrt vals encd 0 vals.length off (vals.length * 32) (off + vals.length * 32) []
                   hEL' (by omega) rfl (by rw [← ht]; omega) halign (by omega) hheadseq htailseq]
             rw [List.reverse_nil, List.nil_append,
                 show off + vals.length * 32 + tails.size = off + enc.size from by rw [hpsz, hheads_size]; omega]
@@ -1840,7 +1840,7 @@ theorem dtd_concat (fullTs : List ABIType) (data : ByteArray) (offset : Nat)
         rw [show offset + (processed ++ [t]).foldl (fun a t => a + headSize t) 0 = offset + hp + 32 from by rw [hpsnoc]; have := headSize_dynamic t hd; omega]; exact hslice_suffix
       rw [ih (processed ++ [t]) vs' tail (tailCur + b.size) (offset + (tailCur + b.size)) (v :: acc) hsplit' htail rfl (by rw [ByteArray.size_append] at htbound; omega) hheads' htslice_suffix]
       simp only [List.reverse_cons, List.append_assoc, List.cons_append, List.nil_append, tupleTails_dyn, ByteArray.size_append]
-      rw [show offset + (tailCur + b.size) + (tupleTails tail).size = offset + tailCur + (b.size + (tupleTails tail).size) from by omega]
+      grind
 
 /-! ### Dynamic tuple roundtrip under the well-formedness bound `enc.size < 2 ^ 256` -/
 
