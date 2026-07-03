@@ -20,12 +20,20 @@ local macro "badVal" h:ident : tactic =>
     | exact absurd $h (by unfold encode foldABIType; simp)
     | exact absurd $h (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp))
 
+/-- Discharge a wrong-`ABIValue`-constructor case for a container over element `e`: the extra
+`rcases` splits the element's encoder entry so the `encode … = ok` hypothesis reduces to false. -/
+local macro "badArrVal" h:ident e:ident : tactic =>
+  `(tactic| exact absurd $h (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry $e with ⟨d, f⟩; dsimp; simp))
+
 /-- Open the encoder definition at hypothesis `h`: `encode … = ok` becomes the concrete match. -/
 local macro "openEnc" h:ident : tactic =>
   `(tactic| unfold encode foldABIType at $h:ident <;> delta instABIVisitorEncoderEntry at $h:ident <;> dsimp at $h:ident)
 /-- Open the decoder definition on the goal. -/
 local macro "openDec" : tactic =>
   `(tactic| unfold decode foldABIType <;> delta instABIVisitorDecoderEntry <;> dsimp)
+/-- Open the encoder definition on the goal (the `openEnc` sibling that acts on the goal). -/
+local macro "openEncG" : tactic =>
+  `(tactic| unfold encode foldABIType <;> delta instABIVisitorEncoderEntry <;> dsimp)
 
 /-! ## Reading back an appended encoding from a `data` slice
 
@@ -185,45 +193,45 @@ theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
   | bytes v' =>
     by_cases hv256 : v'.size < 2 ^ 256
     · have hval : encode .bytes (ABIValue.bytes v') = Except.ok (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) := by
-        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp; simpa [h256_eq, hv256]
+        openEncG; simpa [h256_eq, hv256]
       have hd : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size) := by
         injection hval.symm.trans henc; symm; assumption
       rw [hd]
       openDec
       exact decodeDynamicBytes_roundtrip v' hv256 (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) rfl
     · have hval : encode .bytes (ABIValue.bytes v') = Except.error (.dataTooLong v'.size) := by
-        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+        openEncG
         have h_ge : ¬ v'.size < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
           rw [← h256_eq]; exact hv256
         simp [h_ge]
       rw [hval] at henc; simp at henc
   | uint n =>
     have h_wrong : encode .bytes (ABIValue.uint n) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | bool b =>
     have h_wrong : encode .bytes (ABIValue.bool b) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | address a =>
     have h_wrong : encode .bytes (ABIValue.address a) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | int i =>
     have h_wrong : encode .bytes (ABIValue.int i) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | string s =>
     have h_wrong : encode .bytes (ABIValue.string s) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | array arr =>
     have h_wrong : encode .bytes (ABIValue.array arr) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | tuple tup =>
     have h_wrong : encode .bytes (ABIValue.tuple tup) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
 
 theorem roundtrip_string (v : ABIValue) (data : ByteArray)
@@ -233,14 +241,14 @@ theorem roundtrip_string (v : ABIValue) (data : ByteArray)
   | string v' =>
     by_cases huv256 : v'.toUTF8.size < 2 ^ 256
     · have hval : encode .string (ABIValue.string v') = Except.ok (uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) := by
-        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp; simpa [h256_eq, huv256]
+        openEncG; simpa [h256_eq, huv256]
       have hd : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size) := by
         injection hval.symm.trans henc; symm; assumption
       rw [hd]
       openDec
       exact decodeDynamicString_roundtrip v' huv256 (uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) rfl
     · have hval : encode .string (ABIValue.string v') = Except.error (.dataTooLong v'.toUTF8.size) := by
-        unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+        openEncG
         have h_ge : ¬ v'.toUTF8.size < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
           rw [← h256_eq]; exact huv256
         have h_ge' : ¬ v'.utf8ByteSize < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
@@ -249,31 +257,31 @@ theorem roundtrip_string (v : ABIValue) (data : ByteArray)
       rw [hval] at henc; simp at henc
   | uint n =>
     have h_wrong : encode .string (ABIValue.uint n) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | bool b =>
     have h_wrong : encode .string (ABIValue.bool b) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | address a =>
     have h_wrong : encode .string (ABIValue.address a) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | int i =>
     have h_wrong : encode .string (ABIValue.int i) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | bytes b =>
     have h_wrong : encode .string (ABIValue.bytes b) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | array arr =>
     have h_wrong : encode .string (ABIValue.array arr) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
   | tuple tup =>
     have h_wrong : encode .string (ABIValue.tuple tup) = Except.error .typeValueMismatch := by
-      unfold encode; unfold foldABIType; delta instABIVisitorEncoderEntry; dsimp
+      openEncG
     rw [h_wrong] at henc; simp at henc
 
 /-! ## Int helper lemmas -/
@@ -1031,7 +1039,7 @@ theorem size_eq_fixedArray_core (n : Nat) (e : ABIType)
         simp only [headSize, isDynamic, hstat_e, Bool.false_eq_true, if_false]
     · rw [if_pos (by simpa using hlen)] at henc
       exact absurd (show Except.error (Error.arrayElemCount n vals.length) = Except.ok ev from henc) (by simp)
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
 
 /-- If a tuple type is static, every element type is static. -/
 theorem tuple_static_elems (ts : List ABIType) (h : isDynamic (.tuple ts) = false) :
@@ -1424,7 +1432,7 @@ theorem roundtrip_array_wf (e : ABIType) (data : ByteArray)
             rfl
 
     · exact absurd (show Except.error (Error.arrayLengthOverflow vals.length) = Except.ok enc from henc) (by simp)
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
 
 /-! ### Concrete WF roundtrips for the common dynamic-element arrays -/
 
@@ -1574,7 +1582,7 @@ theorem roundtrip_fixedArray_wf (n : Nat) (e : ABIType) (data : ByteArray)
             rfl
     · rw [if_pos (by simpa using hlen)] at henc
       exact absurd (show Except.error (Error.arrayElemCount n vals.length) = Except.ok enc from henc) (by simp)
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
 
 /-! ### General array szdvd + nested composition demo -/
 -- general array szdvd, given element alignment
@@ -1611,7 +1619,7 @@ theorem szdvd_array (e : ABIType)
         rw [hencsz]
         exact Nat.dvd_add (by norm_num) (arrayPack_size_dvd elemDyn encd (by omega) halign)
     · exact absurd (show Except.error (Error.arrayLengthOverflow vals.length) = Except.ok ev from henc) (by simp)
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
 
 /-- Nested `bytes[][]` roundtrips under the bound — demonstrates the WF results compose. -/
 theorem roundtrip_bytes_array_array_wf (v : ABIValue) (enc data : ByteArray) (off : Nat)
@@ -2312,7 +2320,7 @@ theorem szdvd_fixedArray (n : Nat) (e : ABIType)
           exact hdvd_e w b (by omega) hw
         rw [hpack]
         exact arrayPack_size_dvd elemDyn encd (by rw [← hpack]; exact hsz) halign
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
 
 /-! ### ABI function-call level roundtrip: `encodeArgs` then `decodeArgs` -/
 
@@ -2520,7 +2528,7 @@ theorem dyn_encoding_ge_32_array (e : ABIType) (v : ABIValue) (ev : ByteArray) (
         have he : ev = uint256ToBytes vals.length ++ arrayPack elemDyn encd := (Except.ok.inj henc).symm
         rw [he, ByteArray.size_append]; have := uint256ToBytes_size_ge vals.length; omega
     · exact absurd henc (by simp)
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
 
 theorem dyn_encoding_ge_32_fixedArray (n : Nat) (e : ABIType) (hn : isDynamic e = true → 0 < n)
     (hdyn : isDynamic (.fixedArray n e) = true) (v : ABIValue) (ev : ByteArray)
@@ -2549,7 +2557,7 @@ theorem dyn_encoding_ge_32_fixedArray (n : Nat) (e : ABIType) (hn : isDynamic e 
         have hge := dynHeadsFrom_size_ge encd (if encd.length = 0 then 32 else encd.length * 32)
         have : 0 < encd.length := by rw [hlen_eq, hvn]; exact hn'
         omega
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry e with ⟨d, f⟩; dsimp; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
 
 theorem tupleHeadsFrom_ge_32 : ∀ (encd : List (Bool × ByteArray)) (off : Nat), (∃ b ∈ encd, b.1 = true) →
     32 ≤ ((tupleHeadsFrom off encd).foldl (·++·) ByteArray.empty).size := by
