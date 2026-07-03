@@ -211,30 +211,30 @@ def testDynamicTypes : List (IO TestResult) := [
 ]
 
 def testArrays : List (IO TestResult) := [
-  assertEncodes "uint256[3]([1,2,3])" (.fixedArray 3 (u256))
+  assertEncodes "uint256[3]([1,2,3])" (.fixedArray 3 u256)
     (.array [.uint 1, (.uint 2), .uint 3])
     "0x000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000003",
-  assertRoundtrip "uint256[3]([1,2,3]) roundtrip" (.fixedArray 3 (u256))
+  assertRoundtrip "uint256[3]([1,2,3]) roundtrip" (.fixedArray 3 u256)
     (.array [.uint 1, (.uint 2), .uint 3]),
-  assertEncodes "uint256[]([10,20])" (.array (u256))
+  assertEncodes "uint256[]([10,20])" (.array u256)
     (.array [(.uint 10), .uint 20])
     "0x0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000014",
-  assertRoundtrip "uint256[]([10,20]) roundtrip" (.array (u256))
+  assertRoundtrip "uint256[]([10,20]) roundtrip" (.array u256)
     (.array [(.uint 10), .uint 20]),
-  assertEncodes "uint256[](empty)" (.array (u256)) (.array [])
+  assertEncodes "uint256[](empty)" (.array u256) (.array [])
     "0x0000000000000000000000000000000000000000000000000000000000000000",
-  assertRoundtrip "uint256[](empty) roundtrip" (.array (u256)) (.array []),
+  assertRoundtrip "uint256[](empty) roundtrip" (.array u256) (.array []),
 ]
 
 def testTuples : List (IO TestResult) := [
   assertRoundtrip "(uint256,address,bool) roundtrip"
-    (.tuple [(u256), .address, .bool])
+    (.tuple [u256, .address, .bool])
     (.tuple [(.uint 123), .address (bytes (List.replicate 20 0xAB)), .bool false]),
   assertRoundtrip "(uint256,bytes) roundtrip"
-    (.tuple [(u256), .bytes])
+    (.tuple [u256, .bytes])
     (.tuple [(.uint 999), .bytes (bytes [0xDE, 0xAD, 0xBE, 0xEF])]),
   assertRoundtrip "(uint256,string,bool) roundtrip"
-    (.tuple [(u256), .string, .bool])
+    (.tuple [u256, .string, .bool])
     (.tuple [(.uint 42), .string "hello", .bool true]),
   assertEncodes "() empty tuple" (.tuple []) (.tuple []) "0x",
   assertRoundtrip "() empty tuple roundtrip" (.tuple []) (.tuple []),
@@ -242,7 +242,7 @@ def testTuples : List (IO TestResult) := [
 
 def testComplexHeadSize : List (IO TestResult) := [
   assertEncodes "(uint256[3],bytes) encode" (.tuple [
-    (.fixedArray 3 (u256)),
+    (.fixedArray 3 u256),
     .bytes
   ]) (.tuple [
     (.array [.uint 1, .uint 2, .uint 3]),
@@ -255,16 +255,16 @@ def testComplexHeadSize : List (IO TestResult) := [
     "0000000000000000000000000000000000000000000000000000000000000005" ++
     "68656c6c6f000000000000000000000000000000000000000000000000000000"),
   assertRoundtrip "(uint256[3],bytes) roundtrip" (.tuple [
-    (.fixedArray 3 (u256)),
+    (.fixedArray 3 u256),
     .bytes
   ]) (.tuple [
     (.array [.uint 1, .uint 2, .uint 3]),
     .bytes (bytes [0x68, 0x65, 0x6c, 0x6c, 0x6f])
   ]),
   assertEncodes "(uint256,bytes,uint256[3]) encode" (.tuple [
-    (u256),
+    u256,
     .bytes,
-    (.fixedArray 3 (u256))
+    (.fixedArray 3 u256)
   ]) (.tuple [
     .uint 42,
     .bytes (bytes [0x68, 0x65, 0x6c, 0x6c, 0x6f]),
@@ -278,9 +278,9 @@ def testComplexHeadSize : List (IO TestResult) := [
     "0000000000000000000000000000000000000000000000000000000000000005" ++
     "68656c6c6f000000000000000000000000000000000000000000000000000000"),
   assertRoundtrip "(uint256,bytes,uint256[3]) roundtrip" (.tuple [
-    (u256),
+    u256,
     .bytes,
-    (.fixedArray 3 (u256))
+    (.fixedArray 3 u256)
   ]) (.tuple [
     .uint 42,
     .bytes (bytes [0x68, 0x65, 0x6c, 0x6c, 0x6f]),
@@ -289,18 +289,18 @@ def testComplexHeadSize : List (IO TestResult) := [
 ]
 
 def testBazExample : List (IO TestResult) := [
-  assertEncodes "baz(uint32,bool) encode" (.tuple [(u32), .bool])
+  assertEncodes "baz(uint32,bool) encode" (.tuple [u32, .bool])
     (.tuple [(.uint 69), .bool true])
     "0x00000000000000000000000000000000000000000000000000000000000000450000000000000000000000000000000000000000000000000000000000000001",
-  assertRoundtrip "baz(uint32,bool) roundtrip" (.tuple [(u32), .bool])
+  assertRoundtrip "baz(uint32,bool) roundtrip" (.tuple [u32, .bool])
     (.tuple [(.uint 69), .bool true]),
-  assertDecodes "baz(uint32,bool) decode" (.tuple [(u32), .bool])
+  assertDecodes "baz(uint32,bool) decode" (.tuple [u32, .bool])
     "0x00000000000000000000000000000000000000000000000000000000000000450000000000000000000000000000000000000000000000000000000000000001"
     (.tuple [(.uint 69), .bool true]),
 ]
 
 def testBarExample : List (IO TestResult) :=
-  assertEncDecRT "bar(bytes3[2])" (.tuple [.fixedArray 2 (bytes3Ty)])
+  assertEncDecRT "bar(bytes3[2])" (.tuple [.fixedArray 2 bytes3Ty])
     (.tuple [.array [
       .bytes (bytes [0x61, 0x62, 0x63]),
       .bytes (bytes [0x64, 0x65, 0x66])
@@ -308,13 +308,13 @@ def testBarExample : List (IO TestResult) :=
     "0x61626300000000000000000000000000000000000000000000000000000000006465660000000000000000000000000000000000000000000000000000000000"
 
 def testSamExample : List (IO TestResult) :=
-  assertEncDecRT "sam(bytes,bool,uint256[])" (.tuple [.bytes, .bool, .array (u256)])
+  assertEncDecRT "sam(bytes,bool,uint256[])" (.tuple [.bytes, .bool, .array u256])
     (.tuple [.bytes (bytes [0x64, 0x61, 0x76, 0x65]), .bool true, .array [.uint 1, (.uint 2), .uint 3]])
     "0x0000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000464617665000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000003"
 
 def testFExample : List (IO TestResult) :=
   assertEncDecRT "f(uint256,uint32[],bytes10,bytes)"
-    (.tuple [(u256), .array (u32), (bytes10Ty), .bytes])
+    (.tuple [u256, .array u32, bytes10Ty, .bytes])
     (.tuple [
       .uint 0x123,
       .array [.uint 0x456, .uint 0x789],
@@ -325,7 +325,7 @@ def testFExample : List (IO TestResult) :=
 
 def testGExample : List (IO TestResult) :=
   assertEncDecRT "g(uint256[][],string[])"
-    (.tuple [.array (.array (u256)), .array .string])
+    (.tuple [.array (.array u256), .array .string])
     (.tuple [
       .array [.array [(.uint 1), .uint 2], .array [.uint 3]],
       .array [.string "one", .string "two", .string "three"]
