@@ -2253,9 +2253,7 @@ theorem decodeTupleStatic_concat_wf (ts : List ABIType) (data : ByteArray)
     rw [decodeTupleStatic_cons, hdec_t]
     show decodeTupleStatic (foldAll DecoderEntry ts') data (off + b.size) (v :: acc) = _
     rw [ih (fun t' ht' => hrt t' (List.mem_cons_of_mem t ht')) vs' tail (off + b.size) (v :: acc) htail hbound' hslice_tail]
-    have h1 : (v :: acc).reverse ++ vs' = acc.reverse ++ v :: vs' := by simp
-    have h2 : off + b.size + (tail.foldl (fun a x => a ++ x.2) ByteArray.empty).size = off + (b ++ tail.foldl (fun a x => a ++ x.2) ByteArray.empty).size := by rw [hsz]; omega
-    rw [h1, h2]
+    simp [add_assoc]
 
 -- static-tuple concat size = headSize (.tuple ts), from per-field size_eq (WF variant, no visitor)
 theorem tuplePackStatic_size_wf (ts : List ABIType)

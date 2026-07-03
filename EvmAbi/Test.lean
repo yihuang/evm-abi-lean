@@ -31,15 +31,10 @@ def parseHex (s : String) : ByteArray :=
     | _ => ByteArray.mk (Array.mk acc.reverse)
   go chars []
 def byteArraysEq (a b : ByteArray) : Bool :=
-  if a.size ≠ b.size then false else
-    List.range a.size |>.all (fun i => a[i]! = b[i]!)
+  a == b
 
 /-- Make ByteArray from a list -/
 def bytes (xs : List UInt8) : ByteArray := ByteArray.mk (Array.mk xs)
-
-/-- Concatenate two hex strings for use in test vectors -/
-def hex (s : String) : String := s
-def hexCat (a b : String) : String := a ++ b
 
 /-- A test result -/
 inductive TestResult where
@@ -60,12 +55,15 @@ def collectTests (tests : List (IO TestResult)) : IO (List TestResult) :=
 def countPassed (results : List TestResult) : Nat :=
   (results.filter (fun r => match r with | .pass _ => true | _ => false)).length
 
+/-- Encode a value, handling tuple encoding correctly -/
+def encodeTest (t : ABIType) (v : ABIValue) : Except Error ByteArray :=
+  match t with
+  | .tuple es => encodeArgs es (match v with | .tuple vs => vs | _ => [])
+  | _ => encode t v
+
 /-- Assert that encode produces the expected hex string -/
 def assertEncodes (label : String) (t : ABIType) (v : ABIValue) (expectedHex : String) : IO TestResult := do
-  let enc :=
-    match t with
-    | .tuple _ => encodeArgs (match t with | .tuple es => es | _ => []) (match v with | .tuple vs => vs | _ => [])
-    | _ => encode t v
+  let enc := encodeTest t v
   match enc with
   | Except.ok enc =>
     let expected := parseHex expectedHex
@@ -78,10 +76,7 @@ def assertEncodes (label : String) (t : ABIType) (v : ABIValue) (expectedHex : S
 
 /-- Assert that encode-decode roundtrip preserves the value -/
 def assertRoundtrip (label : String) (t : ABIType) (v : ABIValue) : IO TestResult := do
-  let enc :=
-    match t with
-    | .tuple _ => encodeArgs (match t with | .tuple es => es | _ => []) (match v with | .tuple vs => vs | _ => [])
-    | _ => encode t v
+  let enc := encodeTest t v
   match enc with
   | Except.ok enc =>
     match decode t enc 0 with
