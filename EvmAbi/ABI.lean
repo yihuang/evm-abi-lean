@@ -141,25 +141,24 @@ def abiSize : ABIType → Nat
   | .tuple []       => 1
   | .tuple (t::ts)  => abiSize t + abiSize (.tuple ts)
 
-def headSize : ABIType → Nat
-  | .uint _         => 32
-  | .int _          => 32
-  | .bool           => 32
-  | .address        => 32
-  | .bytes           => 32
-  | .fixedBytes _   => 32
-  | .string         => 32
-  | .array _        => 32
-  | .fixedArray n e => n * headSize e
-  | .tuple []       => 0
-  | .tuple (t::ts)  => headSize t + headSize (.tuple ts)
-
 def isDynamic : ABIType → Bool
   | .bytes | .string | .array _ => true
   | .fixedArray _ e => isDynamic e
   | .tuple []       => false
   | .tuple (e::es)  => isDynamic e || isDynamic (.tuple es)
   | _ => false
+
+/-- ABI "head" size of a type when it appears as a tuple/array element: a dynamic
+    type always occupies a 32-byte offset pointer in the head; a static type occupies
+    its full (static) encoding size. (Returning the structural size for dynamic
+    `fixedArray`/`tuple` was a bug: their ABI head is a 32-byte pointer, not `n·headSize e`.) -/
+def headSize (t : ABIType) : Nat :=
+  if isDynamic t then 32 else
+    match t with
+    | .fixedArray n e => n * headSize e
+    | .tuple []       => 0
+    | .tuple (t'::ts) => headSize t' + headSize (.tuple ts)
+    | _               => 32
 
 /-! ## Termination lemmas for foldABIType (using sizeOf) -/
 

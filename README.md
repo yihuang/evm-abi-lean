@@ -57,7 +57,7 @@ let decoded := decode t (Except.ok? encoded) 0
 
 ```bash
 lake build
-lake run abi-lean-test
+lake exe abi-lean-test
 ```
 
 Covers spec encoding vectors, decoding, 12 standard Ethereum function selectors (transfer, balanceOf, approve, ...), 40+ roundtrip assertions across all type categories, and error cases.
