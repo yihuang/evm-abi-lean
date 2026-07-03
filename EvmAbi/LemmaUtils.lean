@@ -354,11 +354,6 @@ theorem intToBytes_neg_size (v' : Int) (byteLen : Nat) (hv_nonpos : ¬ v' ≥ 0)
         = (32 - (natToBytes u).size) + (natToBytes u).size := by rw [h_sz']
     _ = 32 := by omega
 
-/- (2 : Int) ^ b is non-negative for all b. -/
-theorem two_pow_nonneg (b : Nat) : 0 ≤ (2 : Int) ^ b := by positivity
-
-theorem two_pow_nat_coe (b : Nat) : (2 : Int) ^ b = ((2 : Nat) ^ b : Int) := by
-  simp
 
 /- .toNat of (2 : Int) ^ b equals (2 : Nat) ^ b. -/
 theorem two_toNat_eq (b : Nat) : ((2 : Int) ^ b).toNat = (2 : Nat) ^ b := by

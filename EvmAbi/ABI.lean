@@ -92,25 +92,6 @@ inductive All (φ : ABIType → Type) : List ABIType → Type where
   | nil  : All φ []
   | cons : φ t → All φ ts → All φ (t :: ts)
 
-namespace All
-
-def map {φ ψ : ABIType → Type} (f : ∀ {t}, φ t → ψ t) : ∀ {ts}, All φ ts → All ψ ts
-  | _, .nil => .nil
-  | _, .cons x xs => .cons (f x) (map f xs)
-
-def foldr {φ : ABIType → Type} {β : Type} (f : ∀ {t}, φ t → β → β) (init : β) : ∀ {ts}, All φ ts → β
-  | _, .nil => init
-  | _, .cons x xs => f x (foldr f init xs)
-
-def any : ∀ {ts}, All (λ _ => Bool) ts → Bool
-  | _, .nil => false
-  | _, .cons b bs => b || any bs
-
-def sum : ∀ {ts}, All (λ _ => Nat) ts → Nat
-  | _, .nil => 0
-  | _, .cons n ns => n + sum ns
-
-end All
 
 /-! ## ABIVisitor — catamorphism over ABIType -/
 
@@ -128,18 +109,6 @@ class ABIVisitor (φ : ABIType → Type) where
 
 /-! ## Simple properties -/
 
-def abiSize : ABIType → Nat
-  | .uint _         => 1
-  | .int _          => 1
-  | .bool           => 1
-  | .address        => 1
-  | .bytes           => 1
-  | .fixedBytes _   => 1
-  | .string         => 1
-  | .array e        => 1 + abiSize e
-  | .fixedArray _ e => 1 + abiSize e
-  | .tuple []       => 1
-  | .tuple (t::ts)  => abiSize t + abiSize (.tuple ts)
 
 def isDynamic : ABIType → Bool
   | .bytes | .string | .array _ => true
@@ -161,12 +130,6 @@ def headSize (t : ABIType) : Nat :=
     | _               => 32
 
 /-! ## Termination lemmas for foldABIType (using sizeOf) -/
-
-theorem sizeOf_lt_array (e : ABIType) : sizeOf e < sizeOf (ABIType.array e) := by
-  simp
-
-theorem sizeOf_lt_fixedArray (n : Nat) (e : ABIType) : sizeOf e < sizeOf (ABIType.fixedArray n e) := by
-  simp; omega
 
 theorem sizeOf_lt_tuple_cons (t : ABIType) (ts : List ABIType) : sizeOf t < sizeOf (ABIType.tuple (t :: ts)) := by
   simp; omega

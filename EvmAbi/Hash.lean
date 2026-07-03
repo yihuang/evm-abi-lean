@@ -172,12 +172,6 @@ def functionSelector (signature : String) : ByteArray :=
   let hash := keccak256 sigBytes
   hash.extract 0 4
 
-/- Format a function selector as a hex string -/
-def selectorHex (sig : String) : String :=
-  let sel := functionSelector sig
-  "0x" ++ sel.foldl (fun acc byte =>
-    acc ++ String.ofList [hexDigit (byte.toNat / 16), hexDigit (byte.toNat % 16)]
-  ) ""
 
 
 end EvmAbi.Hash
