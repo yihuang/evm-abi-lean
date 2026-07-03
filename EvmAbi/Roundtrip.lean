@@ -344,6 +344,38 @@ theorem decode_intToBytes (s : ByteSize) (v' : Int)
   · exact intToBytes_decode_nonneg s v' hv_nonneg hlt hbits256
   · exact intToBytes_decode_neg s v' hv_nonneg hle hbits256
 
+theorem intToBytes_size32 (s : ByteSize) (v' : Int)
+    (hrange : -(2 ^ (s.len * 8 - 1) : Int) ≤ v' ∧ v' < (2 ^ (s.len * 8 - 1) : Int)) :
+    (intToBytes v' s.len).size = 32 := by
+  have hbits256 : s.len * 8 ≤ 256 := by have := s.h.right; omega
+  by_cases hv_nonneg : v' ≥ 0
+  · have hv_lt_nat : v'.toNat < 2 ^ (s.len * 8 - 1) := by
+      apply Int.ofNat_lt.mp; calc
+        (v'.toNat : ℤ) = v' := by exact_mod_cast Int.toNat_of_nonneg hv_nonneg
+        _ < (2 ^ (s.len * 8 - 1) : ℤ) := hrange.right
+    have hv_lt_256 : v'.toNat < 2 ^ 256 := by
+      have h_pow : 2 ^ (s.len * 8 - 1) ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) (by omega); omega
+    calc (intToBytes v' s.len).size = (uint256ToBytes v'.toNat).size := by simp [intToBytes, uint256ToBytes, hv_nonneg]
+    _ = 32 := uint256ToBytes_size v'.toNat (natToBytes_size_bound v'.toNat hv_lt_256)
+  · have h_bounded : ((2 : Int) ^ (s.len * 8) + v').toNat < 2 ^ 256 := by
+      have h_add_lt : (2 : ℤ) ^ (s.len * 8) + v' < (2 : ℤ) ^ (s.len * 8) := by omega
+      have hbpos : 0 < s.len * 8 := by have : 0 < s.len := s.h.left; omega
+      have h_diff : (2 : ℤ) ^ (s.len * 8) - (2 : ℤ) ^ (s.len * 8 - 1) = (2 : ℤ) ^ (s.len * 8 - 1) :=
+        two_pow_succ_sub (s.len * 8) hbpos
+      have h_add_nonneg : 0 ≤ (2 : ℤ) ^ (s.len * 8) + v' := by
+        have h_lb : -(2 ^ (s.len * 8 - 1) : Int) ≤ v' := hrange.left
+        calc 0 ≤ (2 : ℤ) ^ (s.len * 8 - 1) := by positivity
+          _ = (2 : ℤ) ^ (s.len * 8) - (2 : ℤ) ^ (s.len * 8 - 1) := by rw [h_diff]
+          _ ≤ (2 : ℤ) ^ (s.len * 8) + v' := by omega
+      have h_toNat_lt : ((2 : ℤ) ^ (s.len * 8) + v').toNat < ((2 : ℤ) ^ (s.len * 8)).toNat :=
+        (Int.toNat_lt_toNat (by positivity : 0 < (2 : ℤ) ^ (s.len * 8))).mpr h_add_lt
+      have h_pow : 2 ^ (s.len * 8) ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) (by omega)
+      have h_toNat_eq : ((2 : ℤ) ^ (s.len * 8)).toNat = 2 ^ (s.len * 8) := by
+        have h := Int.toNat_of_nonneg (by positivity : 0 ≤ (2 : ℤ) ^ (s.len * 8))
+        apply (Nat.cast_inj (R := ℤ)).mp; simp
+      rw [h_toNat_eq] at h_toNat_lt; exact lt_of_lt_of_le h_toNat_lt h_pow
+    exact intToBytes_neg_size v' s.len (by omega) h_bounded
+
 theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray)
     (henc : encode (.int s) (ABIValue.int v') = Except.ok data) : decode (.int s) data 0 = Except.ok (ABIValue.int v', data.size) := by
   unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc; simp at henc
@@ -503,40 +535,8 @@ theorem roundtrip_offset_int (s : ByteSize) (v' : Int) (enc data : ByteArray) (o
   by_cases h1 : v' < -(2 ^ (s.len * 8 - 1) : Int); · simp [h1] at henc
   · by_cases h2 : v' ≥ (2 ^ (s.len * 8 - 1) : Int); · simp [h2] at henc
     · simp [h1, h2] at henc
-      have h_enc_eq : intToBytes v' s.len = enc := henc; subst h_enc_eq
-      have hsize32 : (intToBytes v' s.len).size = 32 := by
-        have hbits256 : s.len * 8 ≤ 256 := by have := s.h.right; omega
-        by_cases hv_nonneg : v' ≥ 0
-        · have hv_lt_nat : v'.toNat < 2 ^ (s.len * 8 - 1) := by
-            apply Int.ofNat_lt.mp; calc
-              (v'.toNat : ℤ) = v' := by exact_mod_cast Int.toNat_of_nonneg hv_nonneg
-              _ < (2 ^ (s.len * 8 - 1) : ℤ) := by omega
-          have hv_lt_256 : v'.toNat < 2 ^ 256 := by
-            have h_pow : 2 ^ (s.len * 8 - 1) ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) (by omega); omega
-          calc (intToBytes v' s.len).size = (uint256ToBytes v'.toNat).size := by simp [intToBytes, uint256ToBytes, hv_nonneg]
-          _ = 32 := uint256ToBytes_size v'.toNat (natToBytes_size_bound v'.toNat hv_lt_256)
-        · have h_bounded : ((2 : Int) ^ (s.len * 8) + v').toNat < 2 ^ 256 := by
-            have h_range : -(2 ^ (s.len * 8 - 1) : Int) ≤ v' ∧ v' < (2 ^ (s.len * 8 - 1) : Int) := by
-              exact ⟨by omega, by omega⟩
-            have h_add_lt : (2 : ℤ) ^ (s.len * 8) + v' < (2 : ℤ) ^ (s.len * 8) := by omega
-            have h_add_nonneg : 0 ≤ (2 : ℤ) ^ (s.len * 8) + v' := by
-              have h_lb : -(2 ^ (s.len * 8 - 1) : Int) ≤ v' := h_range.left
-              have hbpos : 0 < s.len * 8 := by have : 0 < s.len := s.h.left; omega
-              have h_diff : (2 : ℤ) ^ (s.len * 8) - (2 : ℤ) ^ (s.len * 8 - 1) = (2 : ℤ) ^ (s.len * 8 - 1) :=
-                two_pow_succ_sub (s.len * 8) hbpos
-              calc 0 ≤ (2 : ℤ) ^ (s.len * 8 - 1) := by positivity
-                _ = (2 : ℤ) ^ (s.len * 8) - (2 : ℤ) ^ (s.len * 8 - 1) := by rw [h_diff]
-                _ ≤ (2 : ℤ) ^ (s.len * 8) + v' := by omega
-            have h_toNat_lt : ((2 : ℤ) ^ (s.len * 8) + v').toNat < ((2 : ℤ) ^ (s.len * 8)).toNat :=
-              (Int.toNat_lt_toNat (by positivity : 0 < (2 : ℤ) ^ (s.len * 8))).mpr h_add_lt
-            have h_pow : 2 ^ (s.len * 8) ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) (by omega)
-            have h_toNat_eq : ((2 : ℤ) ^ (s.len * 8)).toNat = 2 ^ (s.len * 8) := by
-              have h_nonneg : 0 ≤ (2 : ℤ) ^ (s.len * 8) := by positivity
-              have h := Int.toNat_of_nonneg h_nonneg
-              apply (Nat.cast_inj (R := ℤ)).mp; simp
-            rw [h_toNat_eq] at h_toNat_lt
-            exact lt_of_lt_of_le h_toNat_lt h_pow
-          exact intToBytes_neg_size v' s.len (by omega) h_bounded
+      subst henc
+      have hsize32 : (intToBytes v' s.len).size = 32 := intToBytes_size32 s v' ⟨by omega, by omega⟩
       rw [hsize32]
       have hdata' : data.extract off (off + 32) = intToBytes v' s.len := by
         simpa [hsize32] using hdata
@@ -838,38 +838,6 @@ theorem encodeListElems_mem (e : ABIType) (vals : List ABIValue) (encd : List By
     rcases List.mem_cons.mp hb with h1 | h2
     · exact ⟨v, by rw [h1]; exact hev⟩
     · exact ih er her h2
-
-theorem intToBytes_size32 (s : ByteSize) (v' : Int)
-    (hrange : -(2 ^ (s.len * 8 - 1) : Int) ≤ v' ∧ v' < (2 ^ (s.len * 8 - 1) : Int)) :
-    (intToBytes v' s.len).size = 32 := by
-  have hbits256 : s.len * 8 ≤ 256 := by have := s.h.right; omega
-  by_cases hv_nonneg : v' ≥ 0
-  · have hv_lt_nat : v'.toNat < 2 ^ (s.len * 8 - 1) := by
-      apply Int.ofNat_lt.mp; calc
-        (v'.toNat : ℤ) = v' := by exact_mod_cast Int.toNat_of_nonneg hv_nonneg
-        _ < (2 ^ (s.len * 8 - 1) : ℤ) := hrange.right
-    have hv_lt_256 : v'.toNat < 2 ^ 256 := by
-      have h_pow : 2 ^ (s.len * 8 - 1) ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) (by omega); omega
-    calc (intToBytes v' s.len).size = (uint256ToBytes v'.toNat).size := by simp [intToBytes, uint256ToBytes, hv_nonneg]
-    _ = 32 := uint256ToBytes_size v'.toNat (natToBytes_size_bound v'.toNat hv_lt_256)
-  · have h_bounded : ((2 : Int) ^ (s.len * 8) + v').toNat < 2 ^ 256 := by
-      have h_add_lt : (2 : ℤ) ^ (s.len * 8) + v' < (2 : ℤ) ^ (s.len * 8) := by omega
-      have hbpos : 0 < s.len * 8 := by have : 0 < s.len := s.h.left; omega
-      have h_diff : (2 : ℤ) ^ (s.len * 8) - (2 : ℤ) ^ (s.len * 8 - 1) = (2 : ℤ) ^ (s.len * 8 - 1) :=
-        two_pow_succ_sub (s.len * 8) hbpos
-      have h_add_nonneg : 0 ≤ (2 : ℤ) ^ (s.len * 8) + v' := by
-        have h_lb : -(2 ^ (s.len * 8 - 1) : Int) ≤ v' := hrange.left
-        calc 0 ≤ (2 : ℤ) ^ (s.len * 8 - 1) := by positivity
-          _ = (2 : ℤ) ^ (s.len * 8) - (2 : ℤ) ^ (s.len * 8 - 1) := by rw [h_diff]
-          _ ≤ (2 : ℤ) ^ (s.len * 8) + v' := by omega
-      have h_toNat_lt : ((2 : ℤ) ^ (s.len * 8) + v').toNat < ((2 : ℤ) ^ (s.len * 8)).toNat :=
-        (Int.toNat_lt_toNat (by positivity : 0 < (2 : ℤ) ^ (s.len * 8))).mpr h_add_lt
-      have h_pow : 2 ^ (s.len * 8) ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) (by omega)
-      have h_toNat_eq : ((2 : ℤ) ^ (s.len * 8)).toNat = 2 ^ (s.len * 8) := by
-        have h := Int.toNat_of_nonneg (by positivity : 0 ≤ (2 : ℤ) ^ (s.len * 8))
-        apply (Nat.cast_inj (R := ℤ)).mp; simp
-      rw [h_toNat_eq] at h_toNat_lt; exact lt_of_lt_of_le h_toNat_lt h_pow
-    exact intToBytes_neg_size v' s.len (by omega) h_bounded
 
 theorem size_eq_uint (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc : encode (.uint s) v = Except.ok ev) : ev.size = headSize (.uint s) := by
   cases v with
