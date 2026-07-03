@@ -791,6 +791,12 @@ theorem enc_fst_eq_isDynamic (e : ABIType) : (foldABIType EncoderEntry e).1 = is
 termination_by sizeOf e
 decreasing_by simp
 
+/-- From a destructured encoder entry `foldABIType EncoderEntry t = (d, f)`, the dynamic flag `d`
+equals `isDynamic t` — the reusable form of `enc_fst_eq_isDynamic` applied through a `⟨d, f⟩` split. -/
+theorem entry_fst_isDynamic {t : ABIType} {d : Bool} {f : ABIValue → Except Error ByteArray}
+    (hentry : foldABIType EncoderEntry t = (d, f)) : d = isDynamic t := by
+  have := enc_fst_eq_isDynamic t; rwa [hentry] at this
+
 /-- Left fold of `++` with a nonempty seed factors the seed out to the front. -/
 theorem ba_foldl_init (init : ByteArray) (xs : List ByteArray) :
     xs.foldl (·++·) init = init ++ xs.foldl (·++·) ByteArray.empty := by
@@ -1028,7 +1034,7 @@ theorem size_eq_fixedArray_core (n : Nat) (e : ABIType)
         have hpack : ev = arrayPack elemDyn encd :=
           (Except.ok.inj (show Except.ok (arrayPack elemDyn encd) = Except.ok ev from henc)).symm
         have helemF : elemDyn = false := by
-          have h := enc_fst_eq_isDynamic e; rw [hentry] at h; simp only [] at h; rw [h, hstat_e]
+          rw [entry_fst_isDynamic hentry, hstat_e]
         rw [helemF] at hpack
         rw [show arrayPack false encd = encd.foldl (·++·) ByteArray.empty from by simp [arrayPack]] at hpack
         have hall : ∀ b ∈ encd, b.size = headSize e := fun b hb => by
@@ -1531,7 +1537,7 @@ theorem roundtrip_fixedArray_wf (n : Nat) (e : ABIType) (data : ByteArray)
         cases hdyn : isDynamic e with
         | false =>
           have helemF : elemDyn = false := by
-            have h := enc_fst_eq_isDynamic e; rw [hentry] at h; simp only [] at h; rw [h, hdyn]
+            rw [entry_fst_isDynamic hentry, hdyn]
           have hpackc : enc = encd.foldl (·++·) ByteArray.empty := by rw [hpack, helemF]; simp [arrayPack]
           simp only [decodeArrayElems, decodeStaticElems, Bool.false_eq_true, if_false]
           rw [decodeStaticElemsGo_concat_wf e data (foldABIType DecoderEntry e)
@@ -1541,7 +1547,7 @@ theorem roundtrip_fixedArray_wf (n : Nat) (e : ABIType) (data : ByteArray)
           rfl
         | true =>
           have helemT : elemDyn = true := by
-            have h := enc_fst_eq_isDynamic e; rw [hentry] at h; simp only [] at h; rw [h, hdyn]
+            rw [entry_fst_isDynamic hentry, hdyn]
           by_cases hvemp : vals = []
           · subst hvemp
             simp only [encodeListElems, Except.ok.injEq] at hEL'; subst hEL'
@@ -1786,7 +1792,7 @@ theorem dtd_concat (fullTs : List ABIType) (data : ByteArray) (offset : Nat)
     rw [hentry] at hgo
     obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encoded hgo
     have henc_t : enc = encode t := by unfold encode; rw [hentry]
-    have hdyneq : dyn = isDynamic t := by have := enc_fst_eq_isDynamic t; rw [hentry] at this; simp only [] at this; exact this
+    have hdyneq : dyn = isDynamic t := entry_fst_isDynamic hentry
     have hb_enc : encode t v = Except.ok b := by rw [← henc_t]; exact hb
     -- head offset
     have hhp : (fullTs.take processed.length).foldl (fun acc t => acc + headSize t) 0 = processed.foldl (fun acc t => acc + headSize t) 0 := by
@@ -1875,7 +1881,7 @@ theorem tupleHeadsFrom_size (ts : List ABIType)
     obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encoded hgo
     have henc_t : enc = encode t := by unfold encode; rw [hentry]
     have hb_enc : encode t v = Except.ok b := by rw [← henc_t]; exact hb
-    have hdyneq : dyn = isDynamic t := by have := enc_fst_eq_isDynamic t; rw [hentry] at this; simp only [] at this; exact this
+    have hdyneq : dyn = isDynamic t := entry_fst_isDynamic hentry
     have ihs : ∀ t' ∈ ts', isDynamic t' = false → ∀ (v : ABIValue) (ev : ByteArray), encode t' v = Except.ok ev → ev.size = headSize t' := fun t' ht' => hsize t' (by simp [ht'])
     have ihd : ∀ t' ∈ ts', ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode t' v = Except.ok ev → 32 ∣ ev.size := fun t' ht' => hdvd t' (by simp [ht'])
     cases hd : isDynamic t with
@@ -1916,7 +1922,7 @@ theorem tupleHeadsFrom_size_ge (ts : List ABIType)
     obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encoded hgo
     have henc_t : enc = encode t := by unfold encode; rw [hentry]
     have hb_enc : encode t v = Except.ok b := by rw [← henc_t]; exact hb
-    have hdyneq : dyn = isDynamic t := by have := enc_fst_eq_isDynamic t; rw [hentry] at this; simp only [] at this; exact this
+    have hdyneq : dyn = isDynamic t := entry_fst_isDynamic hentry
     have ihs : ∀ t' ∈ ts', isDynamic t' = false → ∀ (v : ABIValue) (ev : ByteArray), encode t' v = Except.ok ev → ev.size = headSize t' := fun t' ht' => hsize t' (by simp [ht'])
     rw [List.foldl_cons, headSize_foldl_shift (0 + headSize t) ts']
     cases hd : isDynamic t with
