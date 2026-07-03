@@ -155,7 +155,7 @@ theorem roundtrip_address (v : ABIValue) (data : ByteArray)
       have h_extract : (padLeft v' 32).extract 12 32 = v' := padLeft_extract_address v' hsize20
       have h_sz : (padLeft v' 32).size = 32 := by
         unfold padLeft; simp [hsize20, zeros_size]
-      simp [hsize20, h_extract, h_sz]
+      simp [h_extract, h_sz]
   | x =>
     unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
     cases x with
@@ -170,7 +170,7 @@ theorem roundtrip_address (v : ABIValue) (data : ByteArray)
         have h_extract : (padLeft v' 32).extract 12 32 = v' := padLeft_extract_address v' hsize20
         have h_sz : (padLeft v' 32).size = 32 := by
           unfold padLeft; simp [hsize20, zeros_size]
-        simp [hsize20, h_extract, h_sz]
+        simp [h_extract, h_sz]
     | _ => simp at henc
 
 theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
@@ -331,12 +331,10 @@ private theorem intToBytes_decode_nonneg (s : ByteSize) (v' : Int) (hv_nonneg : 
         simp [intToBytes, uint256ToBytes, hv_nonneg]
       _ = v'.toNat % 2 ^ (s.len * 8) := by rw [bytesToNat_uint256ToBytes v'.toNat]
       _ = v'.toNat := Nat.mod_eq_of_lt h_lt_pow
+  have h_nonneg_int : (v'.toNat : ℤ) = v' := by exact_mod_cast Int.toNat_of_nonneg hv_nonneg
   have h_val_int : (bytesToNat ((intToBytes v' s.len).extract 0 32) : ℤ) % ((2 : ℤ) ^ (s.len * 8)) = (v'.toNat : ℤ) := by
     exact_mod_cast h_val
-  have h_nonneg_int : (v'.toNat : ℤ) = v' := by exact_mod_cast Int.toNat_of_nonneg hv_nonneg
-  have hsize32_int : ((intToBytes v' s.len).size : ℤ) = (32 : ℤ) := by exact_mod_cast hsize32
-  have hv_lt_nat_int : (v'.toNat : ℤ) < (2 : ℤ) ^ (s.len * 8 - 1) := by exact_mod_cast hv_lt_nat
-  simpa [hsize32, hsize32_int, h_val, h_val_int, hv_lt_nat, hv_lt_nat_int, h_nonneg_int]
+  simp [hsize32, h_val, h_val_int, hv_lt_nat, h_nonneg_int]
 
 private theorem intToBytes_decode_neg (s : ByteSize) (v' : Int) (hv_neg : ¬ v' ≥ 0)
     (hrange : -(2 ^ (s.len * 8 - 1) : Int) ≤ v') (hbits256 : s.len * 8 ≤ 256) :
@@ -568,7 +566,7 @@ theorem roundtrip_offset_fixedBytes (s : ByteSize) (v' : ByteArray) (enc data : 
             rw [ByteArray.extract_extract, add_zero]
           _ = (padRight v' 32).extract 0 s.len := by rw [hdata']
           _ = v' := padRight_extract_eq v' s.len hsz
-      simp [h_extract_v', hsize32]
+      simp [h_extract_v']
   · simp [hsz] at henc
 
 /-- roundtrip_int generalized to any offset. -/
@@ -610,7 +608,7 @@ theorem roundtrip_offset_int (s : ByteSize) (v' : Int) (enc data : ByteArray) (o
             have h_toNat_eq : ((2 : ℤ) ^ (s.len * 8)).toNat = 2 ^ (s.len * 8) := by
               have h_nonneg : 0 ≤ (2 : ℤ) ^ (s.len * 8) := by positivity
               have h := Int.toNat_of_nonneg h_nonneg
-              apply (Nat.cast_inj (R := ℤ)).mp; simpa using h
+              apply (Nat.cast_inj (R := ℤ)).mp; simp
             rw [h_toNat_eq] at h_toNat_lt
             exact lt_of_lt_of_le h_toNat_lt h_pow
           exact intToBytes_neg_size v' s.len (by omega) h_bounded
@@ -944,7 +942,7 @@ theorem intToBytes_size32 (s : ByteSize) (v' : Int)
       have h_pow : 2 ^ (s.len * 8) ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) (by omega)
       have h_toNat_eq : ((2 : ℤ) ^ (s.len * 8)).toNat = 2 ^ (s.len * 8) := by
         have h := Int.toNat_of_nonneg (by positivity : 0 ≤ (2 : ℤ) ^ (s.len * 8))
-        apply (Nat.cast_inj (R := ℤ)).mp; simpa using h
+        apply (Nat.cast_inj (R := ℤ)).mp; simp
       rw [h_toNat_eq] at h_toNat_lt; exact lt_of_lt_of_le h_toNat_lt h_pow
     exact intToBytes_neg_size v' s.len (by omega) h_bounded
 
@@ -969,7 +967,7 @@ theorem size_eq_int (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc : encod
     · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
     · rename_i hcond
       have hev := Except.ok.inj henc
-      push_neg at hcond
+      push Not at hcond
       simp only [headSize, isDynamic]; rw [← hev]; exact intToBytes_size32 s v' ⟨by omega, by omega⟩
   | _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
 
@@ -1240,12 +1238,12 @@ theorem tuple_static_elems (ts : List ABIType) (h : isDynamic (.tuple ts) = fals
   rw [this] at h2; exact absurd h2 (by simp)
 
 /-- Size of the static tuple packing = `headSize`. -/
-theorem tuplePackStatic_size : ∀ {ts : List ABIType} (all : All RoundtripVisitor ts),
+theorem tuplePackStatic_size : ∀ {ts : List ABIType} (_all : All RoundtripVisitor ts),
     (∀ t ∈ ts, isDynamic t = false) → ∀ (vs : List ABIValue) (encd : List (Bool × ByteArray)),
     instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs = Except.ok encd →
     (encd.foldl (fun acc x => acc ++ x.2) ByteArray.empty).size = headSize (.tuple ts) := by
-  intro ts all
-  induction all with
+  intro ts _all
+  induction _all with
   | nil =>
     intro _ vs encd hgo
     simp only [foldAll] at hgo
@@ -1473,7 +1471,7 @@ theorem dynHeadsFrom_size (l : List ByteArray) :
 theorem ddeg_concat (e : ABIType) (data : ByteArray)
     (hrt : ∀ (v : ABIValue) (ev : ByteArray) (o : Nat), ev.size < 2^256 → encode e v = Except.ok ev →
       data.extract o (o + ev.size) = ev → (foldABIType DecoderEntry e) data o = Except.ok (v, o + ev.size))
-    (hdvd : ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode e v = Except.ok ev → 32 ∣ ev.size) :
+    (_hdvd : ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode e v = Except.ok ev → 32 ∣ ev.size) :
     ∀ (vs : List ABIValue) (encd : List ByteArray) (i n off curTail maxEnd : Nat) (vals : List ABIValue),
       encodeListElems (encode e) vs = Except.ok encd →
       n = i + vs.length →
@@ -1584,7 +1582,7 @@ theorem arrayPack_dyn (encd : List ByteArray) :
       = (dynHeadsFrom (if encd.length = 0 then 32 else encd.length * 32) encd).foldl (·++·) ByteArray.empty
         ++ encd.foldl (·++·) ByteArray.empty := by
   unfold arrayPack
-  simp only [Bool.not_true, if_false]
+  simp only [Bool.not_true]
   rw [show (List.foldl packStep (if encd.length = 0 then 32 else encd.length * 32, ByteArray.empty, ByteArray.empty) encd) = _ from packStep_fold encd _ ByteArray.empty ByteArray.empty]
   simp [ByteArray.empty_append]
 
@@ -1764,7 +1762,7 @@ theorem roundtrip_array_wf (e : ABIType) (data : ByteArray)
           · subst hvemp
             simp only [encodeListElems, Except.ok.injEq] at hEL'; subst hEL'
             have hpe : packed = ByteArray.empty := by rw [hpk, helemT, arrayPack_dyn]; simp [dynHeadsFrom]
-            simp only [List.length_nil, Nat.mul_zero, Nat.add_zero]
+            simp only [List.length_nil]
             unfold decodeDynamicElemsGo
             simp only [Nat.lt_irrefl, ↓reduceDIte, List.reverse_nil]
             rw [show off + enc.size = off + 32 from by rw [hencsz, hpe, ByteArray.size_empty]]
