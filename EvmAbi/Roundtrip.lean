@@ -824,45 +824,6 @@ theorem encodeListElems_cons_ok (e : ABIType) (v : ABIValue) (rest : List ABIVal
       rw [hev, her] at henc
       exact ⟨ev, er, rfl, rfl, (Except.ok.inj (show Except.ok (ev :: er) = Except.ok encd from henc)).symm⟩
 
-/-- Decoding the contiguous concatenation of statically-packed element encodings recovers the values. -/
-lemma decodeStaticElemsGo_concat (e : ABIType)
-    (data : ByteArray)
-    (dec : ByteArray → Nat → Except Error (ABIValue × Nat))
-    (hdec : ∀ (v : ABIValue) (ev : ByteArray) (off : Nat),
-      encode e v = Except.ok ev → data.extract off (off + ev.size) = ev →
-      dec data off = Except.ok (v, off + ev.size)) :
-    ∀ (vals : List ABIValue) (encd : List ByteArray) (i n pos : Nat) (acc : List ABIValue),
-      n = i + vals.length →
-      encodeListElems (encode e) vals = Except.ok encd →
-      data.extract pos (pos + (encd.foldl (·++·) ByteArray.empty).size) = encd.foldl (·++·) ByteArray.empty →
-      decodeStaticElemsGo dec n i pos data acc
-        = Except.ok (acc.reverse ++ vals, pos + (encd.foldl (·++·) ByteArray.empty).size) := by
-  intro vals
-  induction vals with
-  | nil =>
-    intro encd i n pos acc hn henc hslice
-    simp only [encodeListElems, Except.ok.injEq] at henc
-    subst henc
-    simp only [List.foldl_nil, ByteArray.size_empty, Nat.add_zero, List.append_nil]
-    unfold decodeStaticElemsGo
-    have hni : ¬ i < n := by simp only [List.length_nil, Nat.add_zero] at hn; omega
-    simp [hni]
-  | cons v rest ih =>
-    intro encd i n pos acc hn henc hslice
-    obtain ⟨ev, er, hev, her, rfl⟩ := encodeListElems_cons_ok e v rest encd henc
-    rw [ba_foldl_cons] at hslice ⊢
-    have hsz : (ev ++ er.foldl (·++·) ByteArray.empty).size = ev.size + (er.foldl (·++·) ByteArray.empty).size := ByteArray.size_append
-    have hslice_ev := extract_append_left_of_slice data pos ev (er.foldl (·++·) ByteArray.empty) hslice
-    have hslice_rest := extract_append_right_of_slice data pos ev (er.foldl (·++·) ByteArray.empty) hslice
-    unfold decodeStaticElemsGo
-    have hni : i < n := by simp only [List.length_cons] at hn; omega
-    rw [dif_pos hni, hdec v ev pos hev hslice_ev]
-    show decodeStaticElemsGo dec n (i + 1) (pos + ev.size) data (v :: acc) = _
-    rw [ih er (i + 1) n (pos + ev.size) (v :: acc) (by simp only [List.length_cons] at hn ⊢; omega) her hslice_rest]
-    have h1 : (v :: acc).reverse ++ rest = acc.reverse ++ v :: rest := by simp
-    have h2 : pos + ev.size + (er.foldl (·++·) ByteArray.empty).size = pos + (ev ++ er.foldl (·++·) ByteArray.empty).size := by rw [hsz]; omega
-    rw [h1, h2]
-
 /-! ## Static encoding size = headSize -/
 
 theorem concat_size_uniform (encd : List ByteArray) (k : Nat) (h : ∀ b ∈ encd, b.size = k) :
@@ -950,8 +911,6 @@ theorem size_eq_fixedBytes (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc 
   | _ => badVal henc
 
 /-! ## Tuple encode (`go`) / `tuplePack` reduction helpers -/
-
-theorem go_nil_nil : instABIVisitorEncoderEntry.go [] All.nil [] = Except.ok [] := rfl
 
 theorem go_cons {t : ABIType} {ts' : List ABIType} (dyn : Bool) (enc : ABIValue → Except Error ByteArray)
     (rest : All EncoderEntry ts') (v : ABIValue) (vs' : List ABIValue) :
@@ -2485,20 +2444,6 @@ theorem foldl_headSize_init_le (ts : List ABIType) : ∀ i j, i ≤ j →
   induction ts with
   | nil => intro i j h; simpa
   | cons t ts' ih => intro i j h; rw [List.foldl_cons, List.foldl_cons]; exact ih _ _ (by omega)
-
-theorem foldl_headSize_ge_of_dyn (ts : List ABIType) (h : ts.any isDynamic = true) :
-    32 ≤ ts.foldl (fun a t => a + headSize t) 0 := by
-  induction ts with
-  | nil => simp at h
-  | cons t ts' ih =>
-    rw [List.foldl_cons, Nat.zero_add]
-    by_cases hd : isDynamic t = true
-    · have h32 : headSize t = 32 := headSize_dynamic t hd
-      calc (32 : Nat) = headSize t := h32.symm
-        _ ≤ ts'.foldl (fun a t => a + headSize t) (headSize t) := foldl_headSize_mono ts' (headSize t)
-    · have hdf : isDynamic t = false := by cases hh : isDynamic t; rfl; exact absurd hh hd
-      have h' : ts'.any isDynamic = true := by rw [List.any_cons, hdf, Bool.false_or] at h; exact h
-      exact le_trans (ih h') (foldl_headSize_init_le ts' 0 (headSize t) (by omega))
 
 theorem dyn_encoding_ge_32_bytes (v : ABIValue) (ev : ByteArray) (henc : encode .bytes v = Except.ok ev) : 32 ≤ ev.size := by
   cases v with
