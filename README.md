@@ -6,36 +6,38 @@ Based on the [Solidity ABI specification](https://docs.soliditylang.org/en/lates
 
 ## Roundtrip Theorem
 
-The central correctness property:
+Decoding an ABI-encoded value recovers the original. Static types roundtrip unconditionally; dynamic-element containers (arrays, tuples) roundtrip under a well-formedness bound `enc.size < 2 ^ 256` — without it an encode can succeed while producing head pointers that overflow 32 bytes and corrupt the layout, so the *unconditional* statement is genuinely false, not merely unproven. The top-level results (no `sorry`):
 
 ```lean4
-theorem roundtrip (t : ABIType) (v : ABIValue) (data : ByteArray)
+-- any well-formed type (nested structs included), decoded at offset 0
+theorem roundtrip_wf (t : ABIType) (hwf : WellFormedType t)
+    (v : ABIValue) (data : ByteArray) (hsz : data.size < 2 ^ 256)
     (henc : encode t v = Except.ok data) : decode t data 0 = Except.ok (v, data.size)
-```
 
-If encoding succeeds, decoding the resulting bytes recovers the original value and correctly reports the byte length consumed.
+-- function-call level: encode an argument list then decode it back
+theorem roundtrip_args_wff (types : List ABIType) (data : ByteArray) (values : List ABIValue)
+    (hwf : ∀ t ∈ types, WellFormedType t) (hsz : data.size < 2 ^ 256)
+    (henc : encodeArgs types values = Except.ok data) : decodeArgs types data 0 = Except.ok values
+```
 
 ### Proof structure
 
-A second ABIVisitor instance, `RoundtripVisitor`, carries per-type roundtrip proofs piggybacking on the same structural fold (`foldABIType`) that encoding and decoding use, enabling compositional proofs for compound types.
+Encoding and decoding are both structural folds over `ABIType` (`foldABIType`) via an `ABIVisitor`. Roundtrip proofs piggyback on the same fold: `WFFacts` bundles the three facts a type contributes (offset-general roundtrip, static size law, 32-byte alignment), and `wfFactsWF` builds them by structural recursion over every well-formed type — so compound types (arrays, nested tuples/structs) compose automatically, with no per-signature proof.
 
 ### Proven cases
 
 | Type | Status | Theorems |
 |---|---|---|
-| `uintN` | ✅ | `roundtrip_uint`, `roundtrip_offset_uint` |
-| `intN` | ✅ | `roundtrip_int`, `roundtrip_offset_int` |
-| `bool` | ✅ | `roundtrip_bool`, `roundtrip_offset_bool` |
-| `address` | ✅ | `roundtrip_address`, `roundtrip_offset_address` |
-| `fixedBytesN` | ✅ | `roundtrip_fixedBytes`, `roundtrip_offset_fixedBytes` |
-| `bytes` | ✅ | `roundtrip_bytes` |
-| `string` | ✅ | `roundtrip_string` |
-| `T[]` | 🚧 | dynamic `onArray` case |
-| `T[n]` | 🚧 | dynamic sub-case, static cons induction step |
-| `(T1,...,Tn)` | 🚧 | `onTuple` |
-| **all** | 🚧 | main `roundtrip` theorem (blocks on above) |
+| `uintN` / `intN` | ✅ | `roundtrip_uint` / `roundtrip_int` (+ `roundtrip_offset_*`) |
+| `bool` / `address` / `fixedBytesN` | ✅ | `roundtrip_bool` / `roundtrip_address` / `roundtrip_fixedBytes` |
+| `bytes` / `string` | ✅ | `roundtrip_bytes` / `roundtrip_string` |
+| `T[]` (dynamic) | ✅ WF | `roundtrip_array_wf` (both static- and dynamic-element) |
+| `T[n]` (dynamic) | ✅ WF | `roundtrip_fixedArray_wf` |
+| `(T1,...,Tn)` (dynamic) | ✅ WF | `roundtrip_tuple_wf` (static + dynamic dispatch) |
+| any well-formed type (nested structs) | ✅ WF | `wfFactsWF`, `roundtrip_wf` |
+| function args (`encodeArgs`/`decodeArgs`) | ✅ WF | `roundtrip_args_wff` |
 
-The offset-generalized variants (`roundtrip_offset_*`) prove the property at arbitrary offsets within a larger buffer — essential for composing array/tuple proofs where elements are decoded from non-zero positions.
+✅ WF = proved under the well-formedness bound `enc.size < 2 ^ 256`; the one excluded case is an empty dynamic fixed-array (`fixedArray 0 e`, `e` dynamic), which encodes to 0 bytes and genuinely fails to decode. Full alignment lemmas (`szdvd_*`) and offset-generalized atom variants (`roundtrip_offset_*`, needed to decode elements from non-zero positions) are proved too. No `sorry`.
 
 ## Usage
 
