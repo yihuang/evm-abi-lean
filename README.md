@@ -64,6 +64,10 @@ lake exe abi-lean-test
 
 Covers spec encoding vectors, decoding, 12 standard Ethereum function selectors (transfer, balanceOf, approve, ...), 40+ roundtrip assertions across all type categories, and error cases.
 
+The proof surface also includes selector/hash size facts such as `EvmAbi.Hash.keccak256_size` and
+`EvmAbi.Hash.functionSelector_size`, capturing the ABI-spec requirement that a function selector is
+the first 4 bytes of the Keccak-256 hash of the canonical signature.
+
 ## License
 
 MIT

@@ -161,6 +161,15 @@ def keccak256 (input : ByteArray) : ByteArray :=
   let stateBytes := lanesToBytes afterAbsorb
   stateBytes.extract 0 outputBytes
 
+/-- Converting the 25-lane Keccak state back to bytes yields 200 bytes. -/
+theorem lanesToBytes_size (lanes : Array UInt64) : (lanesToBytes lanes).size = 200 := by
+  simp [lanesToBytes, ByteArray.size]
+
+/-- Keccak-256 always returns 32 bytes. -/
+theorem keccak256_size (input : ByteArray) : (keccak256 input).size = outputBytes := by
+  unfold keccak256
+  simp [outputBytes, ByteArray.size_extract, lanesToBytes_size]
+
 ----------------------------------------------------------------------
 -- Function Selector
 ----------------------------------------------------------------------
@@ -171,6 +180,11 @@ def functionSelector (signature : String) : ByteArray :=
   let sigBytes := signature.toUTF8
   let hash := keccak256 sigBytes
   hash.extract 0 4
+
+/-- ABI function selectors are exactly 4 bytes, per the Solidity ABI specification. -/
+theorem functionSelector_size (signature : String) : (functionSelector signature).size = 4 := by
+  unfold functionSelector
+  simp [ByteArray.size_extract, keccak256_size]
 
 /- Format a function selector as a hex string -/
 def selectorHex (sig : String) : String :=
