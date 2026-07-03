@@ -13,6 +13,13 @@ open EvmAbi.ABI.Encode
 open EvmAbi.ABI.Decode
 set_option autoImplicit false
 
+/-- Discharge a wrong-`ABIValue`-constructor case: the `encode … = ok` hypothesis is false. -/
+local macro "badVal" h:ident : tactic =>
+  `(tactic| first
+    | exact absurd $h (by simp)
+    | exact absurd $h (by unfold encode foldABIType; simp)
+    | exact absurd $h (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp))
+
 /-! ## Dynamic bytes/string helpers -/
 
 private lemma dynamicRoundtrip_preamble (b : ByteArray) (hb256 : b.size < 2 ^ 256) :
@@ -64,7 +71,7 @@ theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray)
           _ = v' := bytesToNat_uint256ToBytes v'
       simp [hsize32, h_val, hm]
     · simp [hm] at henc
-  | _ => unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc; simp at henc
+  | _ => badVal henc
 
 theorem roundtrip_bool (v : ABIValue) (data : ByteArray)
     (henc : encode .bool v = Except.ok data) : decode .bool data 0 = Except.ok (v, data.size) := by
@@ -84,7 +91,7 @@ theorem roundtrip_bool (v : ABIValue) (data : ByteArray)
           rw [← hsize32, extract_self]
         _ = (if v' then 1 else 0) := bytesToNat_uint256ToBytes (if v' then 1 else 0)
     simp [hsize32]; rw [h_val]; cases v' <;> simp
-  | _ => unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc; simp at henc
+  | _ => badVal henc
 
 theorem roundtrip_address (v : ABIValue) (data : ByteArray)
     (henc : encode .address v = Except.ok data) : decode .address data 0 = Except.ok (v, data.size) := by
@@ -102,7 +109,7 @@ theorem roundtrip_address (v : ABIValue) (data : ByteArray)
       have h_sz : (padLeft v' 32).size = 32 := by
         unfold padLeft; simp [hsize20, zeros_size]
       simp [h_extract, h_sz]
-  | _ => unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc; simp at henc
+  | _ => badVal henc
 
 theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
     (henc : encode (.fixedBytes s) v = Except.ok data) : decode (.fixedBytes s) data 0 = Except.ok (v, data.size) := by
@@ -118,7 +125,7 @@ theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
       have h_size : (padRight v' 32).size = 32 := padRight_size_32 v' (by rw [hsz]; exact s.h.right)
       simp [h_extract, h_size]
     · simp [hsz] at henc
-  | _ => unfold encode at henc; unfold foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc; simp at henc
+  | _ => badVal henc
 
 theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
     (henc : encode .bytes v = Except.ok data) : decode .bytes data 0 = Except.ok (v, data.size) := by
@@ -613,26 +620,26 @@ private theorem roundtrip_off_uint (s : ByteSize) (v : ABIValue) (enc data : Byt
     decode (.uint s) data off = Except.ok (v, off + enc.size) := by
   rcases v with v'|i|b|ba|str|addr|arr|tup
   · exact roundtrip_offset_uint s v' enc data off henc hdata
-  all_goals exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  all_goals badVal henc
 
 private theorem roundtrip_off_int (s : ByteSize) (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode (.int s) v = Except.ok enc)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode (.int s) data off = Except.ok (v, off + enc.size) := by
   rcases v with v'|i|b|ba|str|addr|arr|tup
-  · exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  · badVal henc
   · exact roundtrip_offset_int s i enc data off henc hdata
-  all_goals exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  all_goals badVal henc
 
 private theorem roundtrip_off_bool (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .bool v = Except.ok enc)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode .bool data off = Except.ok (v, off + enc.size) := by
   rcases v with v'|i|b|ba|str|addr|arr|tup
-  · exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
-  · exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  · badVal henc
+  · badVal henc
   · exact roundtrip_offset_bool b enc data off henc hdata
-  all_goals exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  all_goals badVal henc
 
 private theorem roundtrip_off_address (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .address v = Except.ok enc)
@@ -640,7 +647,7 @@ private theorem roundtrip_off_address (v : ABIValue) (enc data : ByteArray) (off
     decode .address data off = Except.ok (v, off + enc.size) := by
   cases v
   case address addr => exact roundtrip_offset_address addr enc data off henc hdata
-  all_goals exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  all_goals badVal henc
 
 private theorem roundtrip_off_fixedBytes (s : ByteSize) (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode (.fixedBytes s) v = Except.ok enc)
@@ -648,7 +655,7 @@ private theorem roundtrip_off_fixedBytes (s : ByteSize) (v : ABIValue) (enc data
     decode (.fixedBytes s) data off = Except.ok (v, off + enc.size) := by
   cases v
   case bytes ba => exact roundtrip_offset_fixedBytes s ba enc data off henc hdata
-  all_goals exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  all_goals badVal henc
 
 theorem roundtrip_off_bytes (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .bytes v = Except.ok enc)
@@ -669,7 +676,7 @@ theorem roundtrip_off_bytes (v : ABIValue) (enc data : ByteArray) (off : Nat)
         have h_ge : ¬ v'.size < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
           rw [← h256_eq]; exact hv256
         simp [h_ge])
-  all_goals exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  all_goals badVal henc
 
 theorem roundtrip_off_string (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .string v = Except.ok enc)
@@ -692,7 +699,7 @@ theorem roundtrip_off_string (v : ABIValue) (enc data : ByteArray) (off : Nat)
         have h_ge' : ¬ v'.utf8ByteSize < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
           simpa using h_ge
         simp [h_ge'])
-  all_goals exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  all_goals badVal henc
 
 /-! ## Array/tuple packing helpers -/
 
@@ -874,7 +881,7 @@ theorem size_eq_uint (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc : enco
       have hv256 : v' < 2 ^ 256 := lt_of_lt_of_le hb (Nat.pow_le_pow_right (by omega) (by have := s.h.right; omega))
       simp only [headSize, isDynamic]; rw [← hev]; exact uint256ToBytes_size v' (natToBytes_size_bound v' hv256)
     · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
-  | _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  | _ => badVal henc
 
 theorem size_eq_int (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc : encode (.int s) v = Except.ok ev) : ev.size = headSize (.int s) := by
   cases v with
@@ -887,7 +894,7 @@ theorem size_eq_int (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc : encod
       have hev := Except.ok.inj henc
       push Not at hcond
       simp only [headSize, isDynamic]; rw [← hev]; exact intToBytes_size32 s v' ⟨by omega, by omega⟩
-  | _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  | _ => badVal henc
 
 theorem size_eq_bool (v : ABIValue) (ev : ByteArray) (henc : encode .bool v = Except.ok ev) : ev.size = headSize .bool := by
   cases v with
@@ -896,7 +903,7 @@ theorem size_eq_bool (v : ABIValue) (ev : ByteArray) (henc : encode .bool v = Ex
     have hev := Except.ok.inj henc
     have hbits : (if v' then 1 else 0) < 2 ^ 256 := by split <;> omega
     simp only [headSize, isDynamic]; rw [← hev]; exact uint256ToBytes_size _ (natToBytes_size_bound _ hbits)
-  | _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  | _ => badVal henc
 
 theorem size_eq_address (v : ABIValue) (ev : ByteArray) (henc : encode .address v = Except.ok ev) : ev.size = headSize .address := by
   cases v with
@@ -907,7 +914,7 @@ theorem size_eq_address (v : ABIValue) (ev : ByteArray) (henc : encode .address 
       have hev := Except.ok.inj henc
       simp only [headSize, isDynamic]; rw [← hev]; unfold padLeft; simp [h20, zeros_size]
     · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
-  | _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  | _ => badVal henc
 
 theorem size_eq_fixedBytes (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc : encode (.fixedBytes s) v = Except.ok ev) : ev.size = headSize (.fixedBytes s) := by
   cases v with
@@ -918,7 +925,7 @@ theorem size_eq_fixedBytes (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc 
       have hev := Except.ok.inj henc
       simp only [headSize, isDynamic]; rw [← hev]; exact padRight_size_32 v' (by rw [hsz]; exact s.h.right)
     · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
-  | _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  | _ => badVal henc
 
 /-! ## Tuple encode (`go`) / `tuplePack` reduction helpers -/
 
@@ -1460,7 +1467,7 @@ theorem szdvd_bytes (v : ABIValue) (ev : ByteArray) (_hsz : ev.size < 2^256) (he
         · simp [zeros_size]; unfold roundUp32; omega
       rw [hPsz, hpad]; exact Nat.dvd_add (by norm_num) (roundUp32_dvd v'.size)
     · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
-  | _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  | _ => badVal henc
 
 theorem szdvd_string (v : ABIValue) (ev : ByteArray) (_hsz : ev.size < 2^256) (henc : encode .string v = Except.ok ev) : 32 ∣ ev.size := by
   cases v with
@@ -1478,7 +1485,7 @@ theorem szdvd_string (v : ABIValue) (ev : ByteArray) (_hsz : ev.size < 2^256) (h
         · simp [zeros_size]; unfold roundUp32; omega
       rw [hPsz, hpad]; exact Nat.dvd_add (by norm_num) (roundUp32_dvd v'.toUTF8.size)
     · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
-  | _ => exact absurd henc (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp; simp)
+  | _ => badVal henc
 
 /-- `bytes[]` roundtrips under the well-formedness bound (`enc.size < 2^256`). -/
 theorem roundtrip_bytes_array_wf (v : ABIValue) (enc data : ByteArray) (off : Nat)
@@ -1978,7 +1985,7 @@ theorem roundtrip_tuple_dyn_wf (ts : List ABIType) (data : ByteArray)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode (.tuple ts) data off = Except.ok (v, off + enc.size) := by
   cases v with
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => exact absurd henc (by unfold encode foldABIType; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
   | tuple vs =>
     unfold encode foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
     cases hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs with
@@ -2154,7 +2161,7 @@ theorem szdvd_tuple (ts : List ABIType)
     (v : ABIValue) (ev : ByteArray) (hsz : ev.size < 2^256) (henc : encode (.tuple ts) v = Except.ok ev) :
     32 ∣ ev.size := by
   cases v with
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => exact absurd henc (by unfold encode foldABIType; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
   | tuple vs =>
     unfold encode foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
     cases hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs with
@@ -2292,7 +2299,7 @@ theorem roundtrip_tuple_stat_wf (ts : List ABIType) (data : ByteArray)
   have hany_ts : ts.any isDynamic = false := by simpa [List.any_map] using hany
   have hstat_all : ∀ t ∈ ts, isDynamic t = false := tuple_static_elems ts hstat_tuple
   cases v with
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => exact absurd henc (by unfold encode foldABIType; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
   | tuple vs =>
     unfold encode foldABIType at henc; delta instABIVisitorEncoderEntry at henc; dsimp at henc
     cases hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs with
@@ -2544,7 +2551,7 @@ theorem dyn_encoding_ge_32_bytes (v : ABIValue) (ev : ByteArray) (henc : encode 
     · have he : ev = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size) := (Except.ok.inj henc).symm
       rw [he, ByteArray.size_append]; have := uint256ToBytes_size_ge v'.size; omega
     · exact absurd henc (by simp)
-  | uint _ | int _ | bool _ | string _ | address _ | array _ | tuple _ => exact absurd henc (by unfold encode foldABIType; simp)
+  | uint _ | int _ | bool _ | string _ | address _ | array _ | tuple _ => badVal henc
 
 theorem dyn_encoding_ge_32_string (v : ABIValue) (ev : ByteArray) (henc : encode .string v = Except.ok ev) : 32 ≤ ev.size := by
   cases v with
@@ -2554,7 +2561,7 @@ theorem dyn_encoding_ge_32_string (v : ABIValue) (ev : ByteArray) (henc : encode
     · have he : ev = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size) := (Except.ok.inj henc).symm
       rw [he, ByteArray.size_append]; have := uint256ToBytes_size_ge v'.toUTF8.size; omega
     · exact absurd henc (by simp)
-  | uint _ | int _ | bool _ | bytes _ | address _ | array _ | tuple _ => exact absurd henc (by unfold encode foldABIType; simp)
+  | uint _ | int _ | bool _ | bytes _ | address _ | array _ | tuple _ => badVal henc
 
 theorem dyn_encoding_ge_32_array (e : ABIType) (v : ABIValue) (ev : ByteArray) (henc : encode (.array e) v = Except.ok ev) : 32 ≤ ev.size := by
   cases v with
@@ -2662,7 +2669,7 @@ theorem dyn_encoding_ge_32_tuple (ts : List ABIType) (hdyn : isDynamic (.tuple t
       have hentry := go_has_dyn_entry ts vs encd hgo hany_ts
       have hheads := tupleHeadsFrom_ge_32 encd (ts.foldl (fun a t => a + headSize t) 0) hentry
       omega
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => exact absurd henc (by unfold encode foldABIType; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
 
 theorem dyn_encoding_ge_32 (t : ABIType) (hwf : WellFormedType t) (hdyn : isDynamic t = true)
     (v : ABIValue) (ev : ByteArray) (henc : encode t v = Except.ok ev) : 32 ≤ ev.size := by
@@ -2731,7 +2738,7 @@ theorem dyn_tuple_hbd (ts : List ABIType) (hwf : ∀ t ∈ ts, WellFormedType t)
       obtain ⟨b, hb, hb1, hbsize⟩ := go_has_big_dyn_entry ts hwf vs encd hgo hdyn hbnd_dyn
       have := tupleTails_mem_le encd b hb hb1
       omega
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => exact absurd henc (by unfold encode foldABIType; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
 
 theorem size_eq_tuple_wf (ts : List ABIType)
     (hsize : ∀ t ∈ ts, isDynamic t = false → ∀ (v : ABIValue) (ev : ByteArray), encode t v = Except.ok ev → ev.size = headSize t)
@@ -2749,7 +2756,7 @@ theorem size_eq_tuple_wf (ts : List ABIType)
       have hany : (ts.map isDynamic).any id = false := by rw [tuple_any_isDynamic]; exact hstat
       rw [hpack, tuplePack_static _ _ _ hany]
       exact tuplePackStatic_size_wf ts hsize (tuple_static_elems ts hstat) vs encd hgo
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => exact absurd henc (by unfold encode foldABIType; simp)
+  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
 
 /-- `WFFacts` for every well-formed type, INCLUDING tuples (structs). The dynamic-tuple `rt`
     discharges its head-area bound internally via `dyn_tuple_hbd`, so it stays bound-free and
