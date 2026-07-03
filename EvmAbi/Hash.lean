@@ -113,7 +113,7 @@ def bytesToLanes (b : ByteArray) : Array UInt64 :=
       else
         let byteIdx := byteOff + j
         if h : byteIdx < b.size then
-          decodeLane (j + 1) (laneVal ||| ((b[byteIdx]!.toUInt64) <<< (8 * j).toUInt64))
+          decodeLane (j + 1) (laneVal ||| ((b[byteIdx].toUInt64) <<< (8 * j).toUInt64))
         else
           decodeLane (j + 1) laneVal
     acc.set! i (decodeLane 0 0)

@@ -66,8 +66,8 @@ inductive ABIType : Type where
   | int          (s : ByteSize)
   | bool
   | address
-  | bytes                     -- dynamic bytes (was dynamicBytes)
-  | fixedBytes   (s : ByteSize)  -- fixed bytes N (was bytes)
+  | bytes                     -- dynamic bytes
+  | fixedBytes   (s : ByteSize)  -- fixed bytes N
   | string
   | array        (elem : ABIType)             -- dynamic T[]
   | fixedArray   (n : Nat) (elem : ABIType)   -- fixed T[n]
@@ -92,7 +92,6 @@ inductive All (φ : ABIType → Type) : List ABIType → Type where
   | nil  : All φ []
   | cons : φ t → All φ ts → All φ (t :: ts)
 
-
 /-! ## ABIVisitor — catamorphism over ABIType -/
 
 class ABIVisitor (φ : ABIType → Type) where
@@ -108,7 +107,6 @@ class ABIVisitor (φ : ABIType → Type) where
   onTuple        : {ts : List ABIType} → All φ ts → φ (.tuple ts)
 
 /-! ## Simple properties -/
-
 
 def isDynamic : ABIType → Bool
   | .bytes | .string | .array _ => true
