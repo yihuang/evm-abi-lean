@@ -1696,17 +1696,6 @@ inductive WellFormedType : ABIType → Prop
   | fixedArray (n : Nat) (e : ABIType) : (isDynamic e = true → 0 < n) → WellFormedType e → WellFormedType (.fixedArray n e)
   | tuple (ts : List ABIType) : (∀ t ∈ ts, WellFormedType t) → WellFormedType (.tuple ts)
 
-theorem foldl_headSize_mono (ts : List ABIType) : ∀ (init : Nat), init ≤ ts.foldl (fun a t => a + headSize t) init := by
-  induction ts with
-  | nil => intro init; simp
-  | cons t ts' ih => intro init; rw [List.foldl_cons]; exact le_trans (by omega) (ih (init + headSize t))
-
-theorem foldl_headSize_init_le (ts : List ABIType) : ∀ i j, i ≤ j →
-    ts.foldl (fun a t => a + headSize t) i ≤ ts.foldl (fun a t => a + headSize t) j := by
-  induction ts with
-  | nil => intro i j h; simpa
-  | cons t ts' ih => intro i j h; rw [List.foldl_cons, List.foldl_cons]; exact ih _ _ (by omega)
-
 theorem dyn_encoding_ge_32_bytes (v : ABIValue) (ev : ByteArray) (henc : encode .bytes v = Except.ok ev) : 32 ≤ ev.size := by
   cases v with
   | bytes v' =>
