@@ -24,6 +24,8 @@ theorem roundtrip_args_wff (types : List ABIType) (data : ByteArray) (values : L
 
 Encoding and decoding are both structural folds over `ABIType` (`foldABIType`) via an `ABIVisitor`. Roundtrip proofs piggyback on the same fold: `WFFacts` bundles the three facts a type contributes (offset-general roundtrip, static size law, 32-byte alignment), and `wfFactsWF` builds them by structural recursion over every well-formed type — so compound types (arrays, nested tuples/structs) compose automatically, with no per-signature proof.
 
+The proof is organized as a dependency chain under `EvmAbi/Roundtrip/`: `Basic` (tactic macros + ByteArray-slice read helpers) → `Primitives` (atom/bytes/string roundtrips) → `Packing` (encoder characterization + the `encode_*_inv` inversion lemmas) → `DynArray` / `DynTuple` (the WF container roundtrips, each built from grid/pack step lemmas) → `EvmAbi/Roundtrip.lean` (the `wfFactsWF` visitor and the top-level results).
+
 ### Proven cases
 
 | Type | Status | Theorems |
