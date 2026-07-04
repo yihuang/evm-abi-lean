@@ -11,7 +11,7 @@ namespace EvmAbi.ABI.Encode
 /-- EncoderEntry t = (isDynamic, encoder function) for type t. -/
 def EncoderEntry (_t : ABIType) : Type := Bool × (ABIValue → Except Error ByteArray)
 
-/- Encode a list of values using an element encoder (explicit recursion for proofs). -/
+/-- Encode a list of values using an element encoder (explicit recursion for proofs). -/
 def encodeListElems (elemEnc : ABIValue → Except Error ByteArray) : List ABIValue → Except Error (List ByteArray)
   | [] => Except.ok []
   | v :: vs => do
@@ -19,13 +19,6 @@ def encodeListElems (elemEnc : ABIValue → Except Error ByteArray) : List ABIVa
     let enc_rest ← encodeListElems elemEnc vs
     Except.ok (enc_v :: enc_rest)
 
-/-- Theorem: encodeListElems equals the foldr version used previously. -/
-theorem encodeListElems_foldr_eq (elemEnc : ABIValue → Except Error ByteArray) (vals : List ABIValue) :
-    encodeListElems elemEnc vals = vals.foldr (λ v acc => (elemEnc v) >>= λ encd => acc >>= λ rest => .ok (encd :: rest)) (.ok []) := by
-  induction vals with
-  | nil => rfl
-  | cons v vs ih =>
-    simp [encodeListElems, ih]
 
 /-- Pack encoded array elements. -/
 def arrayPack (elemDynamic : Bool) (encoded : List ByteArray) : ByteArray :=

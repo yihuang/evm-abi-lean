@@ -113,7 +113,7 @@ def bytesToLanes (b : ByteArray) : Array UInt64 :=
       else
         let byteIdx := byteOff + j
         if h : byteIdx < b.size then
-          decodeLane (j + 1) (laneVal ||| ((b[byteIdx]!.toUInt64) <<< (8 * j).toUInt64))
+          decodeLane (j + 1) (laneVal ||| ((b[byteIdx].toUInt64) <<< (8 * j).toUInt64))
         else
           decodeLane (j + 1) laneVal
     acc.set! i (decodeLane 0 0)
@@ -172,12 +172,6 @@ def functionSelector (signature : String) : ByteArray :=
   let hash := keccak256 sigBytes
   hash.extract 0 4
 
-/- Format a function selector as a hex string -/
-def selectorHex (sig : String) : String :=
-  let sel := functionSelector sig
-  "0x" ++ sel.foldl (fun acc byte =>
-    acc ++ String.ofList [hexDigit (byte.toNat / 16), hexDigit (byte.toNat % 16)]
-  ) ""
 
 
 end EvmAbi.Hash

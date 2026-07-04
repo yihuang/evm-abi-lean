@@ -5,7 +5,7 @@ import EvmAbi.Decode
 
 open EvmAbi.ABI
 
-/- 1-byte ByteArray for testing. -/
+/-- Single-byte ByteArray constructor. -/
 def mkSingleton (b : UInt8) : ByteArray := { data := Array.mk [b] }
 
 /- Size of mkSingleton is always 1. -/
@@ -54,7 +54,7 @@ theorem numBytes_lt_pow (n : Nat) (k : Nat) (hn : n < 256 ^ k) : numBytes n ≤ 
 
 /- A 256-bit value fits in at most 32 bytes. -/
 theorem numBytes_bound (n : Nat) (hn : n < 2 ^ 256) : numBytes n ≤ 32 := by
-  have h256_eq : 2 ^ 256 = 256 ^ 32 := by native_decide
+  have h256_eq : 2 ^ 256 = 256 ^ 32 := by decide
   have hn' : n < 256 ^ 32 := by simpa [h256_eq] using hn
   exact numBytes_lt_pow n 32 hn'
 
@@ -117,7 +117,7 @@ theorem natToBytes_size_range (n : Nat) (k : Nat) (hk : 0 < k) (h_lo : 2 ^ (k * 
       _ = 2 ^ (8 * k) := by simp [Nat.mul_comm]
       _ = (2 ^ 8) ^ k := by rw [Nat.pow_mul]
       _ = 256 ^ k := by
-        have h256 : (2 : Nat) ^ 8 = 256 := by native_decide
+        have h256 : (2 : Nat) ^ 8 = 256 := by decide
         simp [h256]
   have h_lo' : 256 ^ (k - 1) ≤ n := by
     have h_exp_le : 8 * (k - 1) ≤ k * 8 - 1 := by omega
@@ -125,7 +125,7 @@ theorem natToBytes_size_range (n : Nat) (k : Nat) (hk : 0 < k) (h_lo : 2 ^ (k * 
       Nat.pow_le_pow_right (by omega : 0 < 2) h_exp_le
     calc
       256 ^ (k - 1) = (2 ^ 8) ^ (k - 1) := by
-        have h256 : (2 : Nat) ^ 8 = 256 := by native_decide
+        have h256 : (2 : Nat) ^ 8 = 256 := by decide
         simp [h256]
       _ = 2 ^ (8 * (k - 1)) := by rw [Nat.pow_mul]
       _ ≤ 2 ^ (k * 8 - 1) := h_pow_le
@@ -133,10 +133,8 @@ theorem natToBytes_size_range (n : Nat) (k : Nat) (hk : 0 < k) (h_lo : 2 ^ (k * 
   have h_numBytes : numBytes n = k := by
     apply Nat.le_antisymm
     · exact numBytes_lt_pow n k h_hi'
-    · have h_ge : k ≤ numBytes n := by
-        have h_nb := numBytes_ge_pow n (k - 1) h_lo'
-        omega
-      exact h_ge
+    · have h_nb := numBytes_ge_pow n (k - 1) h_lo'
+      omega
   calc
     (natToBytes n).size = (natToBytes.go n ByteArray.empty).size := by
       unfold natToBytes
@@ -150,7 +148,7 @@ theorem natToBytes_size_range (n : Nat) (k : Nat) (hk : 0 < k) (h_lo : 2 ^ (k * 
 /- natToBytes for a value < 2^256 fits in 32 bytes. -/
 theorem natToBytes_size_bound (v : Nat) (hv : v < 2 ^ 256) : (natToBytes v).size ≤ 32 := by
   unfold natToBytes; split
-  · native_decide
+  · decide
   · rename_i hv0
     have h_sz : (natToBytes.go v ByteArray.empty).size = numBytes v := by
       simpa using size_go v ByteArray.empty
@@ -273,13 +271,14 @@ theorem extract_first_n (b c : ByteArray) : (b ++ c).extract 0 b.size = b := by
   apply ByteArray.ext; simp
 
 /- padRight b 32 extracts back to b for the first sz bytes. -/
-theorem padRight_extract_eq (b : ByteArray) (sz : Nat) (hsz : b.size = sz) : (padRight b 32).extract 0 sz = b := by
-  subst hsz
+/- padRight b n extracts back to b for the first b.size bytes. -/
+theorem padRight_extract_self (b : ByteArray) (n : Nat) : (padRight b n).extract 0 b.size = b := by
   unfold padRight; split
   · exact extract_self b
-  · rename_i h_not
-    have h_lt : b.size < 32 := by omega
-    apply extract_first_n
+  · exact extract_first_n b (zeros (n - b.size))
+
+theorem padRight_extract_eq (b : ByteArray) (sz : Nat) (hsz : b.size = sz) : (padRight b 32).extract 0 sz = b := by
+  subst hsz; exact padRight_extract_self b 32
 
 /- padLeft b 32 with a 20-byte address extracts the original at offset 12. -/
 theorem padLeft_extract_address (b : ByteArray) (h20 : b.size = 20) : (padLeft b 32).extract 12 32 = b := by
@@ -293,12 +292,6 @@ theorem padLeft_extract_address (b : ByteArray) (h20 : b.size = 20) : (padLeft b
   · simp [h20, zeros_size 12]
   · intro i hi
     simp [h20, zeros_size 12] at hi ⊢
-
-/- padRight b n extracts back to b for the first b.size bytes. -/
-theorem padRight_extract_self (b : ByteArray) (n : Nat) : (padRight b n).extract 0 b.size = b := by
-  unfold padRight; split
-  · exact extract_self b
-  · exact extract_first_n b (zeros (n - b.size))
 
 /- padRight b 32 is always 32 bytes when b ≤ 32 bytes. -/
 theorem padRight_size_32 (b : ByteArray) (h : b.size ≤ 32) : (padRight b 32).size = 32 := by
@@ -316,8 +309,6 @@ theorem roundtrip_bytes_val (v' : ByteArray) (hv256 : v'.size < 2 ^ 256) :
     (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract 32 (32 + v'.size) = v' := by
   have ha_sz : (uint256ToBytes v'.size).size = 32 :=
     uint256ToBytes_size v'.size (natToBytes_size_bound v'.size hv256)
-  have h_val_sz : v'.size ≤ roundUp32 v'.size := by
-    have : roundUp32 v'.size = ((v'.size + 31) / 32) * 32 := rfl; omega
   have h_sub : (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)).extract
     (uint256ToBytes v'.size).size ((uint256ToBytes v'.size).size + v'.size) = 
     (padRight v' (roundUp32 v'.size)).extract 0 v'.size :=
@@ -354,11 +345,6 @@ theorem intToBytes_neg_size (v' : Int) (byteLen : Nat) (hv_nonpos : ¬ v' ≥ 0)
         = (32 - (natToBytes u).size) + (natToBytes u).size := by rw [h_sz']
     _ = 32 := by omega
 
-/- (2 : Int) ^ b is non-negative for all b. -/
-theorem two_pow_nonneg (b : Nat) : 0 ≤ (2 : Int) ^ b := by positivity
-
-theorem two_pow_nat_coe (b : Nat) : (2 : Int) ^ b = ((2 : Nat) ^ b : Int) := by
-  simp
 
 /- .toNat of (2 : Int) ^ b equals (2 : Nat) ^ b. -/
 theorem two_toNat_eq (b : Nat) : ((2 : Int) ^ b).toNat = (2 : Nat) ^ b := by

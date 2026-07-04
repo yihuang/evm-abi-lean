@@ -9,6 +9,10 @@ set_option autoImplicit false
 
 /-! ## Atomic proofs -/
 
+/-- `2 ^ 256` as a decimal literal — the form the decoder's `< 2 ^ 256` bound normalizes to;
+proved once so the 78-digit constant is not repeated across the atom roundtrips. -/
+theorem two_pow_256 : (2 : ℕ) ^ 256 = 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by decide
+
 theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray)
     (henc : encode (.uint s) v = Except.ok data) : decode (.uint s) data 0 = Except.ok (v, data.size) := by
   cases v with
@@ -87,7 +91,7 @@ theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
 
 theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
     (henc : encode .bytes v = Except.ok data) : decode .bytes data 0 = Except.ok (v, data.size) := by
-  have h256_eq : (2 : ℕ) ^ 256 = 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by native_decide
+  have h256_eq := two_pow_256
   cases v with
   | bytes v' =>
     by_cases hv256 : v'.size < 2 ^ 256
@@ -100,9 +104,7 @@ theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
       exact decodeDynamicBytes_roundtrip v' hv256 (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) rfl
     · have hval : encode .bytes (ABIValue.bytes v') = Except.error (.dataTooLong v'.size) := by
         openEncG
-        have h_ge : ¬ v'.size < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
-          rw [← h256_eq]; exact hv256
-        simp [h_ge]
+        rw [two_pow_256] at hv256; simp [hv256]
       rw [hval] at henc; simp at henc
   | uint n =>
     have h_wrong : encode .bytes (ABIValue.uint n) = Except.error .typeValueMismatch := by
@@ -135,7 +137,7 @@ theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
 
 theorem roundtrip_string (v : ABIValue) (data : ByteArray)
     (henc : encode .string v = Except.ok data) : decode .string data 0 = Except.ok (v, data.size) := by
-  have h256_eq : (2 : ℕ) ^ 256 = 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by native_decide
+  have h256_eq := two_pow_256
   cases v with
   | string v' =>
     by_cases huv256 : v'.toUTF8.size < 2 ^ 256
@@ -148,11 +150,8 @@ theorem roundtrip_string (v : ABIValue) (data : ByteArray)
       exact decodeDynamicString_roundtrip v' huv256 (uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) rfl
     · have hval : encode .string (ABIValue.string v') = Except.error (.dataTooLong v'.toUTF8.size) := by
         openEncG
-        have h_ge : ¬ v'.toUTF8.size < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
-          rw [← h256_eq]; exact huv256
-        have h_ge' : ¬ v'.utf8ByteSize < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
-          simpa using h_ge
-        simp [h_ge']
+        have h_ge' : ¬ v'.utf8ByteSize < 2 ^ 256 := by simpa using huv256
+        rw [two_pow_256] at h_ge'; simp [h_ge']
       rw [hval] at henc; simp at henc
   | uint n =>
     have h_wrong : encode .string (ABIValue.uint n) = Except.error .typeValueMismatch := by
@@ -255,7 +254,7 @@ theorem intToBytes_decode_neg (s : ByteSize) (v' : Int) (hv_neg : ¬ v' ≥ 0)
   have h_formula : intToBytes v' s.len = ByteArray.mk (Array.mk (List.replicate (32 - s.len) 0xFF)) ++ natToBytes unsigned := by
     unfold intToBytes; simp [hv_neg, unsigned, b]; rw [h_raw_sz]
   have h_256_eq_2b : (256 : Nat) ^ s.len = (2 : Nat) ^ b := by
-    have h256_eq : (256 : ℕ) = (2 : ℕ) ^ 8 := by native_decide
+    have h256_eq : (256 : ℕ) = (2 : ℕ) ^ 8 := by decide
     calc
       (256 : Nat) ^ s.len = ((2 : Nat) ^ 8) ^ s.len := by rw [h256_eq]
       _ = (2 : Nat) ^ (8 * s.len) := by rw [Nat.pow_mul]
@@ -616,7 +615,7 @@ theorem roundtrip_off_bytes (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .bytes v = Except.ok enc)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode .bytes data off = Except.ok (v, off + enc.size) := by
-  have h256_eq : (2 : ℕ) ^ 256 = 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by native_decide
+  have h256_eq := two_pow_256
   cases v
   case bytes v' =>
     by_cases hv256 : v'.size < 2 ^ 256
@@ -628,16 +627,14 @@ theorem roundtrip_off_bytes (v : ABIValue) (enc data : ByteArray) (off : Nat)
       exact decodeDynamicBytes_roundtrip_off v' hv256 enc data off hd hdata
     · exact absurd henc (by
         unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp
-        have h_ge : ¬ v'.size < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
-          rw [← h256_eq]; exact hv256
-        simp [h_ge])
+        rw [two_pow_256] at hv256; simp [hv256])
   all_goals badVal henc
 
 theorem roundtrip_off_string (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .string v = Except.ok enc)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode .string data off = Except.ok (v, off + enc.size) := by
-  have h256_eq : (2 : ℕ) ^ 256 = 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by native_decide
+  have h256_eq := two_pow_256
   cases v
   case string v' =>
     by_cases huv256 : v'.toUTF8.size < 2 ^ 256
@@ -649,9 +646,6 @@ theorem roundtrip_off_string (v : ABIValue) (enc data : ByteArray) (off : Nat)
       exact decodeDynamicString_roundtrip_off v' huv256 enc data off hd hdata
     · exact absurd henc (by
         unfold encode foldABIType; delta instABIVisitorEncoderEntry; dsimp
-        have h_ge : ¬ v'.toUTF8.size < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
-          rw [← h256_eq]; exact huv256
-        have h_ge' : ¬ v'.utf8ByteSize < 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by
-          simpa using h_ge
-        simp [h_ge'])
+        have h_ge' : ¬ v'.utf8ByteSize < 2 ^ 256 := by simpa using huv256
+        rw [two_pow_256] at h_ge'; simp [h_ge'])
   all_goals badVal henc
