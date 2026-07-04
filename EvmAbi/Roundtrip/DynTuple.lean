@@ -162,7 +162,7 @@ theorem dtd_concat (fullTs : List ABIType) (data : ByteArray) (offset : Nat)
     rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
     rw [hentry] at hgo
     obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encoded hgo
-    have henc_t : enc = encode t := by unfold encode; rw [hentry]
+    have henc_t := entry_snd_eq_encode hentry
     have hdyneq : dyn = isDynamic t := entry_fst_isDynamic hentry
     have hb_enc : encode t v = Except.ok b := by rw [← henc_t]; exact hb
     -- head offset
@@ -250,7 +250,7 @@ theorem tupleHeadsFrom_size (ts : List ABIType)
     rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
     rw [hentry] at hgo
     obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encoded hgo
-    have henc_t : enc = encode t := by unfold encode; rw [hentry]
+    have henc_t := entry_snd_eq_encode hentry
     have hb_enc : encode t v = Except.ok b := by rw [← henc_t]; exact hb
     have hdyneq : dyn = isDynamic t := entry_fst_isDynamic hentry
     have ihs : ∀ t' ∈ ts', isDynamic t' = false → ∀ (v : ABIValue) (ev : ByteArray), encode t' v = Except.ok ev → ev.size = headSize t' := fun t' ht' => hsize t' (by simp [ht'])
@@ -291,7 +291,7 @@ theorem tupleHeadsFrom_size_ge (ts : List ABIType)
     rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
     rw [hentry] at hgo
     obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encoded hgo
-    have henc_t : enc = encode t := by unfold encode; rw [hentry]
+    have henc_t := entry_snd_eq_encode hentry
     have hb_enc : encode t v = Except.ok b := by rw [← henc_t]; exact hb
     have hdyneq : dyn = isDynamic t := entry_fst_isDynamic hentry
     have ihs : ∀ t' ∈ ts', isDynamic t' = false → ∀ (v : ABIValue) (ev : ByteArray), encode t' v = Except.ok ev → ev.size = headSize t' := fun t' ht' => hsize t' (by simp [ht'])
@@ -313,6 +313,50 @@ theorem tupleHeadsFrom_size_ge (ts : List ABIType)
       omega
 
 
+/-- Step lemma for the dynamic-tuple roundtrip: decoding the `tuplePack` region (interleaved
+head area ++ tails, dynamic case) at `off` recovers the field values. Packages the heads/tails
+split, the head-area sizing, and the `dtd_concat` induction — the tuple counterpart of
+`decodeDynamicElems_pack_wf`. -/
+theorem decodeTupleDynamic_pack_wf (ts : List ABIType) (data : ByteArray)
+    (hrt : ∀ t ∈ ts, ∀ (v : ABIValue) (ev : ByteArray) (o : Nat), ev.size < 2^256 →
+      encode t v = Except.ok ev → data.extract o (o + ev.size) = ev → decode t data o = Except.ok (v, o + ev.size))
+    (hsize : ∀ t ∈ ts, isDynamic t = false → ∀ (v : ABIValue) (ev : ByteArray), encode t v = Except.ok ev → ev.size = headSize t)
+    (hdvd : ∀ t ∈ ts, ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode t v = Except.ok ev → 32 ∣ ev.size)
+    (vs : List ABIValue) (encd : List (Bool × ByteArray)) (off : Nat)
+    (hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs = Except.ok encd)
+    (hany : (ts.map isDynamic).any id = true)
+    (hsz : (tuplePack (ts.map headSize) (ts.map isDynamic) encd).size < 2^256)
+    (hbd : off + ts.foldl (fun a t => a + headSize t) 0 + 32 ≤ data.size)
+    (hslice : data.extract off (off + (tuplePack (ts.map headSize) (ts.map isDynamic) encd).size)
+              = tuplePack (ts.map headSize) (ts.map isDynamic) encd) :
+    decodeTupleDynamic (foldAll DecoderEntry ts) ts ts data off 0 []
+        (off + ts.foldl (fun a t => a + headSize t) 0)
+      = Except.ok (vs, off + (tuplePack (ts.map headSize) (ts.map isDynamic) encd).size) := by
+  set HA := ts.foldl (fun a t => a + headSize t) 0 with hHAdef
+  have hHAeq : (ts.map headSize).foldl (· + ·) 0 = HA := by rw [hHAdef, List.foldl_map]
+  set heads := (tupleHeadsFrom HA encd).foldl (·++·) ByteArray.empty with hh
+  set tails := tupleTails encd with ht
+  have hpackht : tuplePack (ts.map headSize) (ts.map isDynamic) encd = heads ++ tails := by
+    rw [tuplePack_dyn _ _ _ hany, hHAeq]
+  have hpsz : (tuplePack (ts.map headSize) (ts.map isDynamic) encd).size = heads.size + tails.size := by
+    rw [hpackht, ByteArray.size_append]
+  have hge : HA ≤ heads.size := by rw [hh]; exact tupleHeadsFrom_size_ge ts hsize vs encd HA hgo
+  have htb : HA + tails.size < 2^256 := by omega
+  have hheadsz : heads.size = HA := by
+    rw [hh]; exact tupleHeadsFrom_size ts hsize hdvd vs encd HA hgo (by rw [← ht]; omega)
+  have hslice_all : data.extract off (off + (heads ++ tails).size) = heads ++ tails := by
+    rw [← hpackht]; exact hslice
+  have hslice_heads := extract_append_left_of_slice data off heads tails hslice_all
+  have hslice_tails := extract_append_right_of_slice data off heads tails hslice_all
+  have hh_heads : data.extract (off + ([] : List ABIType).foldl (fun a t => a + headSize t) 0) (off + ([] : List ABIType).foldl (fun a t => a + headSize t) 0 + ((tupleHeadsFrom HA encd).foldl (·++·) ByteArray.empty).size) = (tupleHeadsFrom HA encd).foldl (·++·) ByteArray.empty := by
+    simp only [List.foldl_nil, Nat.add_zero]; rw [← hh]; exact hslice_heads
+  have ht_tails : data.extract (off + HA) (off + HA + (tupleTails encd).size) = tupleTails encd := by
+    rw [← ht, ← hheadsz]; exact hslice_tails
+  have hdc := dtd_concat ts data off hbd hrt hsize hdvd (by omega) [] ts vs encd HA (off + HA) [] rfl hgo rfl (by rw [← ht]; omega) hh_heads ht_tails
+  simp only [List.length_nil, List.reverse_nil, List.nil_append] at hdc
+  rw [hdc, show off + HA + (tupleTails encd).size
+        = off + (tuplePack (ts.map headSize) (ts.map isDynamic) encd).size from by rw [← ht]; omega]
+
 theorem roundtrip_tuple_dyn_wf (ts : List ABIType) (data : ByteArray)
     (hrt : ∀ t ∈ ts, ∀ (v : ABIValue) (ev : ByteArray) (o : Nat), ev.size < 2^256 →
       encode t v = Except.ok ev → data.extract o (o + ev.size) = ev → decode t data o = Except.ok (v, o + ev.size))
@@ -328,39 +372,16 @@ theorem roundtrip_tuple_dyn_wf (ts : List ABIType) (data : ByteArray)
   cases v with
   | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
   | tuple vs =>
-    openEnc henc
-    cases hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs with
-    | error x => rw [hgo] at henc; exact absurd (show Except.error x = Except.ok enc from henc) (by simp)
-    | ok encd =>
-      rw [hgo] at henc
-      have hpack : enc = tuplePack (ts.map headSize) (ts.map isDynamic) encd :=
-        (Except.ok.inj (show Except.ok (tuplePack (ts.map headSize) (ts.map isDynamic) encd) = Except.ok enc from henc)).symm
-      have hany : (ts.map isDynamic).any id = true := by simpa using hdyn
-      set HA := ts.foldl (fun a t => a + headSize t) 0 with hHAdef
-      have hHAeq : (ts.map headSize).foldl (· + ·) 0 = HA := by rw [hHAdef, List.foldl_map]
-      set heads := (tupleHeadsFrom HA encd).foldl (·++·) ByteArray.empty with hh
-      set tails := tupleTails encd with ht
-      have hpackht : enc = heads ++ tails := by rw [hpack, tuplePack_dyn _ _ _ hany, hHAeq]
-      have hpsz : enc.size = heads.size + tails.size := by rw [hpackht, ByteArray.size_append]
-      have hge : HA ≤ heads.size := by rw [hh]; exact tupleHeadsFrom_size_ge ts hsize vs encd HA hgo
-      have htb : HA + tails.size < 2^256 := by omega
-      have hheadsz : heads.size = HA := by rw [hh]; exact tupleHeadsFrom_size ts hsize hdvd vs encd HA hgo (by rw [← ht]; omega)
-      -- slices
-      have hslice_all : data.extract off (off + (heads ++ tails).size) = heads ++ tails := by rw [← hpackht]; exact hdata
-      have hslice_heads := extract_append_left_of_slice data off heads tails hslice_all
-      have hslice_tails := extract_append_right_of_slice data off heads tails hslice_all
-      have hh_heads : data.extract (off + ([] : List ABIType).foldl (fun a t => a + headSize t) 0) (off + ([] : List ABIType).foldl (fun a t => a + headSize t) 0 + ((tupleHeadsFrom HA encd).foldl (·++·) ByteArray.empty).size) = (tupleHeadsFrom HA encd).foldl (·++·) ByteArray.empty := by
-        simp only [List.foldl_nil, Nat.add_zero]; rw [← hh]; exact hslice_heads
-      have ht_tails : data.extract (off + HA) (off + HA + (tupleTails encd).size) = tupleTails encd := by
-        rw [← ht, ← hheadsz]; exact hslice_tails
-      have hdc := dtd_concat ts data off hbd hrt hsize hdvd (by omega) [] ts vs encd HA (off + HA) [] rfl hgo rfl (by rw [← ht]; omega) hh_heads ht_tails
-      simp only [List.length_nil, List.reverse_nil, List.nil_append] at hdc
-      openDec
-      rw [hdyn]
-      simp only [Bool.not_true, Bool.false_eq_true, if_false]
-      rw [show ts.foldl (fun acc t => acc + headSize t) 0 = HA from rfl, hdc]
-      rw [show off + HA + (tupleTails encd).size = off + enc.size from by rw [← ht]; omega]
-      rfl
+    obtain ⟨encd, hgo, hpack⟩ := encode_tuple_inv ts vs enc henc
+    have hany : (ts.map isDynamic).any id = true := by simpa using hdyn
+    have hdc := decodeTupleDynamic_pack_wf ts data hrt hsize hdvd vs encd off hgo hany
+      (by rw [← hpack]; exact hwf) hbd (by rw [← hpack]; exact hdata)
+    openDec
+    rw [hdyn]
+    simp only [Bool.not_true, Bool.false_eq_true, if_false]
+    rw [hdc]
+    rw [show off + (tuplePack (ts.map headSize) (ts.map isDynamic) encd).size = off + enc.size from by rw [hpack]]
+    rfl
 
 /-! ### Tuple encoding is 32-byte aligned (szdvd_tuple), for composing tuples as fields/elements -/
 
@@ -454,7 +475,7 @@ theorem tuple_entries_static_dvd (ts : List ABIType)
     rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
     rw [hentry] at hgo
     obtain ⟨v, vs', b0, tail, rfl, hb0, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
-    have henc_t : enc = encode t := by unfold encode; rw [hentry]
+    have henc_t := entry_snd_eq_encode hentry
     have hb_enc : encode t v = Except.ok b0 := by rw [← henc_t]; exact hb0
     have hstat_t : isDynamic t = false := hstat t hmemt
     have hb0sz : b0.size = headSize t := hsize t hmemt hstat_t v b0 hb_enc
@@ -482,7 +503,7 @@ theorem tuple_entries_dyn_dvd (ts : List ABIType)
     rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
     rw [hentry] at hgo
     obtain ⟨v, vs', b0, tail, rfl, hb0, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
-    have henc_t : enc = encode t := by unfold encode; rw [hentry]
+    have henc_t := entry_snd_eq_encode hentry
     have hb_enc : encode t v = Except.ok b0 := by rw [← henc_t]; exact hb0
     rcases List.mem_cons.mp hb with h | h
     · subst h
@@ -499,45 +520,39 @@ theorem szdvd_tuple (ts : List ABIType)
   cases v with
   | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
   | tuple vs =>
-    openEnc henc
-    cases hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs with
-    | error x => rw [hgo] at henc; exact absurd (show Except.error x = Except.ok ev from henc) (by simp)
-    | ok encd =>
-      rw [hgo] at henc
-      have hpack : ev = tuplePack (ts.map headSize) (ts.map isDynamic) encd :=
-        (Except.ok.inj (show Except.ok (tuplePack (ts.map headSize) (ts.map isDynamic) encd) = Except.ok ev from henc)).symm
-      cases hdynb : (ts.map isDynamic).any id with
-      | false =>
-        rw [hpack, tuplePack_static _ _ _ hdynb]
-        have hallstat : ∀ t ∈ ts, isDynamic t = false := by
-          intro t ht
-          rcases hb : isDynamic t with _ | _
-          · rfl
-          · exfalso
-            have : (ts.map isDynamic).any id = true :=
-              List.any_eq_true.mpr ⟨isDynamic t, List.mem_map_of_mem ht, by simpa using hb⟩
-            rw [hdynb] at this; exact absurd this (by simp)
-        exact concat_pairs_dvd encd (tuple_entries_static_dvd ts hsize vs encd hgo hallstat)
-      | true =>
-        have hHAeq : (ts.map headSize).foldl (· + ·) 0 = ts.foldl (fun a t => a + headSize t) 0 := by
-          rw [List.foldl_map]
-        have hpackht : ev = (tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty ++ tupleTails encd := by
-          rw [hpack, tuplePack_dyn _ _ _ hdynb, hHAeq]
-        have hpsz : ev.size = ((tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty).size + (tupleTails encd).size := by
-          rw [hpackht, ByteArray.size_append]
-        have hge : ts.foldl (fun a t => a + headSize t) 0 ≤ ((tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty).size :=
-          tupleHeadsFrom_size_ge ts hsize vs encd _ hgo
-        have hheadsz : ((tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty).size = ts.foldl (fun a t => a + headSize t) 0 :=
-          tupleHeadsFrom_size ts hsize hdvd vs encd _ hgo (by omega)
-        have hbnd_dyn : ∀ b ∈ encd, b.1 = true → b.2.size < 2^256 := by
-          intro b hb hd
-          have := tupleTails_mem_le encd b hb hd
-          omega
-        have htails : 32 ∣ (tupleTails encd).size :=
-          tupleTails_size_dvd encd (tuple_entries_dyn_dvd ts hdvd vs encd hgo hbnd_dyn)
-        have hheads : 32 ∣ ((tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty).size := by
-          rw [hheadsz]; exact foldl_headSize_dvd ts 0 (by simp)
-        rw [hpsz]; exact Nat.dvd_add hheads htails
+    obtain ⟨encd, hgo, hpack⟩ := encode_tuple_inv ts vs ev henc
+    cases hdynb : (ts.map isDynamic).any id with
+    | false =>
+      rw [hpack, tuplePack_static _ _ _ hdynb]
+      have hallstat : ∀ t ∈ ts, isDynamic t = false := by
+        intro t ht
+        rcases hb : isDynamic t with _ | _
+        · rfl
+        · exfalso
+          have : (ts.map isDynamic).any id = true :=
+            List.any_eq_true.mpr ⟨isDynamic t, List.mem_map_of_mem ht, by simpa using hb⟩
+          rw [hdynb] at this; exact absurd this (by simp)
+      exact concat_pairs_dvd encd (tuple_entries_static_dvd ts hsize vs encd hgo hallstat)
+    | true =>
+      have hHAeq : (ts.map headSize).foldl (· + ·) 0 = ts.foldl (fun a t => a + headSize t) 0 := by
+        rw [List.foldl_map]
+      have hpackht : ev = (tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty ++ tupleTails encd := by
+        rw [hpack, tuplePack_dyn _ _ _ hdynb, hHAeq]
+      have hpsz : ev.size = ((tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty).size + (tupleTails encd).size := by
+        rw [hpackht, ByteArray.size_append]
+      have hge : ts.foldl (fun a t => a + headSize t) 0 ≤ ((tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty).size :=
+        tupleHeadsFrom_size_ge ts hsize vs encd _ hgo
+      have hheadsz : ((tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty).size = ts.foldl (fun a t => a + headSize t) 0 :=
+        tupleHeadsFrom_size ts hsize hdvd vs encd _ hgo (by omega)
+      have hbnd_dyn : ∀ b ∈ encd, b.1 = true → b.2.size < 2^256 := by
+        intro b hb hd
+        have := tupleTails_mem_le encd b hb hd
+        omega
+      have htails : 32 ∣ (tupleTails encd).size :=
+        tupleTails_size_dvd encd (tuple_entries_dyn_dvd ts hdvd vs encd hgo hbnd_dyn)
+      have hheads : 32 ∣ ((tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty).size := by
+        rw [hheadsz]; exact foldl_headSize_dvd ts 0 (by simp)
+      rw [hpsz]; exact Nat.dvd_add hheads htails
 
 /-! ### Unified tuple roundtrip under WF (static + dynamic dispatch) -/
 
@@ -567,7 +582,7 @@ theorem decodeTupleStatic_concat_wf (ts : List ABIType) (data : ByteArray)
     rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
     rw [hentry] at hgo
     obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
-    have henc_t : enc = encode t := by unfold encode; rw [hentry]
+    have henc_t := entry_snd_eq_encode hentry
     rw [ba_foldl_snd_cons] at hslice hbound ⊢
     simp only [] at hslice hbound ⊢
     -- freeze the tail fold to an atom so the generic slice helpers unify without
@@ -606,7 +621,7 @@ theorem tuplePackStatic_size_wf (ts : List ABIType)
     rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
     rw [hentry] at hgo
     obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
-    have henc_t : enc = encode t := by unfold encode; rw [hentry]
+    have henc_t := entry_snd_eq_encode hentry
     have hbsz : b.size = headSize t := hsize t hmemt (hstat t hmemt) v b (by rw [← henc_t]; exact hb)
     rw [ba_foldl_snd_cons, ByteArray.size_append, hbsz,
         ih (fun t' ht' => hsize t' (by simp [ht'])) (fun t' ht' => hstat t' (List.mem_cons_of_mem t ht')) vs' tail htail,
@@ -629,23 +644,17 @@ theorem roundtrip_tuple_stat_wf (ts : List ABIType) (data : ByteArray)
   cases v with
   | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
   | tuple vs =>
-    openEnc henc
-    cases hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs with
-    | error x => rw [hgo] at henc; exact absurd (show Except.error x = Except.ok enc from henc) (by simp)
-    | ok encd =>
-      rw [hgo] at henc
-      have hpack : enc = tuplePack (ts.map headSize) (ts.map isDynamic) encd :=
-        (Except.ok.inj (show Except.ok (tuplePack (ts.map headSize) (ts.map isDynamic) encd) = Except.ok enc from henc)).symm
-      have hconcat : enc = encd.foldl (fun a x => a ++ x.2) ByteArray.empty := by rw [hpack, tuplePack_static _ _ _ hany]
-      have hsize_eq : enc.size = headSize (.tuple ts) := by rw [hconcat]; exact tuplePackStatic_size_wf ts hsize hstat_all vs encd hgo
-      have hoff : ts.foldl (fun acc t => acc + headSize t) 0 = enc.size := by rw [hsize_eq]; exact headSize_tuple_foldl ts hstat_tuple
-      have hslice : data.extract off (off + (encd.foldl (fun a x => a ++ x.2) ByteArray.empty).size) = encd.foldl (fun a x => a ++ x.2) ByteArray.empty := by rw [← hconcat]; exact hdata
-      openDec
-      rw [hany_ts]
-      simp only [Bool.not_false, if_true]
-      rw [decodeTupleStatic_concat_wf ts data hrt vs encd off [] hgo (by rw [← hconcat]; exact hwf) hslice]
-      show Except.ok (ABIValue.tuple ([].reverse ++ vs), off + ts.foldl (fun acc t => acc + headSize t) 0) = Except.ok (ABIValue.tuple vs, off + enc.size)
-      simp only [List.reverse_nil, List.nil_append, hoff]
+    obtain ⟨encd, hgo, hpack⟩ := encode_tuple_inv ts vs enc henc
+    have hconcat : enc = encd.foldl (fun a x => a ++ x.2) ByteArray.empty := by rw [hpack, tuplePack_static _ _ _ hany]
+    have hsize_eq : enc.size = headSize (.tuple ts) := by rw [hconcat]; exact tuplePackStatic_size_wf ts hsize hstat_all vs encd hgo
+    have hoff : ts.foldl (fun acc t => acc + headSize t) 0 = enc.size := by rw [hsize_eq]; exact headSize_tuple_foldl ts hstat_tuple
+    have hslice : data.extract off (off + (encd.foldl (fun a x => a ++ x.2) ByteArray.empty).size) = encd.foldl (fun a x => a ++ x.2) ByteArray.empty := by rw [← hconcat]; exact hdata
+    openDec
+    rw [hany_ts]
+    simp only [Bool.not_false, if_true]
+    rw [decodeTupleStatic_concat_wf ts data hrt vs encd off [] hgo (by rw [← hconcat]; exact hwf) hslice]
+    show Except.ok (ABIValue.tuple ([].reverse ++ vs), off + ts.foldl (fun acc t => acc + headSize t) 0) = Except.ok (ABIValue.tuple vs, off + enc.size)
+    simp only [List.reverse_nil, List.nil_append, hoff]
 
 -- unified tuple roundtrip under WF: dispatch static/dynamic
 theorem roundtrip_tuple_wf (ts : List ABIType) (data : ByteArray)
@@ -675,26 +684,9 @@ theorem szdvd_fixedArray (n : Nat) (e : ABIType)
     32 ∣ ev.size := by
   cases v with
   | array vals =>
-    unfold encode foldABIType at henc
-    delta instABIVisitorEncoderEntry at henc
-    rcases hentry : foldABIType EncoderEntry e with ⟨elemDyn, elemEnc⟩
-    rw [hentry] at henc; dsimp at henc
-    have helem : elemEnc = encode e := by unfold encode; rw [hentry]
-    split at henc
-    · exact absurd (show Except.error (Error.arrayElemCount n vals.length) = Except.ok ev from henc) (by simp)
-    · cases hEL : encodeListElems elemEnc vals with
-      | error x => rw [hEL] at henc; exact absurd (show Except.error x = Except.ok ev from henc) (by simp)
-      | ok encd =>
-        rw [hEL] at henc
-        have hEL' : encodeListElems (encode e) vals = Except.ok encd := by rw [← helem]; exact hEL
-        have hpack : ev = arrayPack elemDyn encd :=
-          (Except.ok.inj (show Except.ok (arrayPack elemDyn encd) = Except.ok ev from henc)).symm
-        have halign : ∀ b ∈ encd, 32 ∣ b.size := fun b hb => by
-          obtain ⟨w, hw⟩ := encodeListElems_mem e vals encd hEL' b hb
-          have hble : b.size ≤ ev.size := by
-            rw [hpack]
-            exact le_trans (mem_size_le_concat encd b hb) (concat_le_arrayPack elemDyn encd)
-          exact hdvd_e w b (by omega) hw
-        rw [hpack]
-        exact arrayPack_size_dvd elemDyn encd (by rw [← hpack]; exact hsz) halign
+    obtain ⟨encd, hEL', hlen, hpack⟩ := encode_fixedArray_inv n e vals ev henc
+    have halign : ∀ b ∈ encd, 32 ∣ b.size :=
+      encodeListElems_align e hdvd_e vals encd (isDynamic e) hEL' (by rw [← hpack]; exact hsz)
+    rw [hpack]
+    exact arrayPack_size_dvd (isDynamic e) encd (by rw [← hpack]; exact hsz) halign
   | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e

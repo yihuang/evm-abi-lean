@@ -193,17 +193,8 @@ theorem dyn_encoding_ge_32_string (v : ABIValue) (ev : ByteArray) (henc : encode
 theorem dyn_encoding_ge_32_array (e : ABIType) (v : ABIValue) (ev : ByteArray) (henc : encode (.array e) v = Except.ok ev) : 32 ≤ ev.size := by
   cases v with
   | array vals =>
-    unfold encode foldABIType at henc; delta instABIVisitorEncoderEntry at henc
-    rcases hentry : foldABIType EncoderEntry e with ⟨elemDyn, elemEnc⟩
-    rw [hentry] at henc; dsimp at henc
-    split at henc
-    · cases hEL : encodeListElems elemEnc vals with
-      | error x => rw [hEL] at henc; exact absurd (show Except.error x = Except.ok ev from henc) (by simp)
-      | ok encd =>
-        rw [hEL] at henc
-        have he : ev = uint256ToBytes vals.length ++ arrayPack elemDyn encd := (Except.ok.inj henc).symm
-        rw [he, ByteArray.size_append]; have := uint256ToBytes_size_ge vals.length; omega
-    · exact absurd henc (by simp)
+    obtain ⟨encd, -, -, he⟩ := encode_array_inv e vals ev henc
+    rw [he, ByteArray.size_append]; have := uint256ToBytes_size_ge vals.length; omega
   | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
 
 theorem dyn_encoding_ge_32_fixedArray (n : Nat) (e : ABIType) (hn : isDynamic e = true → 0 < n)
@@ -211,28 +202,13 @@ theorem dyn_encoding_ge_32_fixedArray (n : Nat) (e : ABIType) (hn : isDynamic e 
     (henc : encode (.fixedArray n e) v = Except.ok ev) : 32 ≤ ev.size := by
   cases v with
   | array vals =>
-    unfold encode foldABIType at henc; delta instABIVisitorEncoderEntry at henc
-    rcases hentry : foldABIType EncoderEntry e with ⟨elemDyn, elemEnc⟩
-    rw [hentry] at henc; dsimp at henc
-    have helem : elemEnc = encode e := by unfold encode; rw [hentry]
-    split at henc
-    · exact absurd henc (by simp)
-    · rename_i hlen
-      cases hEL : encodeListElems elemEnc vals with
-      | error x => rw [hEL] at henc; exact absurd (show Except.error x = Except.ok ev from henc) (by simp)
-      | ok encd =>
-        rw [hEL] at henc
-        have he : ev = arrayPack elemDyn encd := (Except.ok.inj henc).symm
-        have hisdyn_e : isDynamic e = true := by simpa [isDynamic] using hdyn
-        have helemD : elemDyn = true := by
-          have h := enc_fst_eq_isDynamic e; rw [hentry] at h; exact h.trans hisdyn_e
-        have hlen_eq : encd.length = vals.length := encodeListElems_length e vals encd (by rw [← helem]; exact hEL)
-        have hvn : vals.length = n := by simpa using hlen
-        have hn' : 0 < n := hn hisdyn_e
-        rw [he, helemD, arrayPack_dyn, ByteArray.size_append]
-        have hge := dynHeadsFrom_size_ge encd (if encd.length = 0 then 32 else encd.length * 32)
-        have : 0 < encd.length := by rw [hlen_eq, hvn]; exact hn'
-        omega
+    obtain ⟨encd, hEL', hvn, he⟩ := encode_fixedArray_inv n e vals ev henc
+    have hisdyn_e : isDynamic e = true := by simpa [isDynamic] using hdyn
+    have hlen_eq : encd.length = vals.length := encodeListElems_length e vals encd hEL'
+    rw [he, hisdyn_e, arrayPack_dyn, ByteArray.size_append]
+    have hge := dynHeadsFrom_size_ge encd (if encd.length = 0 then 32 else encd.length * 32)
+    have : 0 < encd.length := by rw [hlen_eq, hvn]; exact hn hisdyn_e
+    omega
   | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
 
 theorem tupleHeadsFrom_ge_32 : ∀ (encd : List (Bool × ByteArray)) (off : Nat), (∃ b ∈ encd, b.1 = true) →
@@ -282,20 +258,14 @@ theorem dyn_encoding_ge_32_tuple (ts : List ABIType) (hdyn : isDynamic (.tuple t
     (v : ABIValue) (ev : ByteArray) (henc : encode (.tuple ts) v = Except.ok ev) : 32 ≤ ev.size := by
   cases v with
   | tuple vs =>
-    openEnc henc
-    cases hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs with
-    | error x => rw [hgo] at henc; exact absurd (show Except.error x = Except.ok ev from henc) (by simp)
-    | ok encd =>
-      rw [hgo] at henc
-      have hpack : ev = tuplePack (ts.map headSize) (ts.map isDynamic) encd :=
-        (Except.ok.inj (show Except.ok (tuplePack (ts.map headSize) (ts.map isDynamic) encd) = Except.ok ev from henc)).symm
-      have hany : (ts.map isDynamic).any id = true := by rw [tuple_any_isDynamic]; exact hdyn
-      have hany_ts : ts.any isDynamic = true := by simpa [List.any_map] using hany
-      have hHAeq : (ts.map headSize).foldl (· + ·) 0 = ts.foldl (fun a t => a + headSize t) 0 := by rw [List.foldl_map]
-      rw [hpack, tuplePack_dyn _ _ _ hany, hHAeq, ByteArray.size_append]
-      have hentry := go_has_dyn_entry ts vs encd hgo hany_ts
-      have hheads := tupleHeadsFrom_ge_32 encd (ts.foldl (fun a t => a + headSize t) 0) hentry
-      omega
+    obtain ⟨encd, hgo, hpack⟩ := encode_tuple_inv ts vs ev henc
+    have hany : (ts.map isDynamic).any id = true := by rw [tuple_any_isDynamic]; exact hdyn
+    have hany_ts : ts.any isDynamic = true := by simpa [List.any_map] using hany
+    have hHAeq : (ts.map headSize).foldl (· + ·) 0 = ts.foldl (fun a t => a + headSize t) 0 := by rw [List.foldl_map]
+    rw [hpack, tuplePack_dyn _ _ _ hany, hHAeq, ByteArray.size_append]
+    have hentry := go_has_dyn_entry ts vs encd hgo hany_ts
+    have hheads := tupleHeadsFrom_ge_32 encd (ts.foldl (fun a t => a + headSize t) 0) hentry
+    omega
   | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
 
 theorem dyn_encoding_ge_32 (t : ABIType) (hwf : WellFormedType t) (hdyn : isDynamic t = true)
@@ -327,7 +297,7 @@ theorem go_has_big_dyn_entry (ts : List ABIType) (hwf : ∀ t ∈ ts, WellFormed
     rw [hentry] at hgo
     obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
     have hdyneq : dyn = isDynamic t := by have h2 := enc_fst_eq_isDynamic t; rw [hentry] at h2; exact h2
-    have henc_t : enc = encode t := by unfold encode; rw [hentry]
+    have henc_t := entry_snd_eq_encode hentry
     rw [List.any_cons] at h
     by_cases hd : isDynamic t = true
     · refine ⟨(dyn, b), by simp, by rw [hdyneq]; exact hd, ?_⟩
@@ -346,25 +316,19 @@ theorem dyn_tuple_hbd (ts : List ABIType) (hwf : ∀ t ∈ ts, WellFormedType t)
     ts.foldl (fun a t => a + headSize t) 0 + 32 ≤ enc.size := by
   cases v with
   | tuple vs =>
-    openEnc henc
-    cases hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs with
-    | error x => rw [hgo] at henc; exact absurd (show Except.error x = Except.ok enc from henc) (by simp)
-    | ok encd =>
-      rw [hgo] at henc
-      have hpack : enc = tuplePack (ts.map headSize) (ts.map isDynamic) encd :=
-        (Except.ok.inj (show Except.ok (tuplePack (ts.map headSize) (ts.map isDynamic) encd) = Except.ok enc from henc)).symm
-      have hany : (ts.map isDynamic).any id = true := by simpa [List.any_map] using hdyn
-      have hHAeq : (ts.map headSize).foldl (· + ·) 0 = ts.foldl (fun a t => a + headSize t) 0 := by rw [List.foldl_map]
-      have hpackht : enc = (tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty ++ tupleTails encd := by
-        rw [hpack, tuplePack_dyn _ _ _ hany, hHAeq]
-      have hpsz : enc.size = ((tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty).size + (tupleTails encd).size := by
-        rw [hpackht, ByteArray.size_append]
-      have hge := tupleHeadsFrom_size_ge ts hsize vs encd (ts.foldl (fun a t => a + headSize t) 0) hgo
-      have hbnd_dyn : ∀ b ∈ encd, b.1 = true → b.2.size < 2^256 := fun b hb hb1 => by
-        have := tupleTails_mem_le encd b hb hb1; omega
-      obtain ⟨b, hb, hb1, hbsize⟩ := go_has_big_dyn_entry ts hwf vs encd hgo hdyn hbnd_dyn
-      have := tupleTails_mem_le encd b hb hb1
-      omega
+    obtain ⟨encd, hgo, hpack⟩ := encode_tuple_inv ts vs enc henc
+    have hany : (ts.map isDynamic).any id = true := by simpa [List.any_map] using hdyn
+    have hHAeq : (ts.map headSize).foldl (· + ·) 0 = ts.foldl (fun a t => a + headSize t) 0 := by rw [List.foldl_map]
+    have hpackht : enc = (tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty ++ tupleTails encd := by
+      rw [hpack, tuplePack_dyn _ _ _ hany, hHAeq]
+    have hpsz : enc.size = ((tupleHeadsFrom (ts.foldl (fun a t => a + headSize t) 0) encd).foldl (·++·) ByteArray.empty).size + (tupleTails encd).size := by
+      rw [hpackht, ByteArray.size_append]
+    have hge := tupleHeadsFrom_size_ge ts hsize vs encd (ts.foldl (fun a t => a + headSize t) 0) hgo
+    have hbnd_dyn : ∀ b ∈ encd, b.1 = true → b.2.size < 2^256 := fun b hb hb1 => by
+      have := tupleTails_mem_le encd b hb hb1; omega
+    obtain ⟨b, hb, hb1, hbsize⟩ := go_has_big_dyn_entry ts hwf vs encd hgo hdyn hbnd_dyn
+    have := tupleTails_mem_le encd b hb hb1
+    omega
   | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
 
 theorem size_eq_tuple_wf (ts : List ABIType)
@@ -373,16 +337,10 @@ theorem size_eq_tuple_wf (ts : List ABIType)
     (henc : encode (.tuple ts) v = Except.ok ev) : ev.size = headSize (.tuple ts) := by
   cases v with
   | tuple vs =>
-    openEnc henc
-    cases hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs with
-    | error x => rw [hgo] at henc; exact absurd (show Except.error x = Except.ok ev from henc) (by simp)
-    | ok encd =>
-      rw [hgo] at henc
-      have hpack : ev = tuplePack (ts.map headSize) (ts.map isDynamic) encd :=
-        (Except.ok.inj (show Except.ok (tuplePack (ts.map headSize) (ts.map isDynamic) encd) = Except.ok ev from henc)).symm
-      have hany : (ts.map isDynamic).any id = false := by rw [tuple_any_isDynamic]; exact hstat
-      rw [hpack, tuplePack_static _ _ _ hany]
-      exact tuplePackStatic_size_wf ts hsize (tuple_static_elems ts hstat) vs encd hgo
+    obtain ⟨encd, hgo, hpack⟩ := encode_tuple_inv ts vs ev henc
+    have hany : (ts.map isDynamic).any id = false := by rw [tuple_any_isDynamic]; exact hstat
+    rw [hpack, tuplePack_static _ _ _ hany]
+    exact tuplePackStatic_size_wf ts hsize (tuple_static_elems ts hstat) vs encd hgo
   | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
 
 /-- `WFFacts` for every well-formed type, INCLUDING tuples (structs). The dynamic-tuple `rt`

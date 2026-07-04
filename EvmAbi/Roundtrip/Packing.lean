@@ -48,6 +48,68 @@ theorem entry_fst_isDynamic {t : ABIType} {d : Bool} {f : ABIValue → Except Er
     (hentry : foldABIType EncoderEntry t = (d, f)) : d = isDynamic t := by
   have := enc_fst_eq_isDynamic t; rwa [hentry] at this
 
+/-- Companion to `entry_fst_isDynamic`: from `foldABIType EncoderEntry t = (d, f)`, the encoder
+component `f` is `encode t`. Packages the recurring `unfold encode; rw [hentry]` step. -/
+theorem entry_snd_eq_encode {t : ABIType} {d : Bool} {f : ABIValue → Except Error ByteArray}
+    (hentry : foldABIType EncoderEntry t = (d, f)) : f = encode t := by
+  unfold encode; rw [hentry]
+
+/-- Invert a successful dynamic-array encode: the length fits, the elements encode, and the
+result is the length prefix followed by the packed elements. -/
+theorem encode_array_inv (e : ABIType) (vals : List ABIValue) (enc : ByteArray)
+    (henc : encode (.array e) (.array vals) = Except.ok enc) :
+    ∃ encd, encodeListElems (encode e) vals = Except.ok encd ∧ vals.length < 2^256 ∧
+      enc = uint256ToBytes vals.length ++ arrayPack (isDynamic e) encd := by
+  unfold encode foldABIType at henc
+  delta instABIVisitorEncoderEntry at henc
+  rcases hentry : foldABIType EncoderEntry e with ⟨elemDyn, elemEnc⟩
+  rw [hentry] at henc; dsimp at henc
+  split at henc
+  · rename_i hlt
+    cases hEL : encodeListElems elemEnc vals with
+    | error x => rw [hEL] at henc; exact absurd (show Except.error x = Except.ok enc from henc) (by simp)
+    | ok encd =>
+      rw [hEL] at henc
+      refine ⟨encd, by rw [← entry_snd_eq_encode hentry]; exact hEL, hlt, ?_⟩
+      rw [← entry_fst_isDynamic hentry]
+      exact (Except.ok.inj henc).symm
+  · exact absurd (show Except.error (Error.arrayLengthOverflow vals.length) = Except.ok enc from henc) (by simp)
+
+/-- Invert a successful fixed-array encode: the element count matches, the elements encode, and
+the result is the packed elements (no length prefix). -/
+theorem encode_fixedArray_inv (n : Nat) (e : ABIType) (vals : List ABIValue) (enc : ByteArray)
+    (henc : encode (.fixedArray n e) (.array vals) = Except.ok enc) :
+    ∃ encd, encodeListElems (encode e) vals = Except.ok encd ∧ vals.length = n ∧
+      enc = arrayPack (isDynamic e) encd := by
+  unfold encode foldABIType at henc
+  delta instABIVisitorEncoderEntry at henc
+  rcases hentry : foldABIType EncoderEntry e with ⟨elemDyn, elemEnc⟩
+  rw [hentry] at henc; dsimp at henc
+  by_cases hlen : vals.length = n
+  · rw [if_neg (not_not_intro hlen)] at henc
+    cases hEL : encodeListElems elemEnc vals with
+    | error x => rw [hEL] at henc; exact absurd (show Except.error x = Except.ok enc from henc) (by simp)
+    | ok encd =>
+      rw [hEL] at henc
+      refine ⟨encd, by rw [← entry_snd_eq_encode hentry]; exact hEL, hlen, ?_⟩
+      rw [← entry_fst_isDynamic hentry]
+      exact (Except.ok.inj henc).symm
+  · rw [if_pos (by simpa using hlen)] at henc
+    exact absurd (show Except.error (Error.arrayElemCount n vals.length) = Except.ok enc from henc) (by simp)
+
+/-- Invert a successful tuple encode: the field-encoder loop succeeds and the result is the
+`tuplePack` of the entries. -/
+theorem encode_tuple_inv (ts : List ABIType) (vs : List ABIValue) (enc : ByteArray)
+    (henc : encode (.tuple ts) (.tuple vs) = Except.ok enc) :
+    ∃ encd, instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs = Except.ok encd ∧
+      enc = tuplePack (ts.map headSize) (ts.map isDynamic) encd := by
+  openEnc henc
+  cases hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs with
+  | error x => rw [hgo] at henc; exact absurd (show Except.error x = Except.ok enc from henc) (by simp)
+  | ok encd =>
+    rw [hgo] at henc
+    exact ⟨encd, rfl, (Except.ok.inj (show Except.ok (tuplePack (ts.map headSize) (ts.map isDynamic) encd) = Except.ok enc from henc)).symm⟩
+
 /-- Left fold of `++` with a nonempty seed factors the seed out to the front. -/
 theorem ba_foldl_init (init : ByteArray) (xs : List ByteArray) :
     xs.foldl (·++·) init = init ++ xs.foldl (·++·) ByteArray.empty := by
@@ -231,30 +293,15 @@ theorem size_eq_fixedArray_core (n : Nat) (e : ABIType)
     ev.size = headSize (.fixedArray n e) := by
   cases v with
   | array vals =>
-    unfold encode foldABIType at henc; delta instABIVisitorEncoderEntry at henc
-    rcases hentry : foldABIType EncoderEntry e with ⟨elemDyn, elemEnc⟩
-    rw [hentry] at henc; dsimp at henc
-    have helem : elemEnc = encode e := by unfold encode; rw [hentry]
-    by_cases hlen : vals.length = n
-    · rw [if_neg (not_not_intro hlen)] at henc
-      cases hEL : encodeListElems elemEnc vals with
-      | error x => rw [hEL] at henc; exact absurd (show Except.error x = Except.ok ev from henc) (by simp)
-      | ok encd =>
-        rw [hEL] at henc
-        have hpack : ev = arrayPack elemDyn encd :=
-          (Except.ok.inj (show Except.ok (arrayPack elemDyn encd) = Except.ok ev from henc)).symm
-        have helemF : elemDyn = false := by
-          rw [entry_fst_isDynamic hentry, hstat_e]
-        rw [helemF] at hpack
-        rw [show arrayPack false encd = encd.foldl (·++·) ByteArray.empty from by simp [arrayPack]] at hpack
-        have hall : ∀ b ∈ encd, b.size = headSize e := fun b hb => by
-          obtain ⟨w, hw⟩ := encodeListElems_mem e vals encd (by rw [← helem]; exact hEL) b hb
-          exact hsize_e w b hw
-        rw [hpack, concat_size_uniform encd (headSize e) hall,
-            encodeListElems_length e vals encd (by rw [← helem]; exact hEL), hlen]
-        simp only [headSize, isDynamic, hstat_e, Bool.false_eq_true, if_false]
-    · rw [if_pos (by simpa using hlen)] at henc
-      exact absurd (show Except.error (Error.arrayElemCount n vals.length) = Except.ok ev from henc) (by simp)
+    obtain ⟨encd, hEL', hlen, hpack⟩ := encode_fixedArray_inv n e vals ev henc
+    rw [hstat_e] at hpack
+    rw [show arrayPack false encd = encd.foldl (·++·) ByteArray.empty from by simp [arrayPack]] at hpack
+    have hall : ∀ b ∈ encd, b.size = headSize e := fun b hb => by
+      obtain ⟨w, hw⟩ := encodeListElems_mem e vals encd hEL' b hb
+      exact hsize_e w b hw
+    rw [hpack, concat_size_uniform encd (headSize e) hall,
+        encodeListElems_length e vals encd hEL', hlen]
+    simp only [headSize, isDynamic, hstat_e, Bool.false_eq_true, if_false]
   | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
 
 /-- If a tuple type is static, every element type is static. -/
