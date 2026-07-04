@@ -19,6 +19,10 @@ macro "badVal" h:ident : tactic =>
 macro "badArrVal" h:ident e:ident : tactic =>
   `(tactic| exact absurd $h (by unfold encode foldABIType; delta instABIVisitorEncoderEntry; rcases foldABIType EncoderEntry $e with ⟨d, f⟩; dsimp; simp))
 
+/-- Discharge a case where an element encoder erred but `h : … = Except.ok v` was assumed. -/
+macro "badErr" h:ident v:ident : tactic =>
+  `(tactic| exact absurd (show Except.error _ = Except.ok $v from $h) (by simp))
+
 /-- Open the encoder definition at hypothesis `h`: `encode … = ok` becomes the concrete match. -/
 macro "openEnc" h:ident : tactic =>
   `(tactic| unfold encode foldABIType at $h:ident <;> delta instABIVisitorEncoderEntry at $h:ident <;> dsimp at $h:ident)

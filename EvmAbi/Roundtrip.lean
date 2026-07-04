@@ -125,7 +125,7 @@ theorem size_eq_uint (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc : enco
       have hev := Except.ok.inj henc
       have hv256 : v' < 2 ^ 256 := lt_of_lt_of_le hb (Nat.pow_le_pow_right (by omega) (by have := s.h.right; omega))
       simp only [headSize, isDynamic]; rw [← hev]; exact uint256ToBytes_size v' (natToBytes_size_bound v' hv256)
-    · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
+    · badErr henc ev
   | _ => badVal henc
 
 theorem size_eq_int (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc : encode (.int s) v = Except.ok ev) : ev.size = headSize (.int s) := by
@@ -134,7 +134,7 @@ theorem size_eq_int (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc : encod
     openEnc henc
     simp only [Bool.or_eq_true, decide_eq_true_eq] at henc
     split at henc
-    · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
+    · badErr henc ev
     · rename_i hcond
       have hev := Except.ok.inj henc
       push Not at hcond
@@ -158,7 +158,7 @@ theorem size_eq_address (v : ABIValue) (ev : ByteArray) (henc : encode .address 
     · rename_i h20
       have hev := Except.ok.inj henc
       simp only [headSize, isDynamic]; rw [← hev]; unfold padLeft; simp [h20, zeros_size]
-    · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
+    · badErr henc ev
   | _ => badVal henc
 
 theorem size_eq_fixedBytes (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc : encode (.fixedBytes s) v = Except.ok ev) : ev.size = headSize (.fixedBytes s) := by
@@ -169,7 +169,7 @@ theorem size_eq_fixedBytes (s : ByteSize) (v : ABIValue) (ev : ByteArray) (henc 
     · rename_i hsz
       have hev := Except.ok.inj henc
       simp only [headSize, isDynamic]; rw [← hev]; exact padRight_size_32 v' (by rw [hsz]; exact s.h.right)
-    · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
+    · badErr henc ev
   | _ => badVal henc
 
 /-! ## Tuple encode (`go`) / `tuplePack` reduction helpers -/
@@ -678,7 +678,7 @@ theorem szdvd_bytes (v : ABIValue) (ev : ByteArray) (_hsz : ev.size < 2^256) (he
           omega
         · simp [zeros_size]; unfold roundUp32; omega
       rw [hPsz, hpad]; exact Nat.dvd_add (by norm_num) (roundUp32_dvd v'.size)
-    · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
+    · badErr henc ev
   | _ => badVal henc
 
 theorem szdvd_string (v : ABIValue) (ev : ByteArray) (_hsz : ev.size < 2^256) (henc : encode .string v = Except.ok ev) : 32 ∣ ev.size := by
@@ -696,7 +696,7 @@ theorem szdvd_string (v : ABIValue) (ev : ByteArray) (_hsz : ev.size < 2^256) (h
           omega
         · simp [zeros_size]; unfold roundUp32; omega
       rw [hPsz, hpad]; exact Nat.dvd_add (by norm_num) (roundUp32_dvd v'.toUTF8.size)
-    · exact absurd (show Except.error _ = Except.ok ev from henc) (by simp)
+    · badErr henc ev
   | _ => badVal henc
 
 /-- `bytes[]` roundtrips under the well-formedness bound (`enc.size < 2^256`). -/
