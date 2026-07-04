@@ -146,7 +146,7 @@ theorem concat_size_uniform (encd : List ByteArray) (k : Nat) (h : ∀ b ∈ enc
   | cons x xs ih =>
     rw [ba_foldl_cons, ByteArray.size_append, h x (by simp),
         ih (fun b hb => h b (by simp [hb]))]
-    simp [List.length_cons, Nat.succ_mul]; ring
+    grind
 
 theorem encodeListElems_length (e : ABIType) (vals : List ABIValue) (encd : List ByteArray)
     (h : encodeListElems (encode e) vals = Except.ok encd) : encd.length = vals.length := by

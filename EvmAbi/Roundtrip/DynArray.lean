@@ -22,7 +22,7 @@ They are assembled into `roundtrip_{array,fixedArray,tuple}_wf` and the `wfFacts
 theorem roundUp32_dvd (n : Nat) : 32 ∣ roundUp32 n := ⟨(n+31)/32, by unfold roundUp32; ring⟩
 
 theorem roundUp32_eq_of_dvd (n : Nat) (h : 32 ∣ n) : roundUp32 n = n := by
-  obtain ⟨k, rfl⟩ := h; unfold roundUp32; rw [show (32*k+31)/32 = k from by omega]; ring
+  obtain ⟨k, rfl⟩ := h; unfold roundUp32; omega
 
 theorem uint256ToBytes_size32 (v : Nat) (hv : v < 2 ^ 256) : (uint256ToBytes v).size = 32 :=
   uint256ToBytes_size v (natToBytes_size_bound v hv)
@@ -57,7 +57,7 @@ theorem dynHeadsFrom_size (l : List ByteArray) :
     have hb' : (off + e.size) + (es.foldl (·++·) ByteArray.empty).size < 2^256 := by
       rw [ba_foldl_cons, ByteArray.size_append] at hb; omega
     rw [hru, ih (off + e.size) hb' (fun b hbm => halign b (by simp [hbm]))]
-    simp [List.length_cons]; ring
+    grind
 
 /-- One step of the dynamic-element head grid: with the pointer grid for `ev :: er` at slot `i`
 and the packed tails at `curTail`, read off the slot's pointer word and `ev`'s payload, and

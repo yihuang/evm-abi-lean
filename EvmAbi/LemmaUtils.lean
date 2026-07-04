@@ -54,7 +54,7 @@ theorem numBytes_lt_pow (n : Nat) (k : Nat) (hn : n < 256 ^ k) : numBytes n ≤ 
 
 /- A 256-bit value fits in at most 32 bytes. -/
 theorem numBytes_bound (n : Nat) (hn : n < 2 ^ 256) : numBytes n ≤ 32 := by
-  have h256_eq : 2 ^ 256 = 256 ^ 32 := by native_decide
+  have h256_eq : 2 ^ 256 = 256 ^ 32 := by decide
   have hn' : n < 256 ^ 32 := by simpa [h256_eq] using hn
   exact numBytes_lt_pow n 32 hn'
 
@@ -117,7 +117,7 @@ theorem natToBytes_size_range (n : Nat) (k : Nat) (hk : 0 < k) (h_lo : 2 ^ (k * 
       _ = 2 ^ (8 * k) := by simp [Nat.mul_comm]
       _ = (2 ^ 8) ^ k := by rw [Nat.pow_mul]
       _ = 256 ^ k := by
-        have h256 : (2 : Nat) ^ 8 = 256 := by native_decide
+        have h256 : (2 : Nat) ^ 8 = 256 := by decide
         simp [h256]
   have h_lo' : 256 ^ (k - 1) ≤ n := by
     have h_exp_le : 8 * (k - 1) ≤ k * 8 - 1 := by omega
@@ -125,7 +125,7 @@ theorem natToBytes_size_range (n : Nat) (k : Nat) (hk : 0 < k) (h_lo : 2 ^ (k * 
       Nat.pow_le_pow_right (by omega : 0 < 2) h_exp_le
     calc
       256 ^ (k - 1) = (2 ^ 8) ^ (k - 1) := by
-        have h256 : (2 : Nat) ^ 8 = 256 := by native_decide
+        have h256 : (2 : Nat) ^ 8 = 256 := by decide
         simp [h256]
       _ = 2 ^ (8 * (k - 1)) := by rw [Nat.pow_mul]
       _ ≤ 2 ^ (k * 8 - 1) := h_pow_le
@@ -148,7 +148,7 @@ theorem natToBytes_size_range (n : Nat) (k : Nat) (hk : 0 < k) (h_lo : 2 ^ (k * 
 /- natToBytes for a value < 2^256 fits in 32 bytes. -/
 theorem natToBytes_size_bound (v : Nat) (hv : v < 2 ^ 256) : (natToBytes v).size ≤ 32 := by
   unfold natToBytes; split
-  · native_decide
+  · decide
   · rename_i hv0
     have h_sz : (natToBytes.go v ByteArray.empty).size = numBytes v := by
       simpa using size_go v ByteArray.empty
