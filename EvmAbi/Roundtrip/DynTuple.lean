@@ -69,19 +69,9 @@ theorem tuplePack_dyn (headSizes : List Nat) (dynamics : List Bool) (encoded : L
 
 /-! ### Dynamic tuple decode (decodeTupleDynamic) -/
 theorem headSize_dynamic (t : ABIType) (h : isDynamic t = true) : headSize t = 32 := by
-  cases t with
-  | bytes => simp [headSize]
-  | string => simp [headSize]
-  | array e => simp [headSize]
-  | fixedArray n e => rw [headSize, if_pos h]
-  | tuple ts => cases ts with
-    | nil => simp [isDynamic] at h
-    | cons _ _ => rw [headSize, if_pos h]
-  | uint s => simp [isDynamic] at h
-  | int s => simp [isDynamic] at h
-  | bool => simp [isDynamic] at h
-  | address => simp [isDynamic] at h
-  | fixedBytes s => simp [isDynamic] at h
+  unfold headSize
+  rw [h]
+  rfl
 
 theorem headSize_mem_le (l : List ABIType) (t : ABIType) (h : t ∈ l) :
     headSize t ≤ l.foldl (fun a t => a + headSize t) 0 := by
