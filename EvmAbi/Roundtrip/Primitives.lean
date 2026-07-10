@@ -518,18 +518,17 @@ theorem roundtrip_off_uint (s : ByteSize) (v : ABIValue) (enc data : ByteArray) 
     (henc : encode (.uint s) v = Except.ok enc)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode (.uint s) data off = Except.ok (v, off + enc.size) := by
-  rcases v with v'|i|b|ba|str|addr|arr|tup
-  · exact roundtrip_offset_uint s v' enc data off henc hdata
-  all_goals badVal henc
+  cases v with
+  | uint v' => exact roundtrip_offset_uint s v' enc data off henc hdata
+  | _ => badVal henc
 
 theorem roundtrip_off_int (s : ByteSize) (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode (.int s) v = Except.ok enc)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode (.int s) data off = Except.ok (v, off + enc.size) := by
-  rcases v with v'|i|b|ba|str|addr|arr|tup
-  · badVal henc
-  · exact roundtrip_offset_int s i enc data off henc hdata
-  all_goals badVal henc
+  cases v with
+  | int i => exact roundtrip_offset_int s i enc data off henc hdata
+  | _ => badVal henc
 
 theorem roundtrip_off_bool (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .bool v = Except.ok enc)

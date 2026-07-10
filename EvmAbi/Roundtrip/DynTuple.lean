@@ -76,7 +76,7 @@ theorem headSize_dynamic (t : ABIType) (h : isDynamic t = true) : headSize t = 3
   | fixedArray n e => rw [headSize, if_pos h]
   | tuple ts => cases ts with
     | nil => simp [isDynamic] at h
-    | cons t' ts' => rw [headSize, if_pos h]
+    | cons _ _ => rw [headSize, if_pos h]
   | uint s => simp [isDynamic] at h
   | int s => simp [isDynamic] at h
   | bool => simp [isDynamic] at h

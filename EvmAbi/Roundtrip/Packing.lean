@@ -18,29 +18,20 @@ theorem tuple_any_isDynamic (ts : List ABIType) : (ts.map isDynamic).any id = is
 
 theorem enc_fst_eq_isDynamic (e : ABIType) : (foldABIType EncoderEntry e).1 = isDynamic e := by
   match e with
-  | .uint s => simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp; simp [isDynamic]
-  | .int s => simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp; simp [isDynamic]
-  | .bool => simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp; simp [isDynamic]
-  | .address => simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp; simp [isDynamic]
-  | .bytes => simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp; simp [isDynamic]
-  | .fixedBytes s => simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp; simp [isDynamic]
-  | .string => simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp; simp [isDynamic]
+  | .uint s | .int s | .bool | .address | .bytes | .fixedBytes s | .string =>
+    simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp; simp [isDynamic]
   | .array e' =>
     simp only [foldABIType]; delta instABIVisitorEncoderEntry
     rcases foldABIType EncoderEntry e' with ⟨d, f⟩
     dsimp; simp [isDynamic]
   | .fixedArray n e' =>
     have ih := enc_fst_eq_isDynamic e'
-    simp only [foldABIType]; delta instABIVisitorEncoderEntry
-    rcases hfe : foldABIType EncoderEntry e' with ⟨d, f⟩
-    rw [hfe] at ih; dsimp
-    rw [show isDynamic (ABIType.fixedArray n e') = isDynamic e' from by simp [isDynamic]]
-    simpa using ih
+    unfold foldABIType
+    simp [isDynamic]
+    exact ih
   | .tuple ts =>
     simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp
     exact tuple_any_isDynamic ts
-termination_by sizeOf e
-decreasing_by simp
 
 /-- From a destructured encoder entry `foldABIType EncoderEntry t = (d, f)`, the dynamic flag `d`
 equals `isDynamic t` — the reusable form of `enc_fst_eq_isDynamic` applied through a `⟨d, f⟩` split. -/
