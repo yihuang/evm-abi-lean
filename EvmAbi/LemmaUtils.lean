@@ -38,19 +38,16 @@ theorem numBytes_lt_pow (n : Nat) (k : Nat) (hn : n < 256 ^ k) : numBytes n ≤ 
   induction k generalizing n
   case zero =>
     have hn' : n < 1 := by simpa using hn
-    have h0 : n = 0 := by omega
-    subst h0; simp [numBytes]
+    have hn0 : n = 0 := by omega
+    subst hn0; simp [numBytes]
   case succ k ih =>
     by_cases hn0 : n = 0
     · subst hn0; simp [numBytes]
     · unfold numBytes; simp [hn0]
-      have hn_mul : n < 256 * 256 ^ k := by
-        calc
-          n < 256 ^ (k+1) := hn
-          _ = 256 ^ k * 256 := by simp [Nat.pow_succ]
-          _ = 256 * 256 ^ k := by omega
-      have hdiv_lt : n / 256 < 256 ^ k := Nat.div_lt_of_lt_mul hn_mul
-      have h_ih := ih (n / 256) hdiv_lt; omega
+      have hdiv_lt : n / 256 < 256 ^ k :=
+        Nat.div_lt_of_lt_mul (by simpa [Nat.pow_succ, mul_comm] using hn)
+      have h_ih := ih (n / 256) hdiv_lt
+      simpa [add_comm] using Nat.add_le_add_right h_ih 1
 
 /- A 256-bit value fits in at most 32 bytes. -/
 theorem numBytes_bound (n : Nat) (hn : n < 2 ^ 256) : numBytes n ≤ 32 := by
@@ -62,16 +59,16 @@ theorem numBytes_bound (n : Nat) (hn : n < 2 ^ 256) : numBytes n ≤ 32 := by
 theorem numBytes_ge_pow (n : Nat) (k : Nat) (h : 256 ^ k ≤ n) : k + 1 ≤ numBytes n := by
   induction k generalizing n with
   | zero =>
-    have hnpos : n ≠ 0 := by
-      intro hzero; subst hzero; simp at h
-    unfold numBytes; simp [hnpos]
+    by_cases hn0 : n = 0
+    · subst hn0; simp at h
+    · unfold numBytes; simp [hn0]
   | succ k ih =>
     have hnpos : n ≠ 0 := by
       intro hzero; subst hzero; simp at h
     unfold numBytes; simp [hnpos]
-    have h_mul : 256 ^ k * 256 ≤ n := by
-      simpa [Nat.pow_succ] using h
     have h_div : 256 ^ k ≤ n / 256 := by
+      have h_mul : 256 ^ k * 256 ≤ n := by
+        simpa [Nat.pow_succ, mul_comm] using h
       have h' : (256 ^ k * 256) / 256 ≤ n / 256 :=
         Nat.div_le_div_right h_mul
       calc
@@ -213,15 +210,14 @@ theorem bytesToNat_go (n : Nat) (acc : ByteArray) : bytesToNat (natToBytes.go n 
       calc
         bytesToNat (natToBytes.go (n / 256) b) = (n / 256) * 256 ^ b.size + bytesToNat b := h_ih'
         _ = (n / 256) * 256 ^ (1 + acc.size) + ((n % 256) * 256 ^ acc.size + bytesToNat acc) := by rw [h_sz, h_byt]
-        _ = ((n / 256) * (256 * 256 ^ acc.size) + (n % 256) * 256 ^ acc.size) + bytesToNat acc := by
-          rw [h_pow, Nat.add_assoc]
-        _ = ((n / 256) * 256 * 256 ^ acc.size + (n % 256) * 256 ^ acc.size) + bytesToNat acc := by
-          simp [Nat.mul_assoc]
-        _ = (((n / 256) * 256 + (n % 256)) * 256 ^ acc.size) + bytesToNat acc := by
-          rw [← Nat.add_mul]
         _ = n * 256 ^ acc.size + bytesToNat acc := by
           have h_divmod : (n / 256) * 256 + (n % 256) = n := by omega
-          rw [h_divmod]
+          calc
+            (n / 256) * 256 ^ (1 + acc.size) + ((n % 256) * 256 ^ acc.size + bytesToNat acc)
+                = ((n / 256) * 256 ^ (1 + acc.size) + (n % 256) * 256 ^ acc.size) + bytesToNat acc := by omega
+            _ = ((n / 256) * (256 * 256 ^ acc.size) + (n % 256) * 256 ^ acc.size) + bytesToNat acc := by ring
+            _ = (((n / 256) * 256 + (n % 256)) * 256 ^ acc.size) + bytesToNat acc := by ring
+            _ = n * 256 ^ acc.size + bytesToNat acc := by rw [h_divmod]
 
 /- bytesToNat ∘ natToBytes = id. -/
 theorem bytesToNat_natToBytes (v : Nat) : bytesToNat (natToBytes v) = v := by
@@ -247,14 +243,9 @@ theorem bytesToNat_padLeft (b : ByteArray) (n : Nat) : bytesToNat (padLeft b n) 
       induction (n - b.size) with
       | zero => simp
       | succ k ih =>
-        calc
-          List.foldl (fun acc b => acc * 256 + b.toNat) 0 (List.replicate (k + 1) zeroByte)
-              = List.foldl (fun acc b => acc * 256 + b.toNat) 0 (zeroByte :: List.replicate k zeroByte) := by
-            simp [List.replicate]
-          _ = List.foldl (fun acc b => acc * 256 + b.toNat) (0 * 256 + zeroByte.toNat) (List.replicate k zeroByte) := by
-            simp [List.foldl]
-          _ = List.foldl (fun acc b => acc * 256 + b.toNat) 0 (List.replicate k zeroByte) := by simp [zeroByte]
-          _ = 0 := ih
+        rw [List.replicate_succ, List.foldl_cons]
+        simp [zeroByte]
+        exact ih
     have hlist : ({ data := Array.mk (List.replicate (n - b.size) zeroByte) } : ByteArray).data.toList =
         List.replicate (n - b.size) zeroByte := by simp
     rw [hlist, hz]
@@ -338,12 +329,13 @@ theorem intToBytes_neg_size (v' : Int) (byteLen : Nat) (hv_nonpos : ¬ v' ≥ 0)
   simp [hv_nonpos]
   let u := ((2 : Int) ^ (byteLen * 8) + v').toNat
   have h_sz : (natToBytes u).size ≤ 32 := natToBytes_size_bound u h_bounded
-  have h_sz' : (ByteArray.mk (Array.mk (List.replicate (32 - (natToBytes u).size) 0xFF))).size = 32 - (natToBytes u).size := by
-    unfold ByteArray.size; simp
-  calc
-    (ByteArray.mk (Array.mk (List.replicate (32 - (natToBytes u).size) 0xFF))).size + (natToBytes u).size
-        = (32 - (natToBytes u).size) + (natToBytes u).size := by rw [h_sz']
-    _ = 32 := by omega
+  have h_total : (ByteArray.mk (Array.mk (List.replicate (32 - (natToBytes u).size) 0xFF)) ++ natToBytes u).size = 32 := by
+    rw [ByteArray.size_append]
+    have h_left : (ByteArray.mk (Array.mk (List.replicate (32 - (natToBytes u).size) 0xFF))).size = 32 - (natToBytes u).size := by
+      unfold ByteArray.size; simp
+    rw [h_left]
+    omega
+  simpa [u] using h_total
 
 
 /- .toNat of (2 : Int) ^ b equals (2 : Nat) ^ b. -/

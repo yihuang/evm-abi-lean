@@ -86,7 +86,7 @@ inductive ABIValue : Type where
   | tuple   (vals : List ABIValue)
   deriving BEq
 
-/-! ## All — heterogeneous list for ABIVisitor -/
+/-! ## All — heterogeneous list for ABIVisitor, helper for ABIVisitor -/
 
 inductive All (φ : ABIType → Type) : List ABIType → Type where
   | nil  : All φ []
@@ -117,8 +117,7 @@ def isDynamic : ABIType → Bool
 
 /-- ABI "head" size of a type when it appears as a tuple/array element: a dynamic
     type always occupies a 32-byte offset pointer in the head; a static type occupies
-    its full (static) encoding size. (Returning the structural size for dynamic
-    `fixedArray`/`tuple` was a bug: their ABI head is a 32-byte pointer, not `n·headSize e`.) -/
+    its full (static) encoding size. -/
 def headSize (t : ABIType) : Nat :=
   if isDynamic t then 32 else
     match t with
@@ -128,12 +127,6 @@ def headSize (t : ABIType) : Nat :=
     | _               => 32
 
 /-! ## Termination lemmas for foldABIType (using sizeOf) -/
-
-theorem sizeOf_lt_tuple_cons (t : ABIType) (ts : List ABIType) : sizeOf t < sizeOf (ABIType.tuple (t :: ts)) := by
-  simp; omega
-
-theorem sizeOf_tuple_lt_tuple_cons (t : ABIType) (ts : List ABIType) : sizeOf (ABIType.tuple ts) < sizeOf (ABIType.tuple (t :: ts)) := by
-  simp; omega
 
 mutual
 
@@ -162,8 +155,8 @@ mutual
     | t::ts => All.cons (foldABIType φ t) (foldAll φ ts)
   termination_by (sizeOf (ABIType.tuple types), 0, types.length)
   decreasing_by
-    · apply Prod.Lex.left; apply sizeOf_lt_tuple_cons
-    · apply Prod.Lex.left; apply sizeOf_tuple_lt_tuple_cons
+    · apply Prod.Lex.left; simp; omega
+    · apply Prod.Lex.left; simp; omega
 
 end
 
