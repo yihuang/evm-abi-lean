@@ -106,34 +106,7 @@ theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
         openEncG
         rw [two_pow_256] at hv256; simp [hv256]
       rw [hval] at henc; simp at henc
-  | uint n =>
-    have h_wrong : encode .bytes (ABIValue.uint n) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | bool b =>
-    have h_wrong : encode .bytes (ABIValue.bool b) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | address a =>
-    have h_wrong : encode .bytes (ABIValue.address a) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | int i =>
-    have h_wrong : encode .bytes (ABIValue.int i) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | string s =>
-    have h_wrong : encode .bytes (ABIValue.string s) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | array arr =>
-    have h_wrong : encode .bytes (ABIValue.array arr) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | tuple tup =>
-    have h_wrong : encode .bytes (ABIValue.tuple tup) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
+  | _ => badVal henc
 
 theorem roundtrip_string (v : ABIValue) (data : ByteArray)
     (henc : encode .string v = Except.ok data) : decode .string data 0 = Except.ok (v, data.size) := by
@@ -153,34 +126,7 @@ theorem roundtrip_string (v : ABIValue) (data : ByteArray)
         have h_ge' : ¬ v'.utf8ByteSize < 2 ^ 256 := by simpa using huv256
         rw [two_pow_256] at h_ge'; simp [h_ge']
       rw [hval] at henc; simp at henc
-  | uint n =>
-    have h_wrong : encode .string (ABIValue.uint n) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | bool b =>
-    have h_wrong : encode .string (ABIValue.bool b) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | address a =>
-    have h_wrong : encode .string (ABIValue.address a) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | int i =>
-    have h_wrong : encode .string (ABIValue.int i) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | bytes b =>
-    have h_wrong : encode .string (ABIValue.bytes b) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | array arr =>
-    have h_wrong : encode .string (ABIValue.array arr) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
-  | tuple tup =>
-    have h_wrong : encode .string (ABIValue.tuple tup) = Except.error .typeValueMismatch := by
-      openEncG
-    rw [h_wrong] at henc; simp at henc
+  | _ => badVal henc
 
 /-! ## Int helper lemmas -/
 
