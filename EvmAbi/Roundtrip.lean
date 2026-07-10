@@ -178,7 +178,7 @@ theorem dyn_encoding_ge_32_bytes (v : ABIValue) (ev : ByteArray) (henc : encode 
     · have he : ev = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size) := (Except.ok.inj henc).symm
       rw [he, ByteArray.size_append]; have := uint256ToBytes_size_ge v'.size; omega
     · exact absurd henc (by simp)
-  | uint _ | int _ | bool _ | string _ | address _ | array _ | tuple _ => badVal henc
+  | _ => badVal henc
 
 theorem dyn_encoding_ge_32_string (v : ABIValue) (ev : ByteArray) (henc : encode .string v = Except.ok ev) : 32 ≤ ev.size := by
   cases v with
@@ -188,14 +188,14 @@ theorem dyn_encoding_ge_32_string (v : ABIValue) (ev : ByteArray) (henc : encode
     · have he : ev = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size) := (Except.ok.inj henc).symm
       rw [he, ByteArray.size_append]; have := uint256ToBytes_size_ge v'.toUTF8.size; omega
     · exact absurd henc (by simp)
-  | uint _ | int _ | bool _ | bytes _ | address _ | array _ | tuple _ => badVal henc
+  | _ => badVal henc
 
 theorem dyn_encoding_ge_32_array (e : ABIType) (v : ABIValue) (ev : ByteArray) (henc : encode (.array e) v = Except.ok ev) : 32 ≤ ev.size := by
   cases v with
   | array vals =>
     obtain ⟨encd, -, -, he⟩ := encode_array_inv e vals ev henc
     rw [he, ByteArray.size_append]; have := uint256ToBytes_size_ge vals.length; omega
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
+  | _ => badArrVal henc e
 
 theorem dyn_encoding_ge_32_fixedArray (n : Nat) (e : ABIType) (hn : isDynamic e = true → 0 < n)
     (hdyn : isDynamic (.fixedArray n e) = true) (v : ABIValue) (ev : ByteArray)
@@ -209,7 +209,7 @@ theorem dyn_encoding_ge_32_fixedArray (n : Nat) (e : ABIType) (hn : isDynamic e 
     have hge := dynHeadsFrom_size_ge encd (if encd.length = 0 then 32 else encd.length * 32)
     have : 0 < encd.length := by rw [hlen_eq, hvn]; exact hn hisdyn_e
     omega
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
+  | _ => badArrVal henc e
 
 theorem tupleHeadsFrom_ge_32 : ∀ (encd : List (Bool × ByteArray)) (off : Nat), (∃ b ∈ encd, b.1 = true) →
     32 ≤ ((tupleHeadsFrom off encd).foldl (·++·) ByteArray.empty).size := by
@@ -266,7 +266,7 @@ theorem dyn_encoding_ge_32_tuple (ts : List ABIType) (hdyn : isDynamic (.tuple t
     have hentry := go_has_dyn_entry ts vs encd hgo hany_ts
     have hheads := tupleHeadsFrom_ge_32 encd (ts.foldl (fun a t => a + headSize t) 0) hentry
     omega
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
+  | _ => badVal henc
 
 theorem dyn_encoding_ge_32 (t : ABIType) (hwf : WellFormedType t) (hdyn : isDynamic t = true)
     (v : ABIValue) (ev : ByteArray) (henc : encode t v = Except.ok ev) : 32 ≤ ev.size := by
@@ -329,7 +329,7 @@ theorem dyn_tuple_hbd (ts : List ABIType) (hwf : ∀ t ∈ ts, WellFormedType t)
     obtain ⟨b, hb, hb1, hbsize⟩ := go_has_big_dyn_entry ts hwf vs encd hgo hdyn hbnd_dyn
     have := tupleTails_mem_le encd b hb hb1
     omega
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
+  | _ => badVal henc
 
 theorem size_eq_tuple_wf (ts : List ABIType)
     (hsize : ∀ t ∈ ts, isDynamic t = false → ∀ (v : ABIValue) (ev : ByteArray), encode t v = Except.ok ev → ev.size = headSize t)
@@ -341,7 +341,7 @@ theorem size_eq_tuple_wf (ts : List ABIType)
     have hany : (ts.map isDynamic).any id = false := by rw [tuple_any_isDynamic]; exact hstat
     rw [hpack, tuplePack_static _ _ _ hany]
     exact tuplePackStatic_size_wf ts hsize (tuple_static_elems ts hstat) vs encd hgo
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | array _ => badVal henc
+  | _ => badVal henc
 
 /-- `WFFacts` for every well-formed type, INCLUDING tuples (structs). The dynamic-tuple `rt`
     discharges its head-area bound internally via `dyn_tuple_hbd`, so it stays bound-free and

@@ -302,7 +302,7 @@ theorem size_eq_fixedArray_core (n : Nat) (e : ABIType)
     rw [hpack, concat_size_uniform encd (headSize e) hall,
         encodeListElems_length e vals encd hEL', hlen]
     simp only [headSize, isDynamic, hstat_e, Bool.false_eq_true, if_false]
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
+  | _ => badArrVal henc e
 
 /-- If a tuple type is static, every element type is static. -/
 theorem tuple_static_elems (ts : List ABIType) (h : isDynamic (.tuple ts) = false) :
