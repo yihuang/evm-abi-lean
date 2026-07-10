@@ -142,21 +142,11 @@ mutual
     | .array e        => inst.onArray (foldABIType φ e)
     | .fixedArray n e => inst.onFixedArray n (foldABIType φ e)
     | .tuple ts       => inst.onTuple (foldAll φ ts)
-  termination_by (sizeOf t, 1, 0)
-  decreasing_by
-    · apply Prod.Lex.left; simp
-    · apply Prod.Lex.left; simp; omega
-    · apply Prod.Lex.right (a := sizeOf (ABIType.tuple ts))
-      apply Prod.Lex.left; omega
 
   def foldAll (φ : ABIType → Type) [inst : ABIVisitor φ] (types : List ABIType) : All φ types :=
     match types with
     | []    => All.nil
     | t::ts => All.cons (foldABIType φ t) (foldAll φ ts)
-  termination_by (sizeOf (ABIType.tuple types), 0, types.length)
-  decreasing_by
-    · apply Prod.Lex.left; simp; omega
-    · apply Prod.Lex.left; simp; omega
 
 end
 
