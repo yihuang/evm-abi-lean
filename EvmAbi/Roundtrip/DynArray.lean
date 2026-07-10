@@ -416,7 +416,7 @@ theorem roundtrip_array_wf (e : ABIType) (data : ByteArray)
               (by rw [← hpkT]; exact hpk_lt) (by rw [← hpkT]; exact hsuffix)]
         rw [show off + 32 + (arrayPack true encd).size = off + enc.size from by rw [← hpkT]; omega]
         rfl
-  | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
+  | _ => badArrVal henc e
 
 /-! ### Concrete WF roundtrips for the common dynamic-element arrays -/
 
