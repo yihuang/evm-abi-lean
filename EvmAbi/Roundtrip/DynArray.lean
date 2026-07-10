@@ -456,22 +456,6 @@ theorem szdvd_string (v : ABIValue) (ev : ByteArray) (_hsz : ev.size < 2^256) (h
     · badErr henc ev
   | _ => badVal henc
 
-/-- `bytes[]` roundtrips under the well-formedness bound (`enc.size < 2^256`). -/
-theorem roundtrip_bytes_array_wf (v : ABIValue) (enc data : ByteArray) (off : Nat)
-    (hwf : enc.size < 2^256) (henc : encode (.array .bytes) v = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode (.array .bytes) data off = Except.ok (v, off + enc.size) :=
-  roundtrip_array_wf .bytes data
-    (fun v ev o _ h2 h3 => roundtrip_off_bytes v ev data o h2 h3) szdvd_bytes v enc off hwf henc hdata
-
-/-- `string[]` roundtrips under the well-formedness bound (`enc.size < 2^256`). -/
-theorem roundtrip_string_array_wf (v : ABIValue) (enc data : ByteArray) (off : Nat)
-    (hwf : enc.size < 2^256) (henc : encode (.array .string) v = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode (.array .string) data off = Except.ok (v, off + enc.size) :=
-  roundtrip_array_wf .string data
-    (fun v ev o _ h2 h3 => roundtrip_off_string v ev data o h2 h3) szdvd_string v enc off hwf henc hdata
-
 /-! ### WF-conditioned dynamic fixed-array roundtrip -/
 theorem decodeArrayElems_zero (dec : ByteArray → Nat → Except Error (ABIValue × Nat)) (isDyn : Bool) (data : ByteArray) (off : Nat) :
     decodeArrayElems dec isDyn 0 data off = Except.ok ([], off) := by
@@ -542,12 +526,3 @@ theorem szdvd_array (e : ABIType)
     rw [hencsz]
     exact Nat.dvd_add (by norm_num) (arrayPack_size_dvd (isDynamic e) encd (by omega) halign)
   | uint _ | int _ | bool _ | bytes _ | string _ | address _ | tuple _ => badArrVal henc e
-
-/-- Nested `bytes[][]` roundtrips under the bound — demonstrates the WF results compose. -/
-theorem roundtrip_bytes_array_array_wf (v : ABIValue) (enc data : ByteArray) (off : Nat)
-    (hwf : enc.size < 2^256) (henc : encode (.array (.array .bytes)) v = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode (.array (.array .bytes)) data off = Except.ok (v, off + enc.size) :=
-  roundtrip_array_wf (.array .bytes) data
-    (fun v ev o hsz h2 h3 => roundtrip_bytes_array_wf v ev data o hsz h2 h3)
-    (szdvd_array .bytes szdvd_bytes) v enc off hwf henc hdata

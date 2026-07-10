@@ -348,11 +348,9 @@ theorem decodeTupleDynamic_pack_wf (ts : List ABIType) (data : ByteArray)
     rw [← hpackht]; exact hslice
   have hslice_heads := extract_append_left_of_slice data off heads tails hslice_all
   have hslice_tails := extract_append_right_of_slice data off heads tails hslice_all
-  have hh_heads : data.extract (off + ([] : List ABIType).foldl (fun a t => a + headSize t) 0) (off + ([] : List ABIType).foldl (fun a t => a + headSize t) 0 + ((tupleHeadsFrom HA encd).foldl (·++·) ByteArray.empty).size) = (tupleHeadsFrom HA encd).foldl (·++·) ByteArray.empty := by
-    simp only [List.foldl_nil, Nat.add_zero]; rw [← hh]; exact hslice_heads
-  have ht_tails : data.extract (off + HA) (off + HA + (tupleTails encd).size) = tupleTails encd := by
-    rw [← ht, ← hheadsz]; exact hslice_tails
-  have hdc := dtd_concat ts data off hbd hrt hsize hdvd (by omega) [] ts vs encd HA (off + HA) [] rfl hgo rfl (by rw [← ht]; omega) hh_heads ht_tails
+  have hdc := dtd_concat ts data off hbd hrt hsize hdvd (by omega) [] ts vs encd HA (off + HA) [] rfl hgo rfl (by rw [← ht]; omega)
+    (by simpa [List.foldl_nil, Nat.add_zero] using hslice_heads)
+    (by simpa [hheadsz] using hslice_tails)
   simp only [List.length_nil, List.reverse_nil, List.nil_append] at hdc
   rw [hdc, show off + HA + (tupleTails encd).size
         = off + (tuplePack (ts.map headSize) (ts.map isDynamic) encd).size from by rw [← ht]; omega]
@@ -524,14 +522,8 @@ theorem szdvd_tuple (ts : List ABIType)
     cases hdynb : (ts.map isDynamic).any id with
     | false =>
       rw [hpack, tuplePack_static _ _ _ hdynb]
-      have hallstat : ∀ t ∈ ts, isDynamic t = false := by
-        intro t ht
-        rcases hb : isDynamic t with _ | _
-        · rfl
-        · exfalso
-          have : (ts.map isDynamic).any id = true :=
-            List.any_eq_true.mpr ⟨isDynamic t, List.mem_map_of_mem ht, by simpa using hb⟩
-          rw [hdynb] at this; exact absurd this (by simp)
+      have hallstat : ∀ t ∈ ts, isDynamic t = false :=
+        tuple_static_elems ts (by rw [← tuple_any_isDynamic ts]; exact hdynb)
       exact concat_pairs_dvd encd (tuple_entries_static_dvd ts hsize vs encd hgo hallstat)
     | true =>
       have hHAeq : (ts.map headSize).foldl (· + ·) 0 = ts.foldl (fun a t => a + headSize t) 0 := by

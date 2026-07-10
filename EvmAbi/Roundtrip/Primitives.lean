@@ -534,27 +534,25 @@ theorem roundtrip_off_bool (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .bool v = Except.ok enc)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode .bool data off = Except.ok (v, off + enc.size) := by
-  rcases v with v'|i|b|ba|str|addr|arr|tup
-  · badVal henc
-  · badVal henc
-  · exact roundtrip_offset_bool b enc data off henc hdata
-  all_goals badVal henc
+  cases v with
+  | bool b => exact roundtrip_offset_bool b enc data off henc hdata
+  | _ => badVal henc
 
 theorem roundtrip_off_address (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .address v = Except.ok enc)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode .address data off = Except.ok (v, off + enc.size) := by
-  cases v
-  case address addr => exact roundtrip_offset_address addr enc data off henc hdata
-  all_goals badVal henc
+  cases v with
+  | address addr => exact roundtrip_offset_address addr enc data off henc hdata
+  | _ => badVal henc
 
 theorem roundtrip_off_fixedBytes (s : ByteSize) (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode (.fixedBytes s) v = Except.ok enc)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode (.fixedBytes s) data off = Except.ok (v, off + enc.size) := by
-  cases v
-  case bytes ba => exact roundtrip_offset_fixedBytes s ba enc data off henc hdata
-  all_goals badVal henc
+  cases v with
+  | bytes ba => exact roundtrip_offset_fixedBytes s ba enc data off henc hdata
+  | _ => badVal henc
 
 theorem roundtrip_off_bytes (v : ABIValue) (enc data : ByteArray) (off : Nat)
     (henc : encode .bytes v = Except.ok enc)

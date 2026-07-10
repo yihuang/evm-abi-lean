@@ -302,9 +302,10 @@ theorem tuple_static_elems (ts : List ABIType) (h : isDynamic (.tuple ts) = fals
   intro t ht
   by_contra hc
   have hd : isDynamic t = true := by cases hh : isDynamic t <;> simp_all
+  have hmem : isDynamic t ∈ ts.map isDynamic := List.mem_map_of_mem ht
   have : (ts.map isDynamic).any id = true := by
-    rw [List.any_eq_true]; exact ⟨isDynamic t, List.mem_map.mpr ⟨t, ht, rfl⟩, by simp [hd]⟩
-  rw [this] at h2; exact absurd h2 (by simp)
+    rw [List.any_eq_true]; exact ⟨isDynamic t, hmem, hd⟩
+  rw [this] at h2; simp at h2
 
 /-! ## Static tuple decode + headSize helpers -/
 
