@@ -73,15 +73,13 @@ theorem headSize_dynamic (t : ABIType) (h : isDynamic t = true) : headSize t = 3
   rw [h]
   rfl
 
+theorem foldl_add_eq_sum_map (l : List ABIType) (f : ABIType → Nat) :
+    l.foldl (fun a t => a + f t) 0 = (l.map f).sum := by
+  simp [List.foldl_map, List.sum_eq_foldl]
+
 theorem headSize_mem_le (l : List ABIType) (t : ABIType) (h : t ∈ l) :
     headSize t ≤ l.foldl (fun a t => a + headSize t) 0 := by
-  induction l with
-  | nil => exact absurd h (by simp)
-  | cons x xs ih =>
-    rw [List.foldl_cons, headSize_foldl_shift]
-    rcases List.mem_cons.mp h with h1 | h2
-    · subst h1; omega
-    · have := ih h2; omega
+  simpa [foldl_add_eq_sum_map] using List.le_sum_of_mem (List.mem_map_of_mem (f := headSize) h)
 
 theorem foldl_append_ge (processed ts : List ABIType) :
     processed.foldl (fun a t => a + headSize t) 0 ≤ (processed ++ ts).foldl (fun a t => a + headSize t) 0 := by
