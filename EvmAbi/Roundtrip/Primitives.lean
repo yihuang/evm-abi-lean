@@ -7,126 +7,11 @@ open EvmAbi.ABI.Encode
 open EvmAbi.ABI.Decode
 set_option autoImplicit false
 
-/-! ## Atomic proofs -/
+/-! ## Shared constants -/
 
 /-- `2 ^ 256` as a decimal literal — the form the decoder's `< 2 ^ 256` bound normalizes to;
 proved once so the 78-digit constant is not repeated across the atom roundtrips. -/
 theorem two_pow_256 : (2 : ℕ) ^ 256 = 115792089237316195423570985008687907853269984665640564039457584007913129639936 := by decide
-
-theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray)
-    (henc : encode (.uint s) v = Except.ok data) : decode (.uint s) data 0 = Except.ok (v, data.size) := by
-  cases v with
-  | uint v' =>
-    openEnc henc
-    by_cases hm : v' < 2 ^ (s.len * 8)
-    · simp [hm] at henc
-      have hd : uint256ToBytes v' = data := henc
-      rw [hd.symm]
-      openDec
-      have hv256 : v' < 2 ^ 256 := by
-        have hbits256 : s.len * 8 ≤ 256 := by have := s.h.right; omega
-        have hp : 2 ^ (s.len * 8) ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) hbits256; omega
-      have hsize32 : (uint256ToBytes v').size = 32 := uint256ToBytes_size v' (natToBytes_size_bound v' hv256)
-      have h_val : bytesToNat ((uint256ToBytes v').extract 0 32) = v' := by
-        calc
-          bytesToNat ((uint256ToBytes v').extract 0 32) = bytesToNat (uint256ToBytes v') := by rw [← hsize32, extract_self]
-          _ = v' := bytesToNat_uint256ToBytes v'
-      simp [hsize32, h_val, hm]
-    · simp [hm] at henc
-  | _ => badVal henc
-
-theorem roundtrip_bool (v : ABIValue) (data : ByteArray)
-    (henc : encode .bool v = Except.ok data) : decode .bool data 0 = Except.ok (v, data.size) := by
-  cases v with
-  | bool v' =>
-    openEnc henc
-    simp at henc
-    have hd : uint256ToBytes (if v' then 1 else 0) = data := henc
-    rw [hd.symm]
-    openDec
-    have hbits : (if v' then 1 else 0) < 2 ^ 256 := by split <;> omega
-    have hsize32 : (uint256ToBytes (if v' then 1 else 0)).size = 32 :=
-      uint256ToBytes_size (if v' then 1 else 0) (natToBytes_size_bound (if v' then 1 else 0) hbits)
-    have h_val : bytesToNat ((uint256ToBytes (if v' then 1 else 0)).extract 0 32) = (if v' then 1 else 0) := by
-      calc
-        bytesToNat ((uint256ToBytes (if v' then 1 else 0)).extract 0 32) = bytesToNat (uint256ToBytes (if v' then 1 else 0)) := by
-          rw [← hsize32, extract_self]
-        _ = (if v' then 1 else 0) := bytesToNat_uint256ToBytes (if v' then 1 else 0)
-    simp [hsize32]; rw [h_val]; cases v' <;> simp
-  | _ => badVal henc
-
-theorem roundtrip_address (v : ABIValue) (data : ByteArray)
-    (henc : encode .address v = Except.ok data) : decode .address data 0 = Except.ok (v, data.size) := by
-  cases v with
-  | address v' =>
-    openEnc henc
-    by_cases hsize : v'.size ≠ 20
-    · simp [hsize] at henc
-    · have hsize20 : v'.size = 20 := by omega
-      simp [hsize20] at henc
-      have hd : padLeft v' 32 = data := henc
-      subst hd
-      openDec
-      have h_extract : (padLeft v' 32).extract 12 32 = v' := padLeft_extract_address v' hsize20
-      have h_sz : (padLeft v' 32).size = 32 := by
-        unfold padLeft; simp [hsize20, zeros_size]
-      simp [h_extract, h_sz]
-  | _ => badVal henc
-
-theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
-    (henc : encode (.fixedBytes s) v = Except.ok data) : decode (.fixedBytes s) data 0 = Except.ok (v, data.size) := by
-  cases v with
-  | bytes v' =>
-    openEnc henc
-    by_cases hsz : v'.size = s.len
-    · simp [hsz] at henc
-      have hd : padRight v' 32 = data := henc
-      subst hd
-      openDec
-      have h_extract : (padRight v' 32).extract 0 s.len = v' := padRight_extract_eq v' s.len hsz
-      have h_size : (padRight v' 32).size = 32 := padRight_size_32 v' (by rw [hsz]; exact s.h.right)
-      simp [h_extract, h_size]
-    · simp [hsz] at henc
-  | _ => badVal henc
-
-theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
-    (henc : encode .bytes v = Except.ok data) : decode .bytes data 0 = Except.ok (v, data.size) := by
-  have h256_eq := two_pow_256
-  cases v with
-  | bytes v' =>
-    by_cases hv256 : v'.size < 2 ^ 256
-    · have hval : encode .bytes (ABIValue.bytes v') = Except.ok (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) := by
-        openEncG; simpa [h256_eq, hv256]
-      have hd : data = uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size) := by
-        injection hval.symm.trans henc; symm; assumption
-      rw [hd]
-      openDec
-      exact decodeDynamicBytes_roundtrip v' hv256 (uint256ToBytes v'.size ++ padRight v' (roundUp32 v'.size)) rfl
-    · have hval : encode .bytes (ABIValue.bytes v') = Except.error (.dataTooLong v'.size) := by
-        openEncG
-        rw [two_pow_256] at hv256; simp [hv256]
-      rw [hval] at henc; simp at henc
-  | _ => badVal henc
-
-theorem roundtrip_string (v : ABIValue) (data : ByteArray)
-    (henc : encode .string v = Except.ok data) : decode .string data 0 = Except.ok (v, data.size) := by
-  have h256_eq := two_pow_256
-  cases v with
-  | string v' =>
-    by_cases huv256 : v'.toUTF8.size < 2 ^ 256
-    · have hval : encode .string (ABIValue.string v') = Except.ok (uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) := by
-        openEncG; simpa [h256_eq, huv256]
-      have hd : data = uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size) := by
-        injection hval.symm.trans henc; symm; assumption
-      rw [hd]
-      openDec
-      exact decodeDynamicString_roundtrip v' huv256 (uint256ToBytes v'.toUTF8.size ++ padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)) rfl
-    · have hval : encode .string (ABIValue.string v') = Except.error (.dataTooLong v'.toUTF8.size) := by
-        openEncG
-        have h_ge' : ¬ v'.utf8ByteSize < 2 ^ 256 := by simpa using huv256
-        rw [two_pow_256] at h_ge'; simp [h_ge']
-      rw [hval] at henc; simp at henc
-  | _ => badVal henc
 
 /-! ## Int helper lemmas -/
 
@@ -279,21 +164,6 @@ theorem intToBytes_size32 (s : ByteSize) (v' : Int)
       rw [h_toNat_eq] at h_toNat_lt; exact lt_of_lt_of_le h_toNat_lt h_pow
     exact intToBytes_neg_size v' s.len (by omega) h_bounded
 
-theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray)
-    (henc : encode (.int s) (ABIValue.int v') = Except.ok data) : decode (.int s) data 0 = Except.ok (ABIValue.int v', data.size) := by
-  openEnc henc; simp at henc
-  by_cases h1 : v' < -(2 ^ (s.len * 8 - 1) : Int)
-  · simp [h1] at henc
-  · by_cases h2 : v' ≥ (2 ^ (s.len * 8 - 1) : Int)
-    · simp [h2] at henc
-    · simp [h1, h2] at henc
-      have hd : intToBytes v' s.len = data := henc
-      rw [hd.symm]
-      openDec
-      have hrange : -(2 ^ (s.len * 8 - 1) : Int) ≤ v' ∧ v' < (2 ^ (s.len * 8 - 1) : Int) := by omega
-      have h_decode := decode_intToBytes s v' hrange
-      unfold decode at h_decode; unfold foldABIType at h_decode; delta instABIVisitorDecoderEntry at h_decode; dsimp at h_decode
-      simpa using h_decode
 
 /-! ## Offset-generalized roundtrip -/
 
@@ -592,3 +462,33 @@ theorem roundtrip_off_string (v : ABIValue) (enc data : ByteArray) (off : Nat)
         have h_ge' : ¬ v'.utf8ByteSize < 2 ^ 256 := by simpa using huv256
         rw [two_pow_256] at h_ge'; simp [h_ge'])
   all_goals badVal henc
+
+/-! ## Offset-0 corollaries (via `extract_self`) -/
+
+theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray)
+    (henc : encode (.uint s) v = Except.ok data) : decode (.uint s) data 0 = Except.ok (v, data.size) := by
+  simpa using roundtrip_off_uint s v data data 0 henc (by rw [Nat.zero_add, extract_self])
+
+theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray)
+    (henc : encode (.int s) (ABIValue.int v') = Except.ok data) : decode (.int s) data 0 = Except.ok (ABIValue.int v', data.size) := by
+  simpa using roundtrip_off_int s (.int v') data data 0 henc (by rw [Nat.zero_add, extract_self])
+
+theorem roundtrip_bool (v : ABIValue) (data : ByteArray)
+    (henc : encode .bool v = Except.ok data) : decode .bool data 0 = Except.ok (v, data.size) := by
+  simpa using roundtrip_off_bool v data data 0 henc (by rw [Nat.zero_add, extract_self])
+
+theorem roundtrip_address (v : ABIValue) (data : ByteArray)
+    (henc : encode .address v = Except.ok data) : decode .address data 0 = Except.ok (v, data.size) := by
+  simpa using roundtrip_off_address v data data 0 henc (by rw [Nat.zero_add, extract_self])
+
+theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
+    (henc : encode (.fixedBytes s) v = Except.ok data) : decode (.fixedBytes s) data 0 = Except.ok (v, data.size) := by
+  simpa using roundtrip_off_fixedBytes s v data data 0 henc (by rw [Nat.zero_add, extract_self])
+
+theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
+    (henc : encode .bytes v = Except.ok data) : decode .bytes data 0 = Except.ok (v, data.size) := by
+  simpa using roundtrip_off_bytes v data data 0 henc (by rw [Nat.zero_add, extract_self])
+
+theorem roundtrip_string (v : ABIValue) (data : ByteArray)
+    (henc : encode .string v = Except.ok data) : decode .string data 0 = Except.ok (v, data.size) := by
+  simpa using roundtrip_off_string v data data 0 henc (by rw [Nat.zero_add, extract_self])
