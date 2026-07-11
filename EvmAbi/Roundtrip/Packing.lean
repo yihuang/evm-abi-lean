@@ -239,6 +239,29 @@ theorem go_cons_ok {t : ABIType} {ts' : List ABIType} (dyn : Bool) (enc : ABIVal
         have h' : (Except.ok ((dyn, b) :: tail) : Except Error _) = Except.ok encd := by rw [hb, ht] at h; exact h
         exact ⟨v, vs', b, tail, rfl, hb, ht, (Except.ok.inj h').symm⟩
 
+/-- Invert one step of the tuple encoder loop, phrased directly in terms of `encode` and
+`isDynamic` — call sites need no `foldABIType EncoderEntry` destructuring or
+`entry_fst_isDynamic`/`entry_snd_eq_encode` plumbing. -/
+theorem go_cons_inv (t : ABIType) (ts' : List ABIType) (vs : List ABIValue) (encd : List (Bool × ByteArray))
+    (hgo : instABIVisitorEncoderEntry.go (t :: ts') (foldAll EncoderEntry (t :: ts')) vs = Except.ok encd) :
+    ∃ v vs' b tail, vs = v :: vs' ∧ encode t v = Except.ok b ∧
+      instABIVisitorEncoderEntry.go ts' (foldAll EncoderEntry ts') vs' = Except.ok tail ∧
+      encd = (isDynamic t, b) :: tail := by
+  rw [foldAll] at hgo
+  rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
+  rw [hentry] at hgo
+  obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
+  exact ⟨v, vs', b, tail, rfl, by rw [← entry_snd_eq_encode hentry]; exact hb, htail,
+         by rw [entry_fst_isDynamic hentry]⟩
+
+/-- Invert the tuple encoder loop on `[]`: only `vs = []`, `encd = []` succeeds. -/
+theorem go_nil_inv (vs : List ABIValue) (encd : List (Bool × ByteArray))
+    (hgo : instABIVisitorEncoderEntry.go [] (foldAll EncoderEntry []) vs = Except.ok encd) :
+    vs = [] ∧ encd = [] := by
+  cases vs with
+  | nil => exact ⟨rfl, (Except.ok.inj (show Except.ok [] = Except.ok encd from hgo)).symm⟩
+  | cons v vs' => exact absurd (show Except.error Error.typeValueMismatch = Except.ok encd from hgo) (by simp)
+
 theorem tuplePack_static (headSizes : List Nat) (dynamics : List Bool) (encd : List (Bool × ByteArray))
     (hd : dynamics.any id = false) :
     tuplePack headSizes dynamics encd = encd.foldl (fun acc x => acc ++ x.2) ByteArray.empty := by

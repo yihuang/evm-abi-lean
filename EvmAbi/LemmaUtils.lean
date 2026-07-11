@@ -5,6 +5,15 @@ import EvmAbi.Decode
 
 open EvmAbi.ABI
 
+/-! ## Except helpers -/
+
+/-- Invert a successful `Except` bind: `x >>= f = ok b` yields the intermediate `ok a`. -/
+theorem bind_ok_inv {ε α β : Type _} {x : Except ε α} {f : α → Except ε β} {b : β}
+    (h : x >>= f = .ok b) : ∃ a, x = .ok a ∧ f a = .ok b := by
+  cases x with
+  | error e => exact absurd (show Except.error e = Except.ok b from h) (by simp)
+  | ok a => exact ⟨a, rfl, h⟩
+
 /-- Single-byte ByteArray constructor. -/
 def mkSingleton (b : UInt8) : ByteArray := { data := Array.mk [b] }
 
