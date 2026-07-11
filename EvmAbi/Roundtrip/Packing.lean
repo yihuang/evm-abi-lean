@@ -57,13 +57,10 @@ theorem encode_array_inv (e : ABIType) (vals : List ABIValue) (enc : ByteArray)
   rw [hentry] at henc; dsimp at henc
   split at henc
   · rename_i hlt
-    cases hEL : encodeListElems elemEnc vals with
-    | error x => rw [hEL] at henc; exact absurd (show Except.error x = Except.ok enc from henc) (by simp)
-    | ok encd =>
-      rw [hEL] at henc
-      refine ⟨encd, by rw [← entry_snd_eq_encode hentry]; exact hEL, hlt, ?_⟩
-      rw [← entry_fst_isDynamic hentry]
-      exact (Except.ok.inj henc).symm
+    obtain ⟨encd, hEL, henc⟩ := bind_ok_inv henc
+    refine ⟨encd, by rw [← entry_snd_eq_encode hentry]; exact hEL, hlt, ?_⟩
+    rw [← entry_fst_isDynamic hentry]
+    exact (Except.ok.inj henc).symm
   · exact absurd (show Except.error (Error.arrayLengthOverflow vals.length) = Except.ok enc from henc) (by simp)
 
 /-- Invert a successful fixed-array encode: the element count matches, the elements encode, and
@@ -78,13 +75,10 @@ theorem encode_fixedArray_inv (n : Nat) (e : ABIType) (vals : List ABIValue) (en
   rw [hentry] at henc; dsimp at henc
   by_cases hlen : vals.length = n
   · rw [if_neg (not_not_intro hlen)] at henc
-    cases hEL : encodeListElems elemEnc vals with
-    | error x => rw [hEL] at henc; exact absurd (show Except.error x = Except.ok enc from henc) (by simp)
-    | ok encd =>
-      rw [hEL] at henc
-      refine ⟨encd, by rw [← entry_snd_eq_encode hentry]; exact hEL, hlen, ?_⟩
-      rw [← entry_fst_isDynamic hentry]
-      exact (Except.ok.inj henc).symm
+    obtain ⟨encd, hEL, henc⟩ := bind_ok_inv henc
+    refine ⟨encd, by rw [← entry_snd_eq_encode hentry]; exact hEL, hlen, ?_⟩
+    rw [← entry_fst_isDynamic hentry]
+    exact (Except.ok.inj henc).symm
   · rw [if_pos (by simpa using hlen)] at henc
     exact absurd (show Except.error (Error.arrayElemCount n vals.length) = Except.ok enc from henc) (by simp)
 
@@ -95,11 +89,8 @@ theorem encode_tuple_inv (ts : List ABIType) (vs : List ABIValue) (enc : ByteArr
     ∃ encd, instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs = Except.ok encd ∧
       enc = tuplePack (ts.map headSize) (ts.map isDynamic) encd := by
   openEnc henc
-  cases hgo : instABIVisitorEncoderEntry.go ts (foldAll EncoderEntry ts) vs with
-  | error x => rw [hgo] at henc; exact absurd (show Except.error x = Except.ok enc from henc) (by simp)
-  | ok encd =>
-    rw [hgo] at henc
-    exact ⟨encd, rfl, (Except.ok.inj (show Except.ok (tuplePack (ts.map headSize) (ts.map isDynamic) encd) = Except.ok enc from henc)).symm⟩
+  obtain ⟨encd, hgo, hpack⟩ := bind_ok_inv henc
+  exact ⟨encd, hgo, (Except.ok.inj hpack).symm⟩
 
 /-- Left fold of `++` with a nonempty seed factors the seed out to the front. -/
 theorem ba_foldl_init (init : ByteArray) (xs : List ByteArray) :
@@ -119,14 +110,9 @@ theorem encodeListElems_cons_ok (e : ABIType) (v : ABIValue) (rest : List ABIVal
     (henc : encodeListElems (encode e) (v :: rest) = Except.ok encd) :
     ∃ ev er, encode e v = .ok ev ∧ encodeListElems (encode e) rest = .ok er ∧ encd = ev :: er := by
   rw [encodeListElems] at henc
-  cases hev : encode e v with
-  | error x => rw [hev] at henc; exact absurd (show Except.error x = Except.ok encd from henc) (by simp)
-  | ok ev =>
-    cases her : encodeListElems (encode e) rest with
-    | error x => rw [hev, her] at henc; exact absurd (show Except.error x = Except.ok encd from henc) (by simp)
-    | ok er =>
-      rw [hev, her] at henc
-      exact ⟨ev, er, rfl, rfl, (Except.ok.inj (show Except.ok (ev :: er) = Except.ok encd from henc)).symm⟩
+  obtain ⟨ev, hev, henc⟩ := bind_ok_inv henc
+  obtain ⟨er, her, henc⟩ := bind_ok_inv henc
+  exact ⟨ev, er, hev, her, (Except.ok.inj henc).symm⟩
 
 /-! ## Static encoding size = headSize -/
 
@@ -230,14 +216,9 @@ theorem go_cons_ok {t : ABIType} {ts' : List ABIType} (dyn : Bool) (enc : ABIVal
   | nil => exact absurd (show Except.error Error.typeValueMismatch = Except.ok encd from h) (by simp)
   | cons v vs' =>
     rw [go_cons] at h
-    cases hb : enc v with
-    | error x => rw [hb] at h; exact absurd (show Except.error x = Except.ok encd from h) (by simp)
-    | ok b =>
-      cases ht : instABIVisitorEncoderEntry.go ts' rest vs' with
-      | error x => rw [hb, ht] at h; exact absurd (show Except.error x = Except.ok encd from h) (by simp)
-      | ok tail =>
-        have h' : (Except.ok ((dyn, b) :: tail) : Except Error _) = Except.ok encd := by rw [hb, ht] at h; exact h
-        exact ⟨v, vs', b, tail, rfl, hb, ht, (Except.ok.inj h').symm⟩
+    obtain ⟨b, hb, h⟩ := bind_ok_inv h
+    obtain ⟨tail, ht, h⟩ := bind_ok_inv h
+    exact ⟨v, vs', b, tail, rfl, hb, ht, (Except.ok.inj h).symm⟩
 
 /-- Invert one step of the tuple encoder loop, phrased directly in terms of `encode` and
 `isDynamic` — call sites need no `foldABIType EncoderEntry` destructuring or
