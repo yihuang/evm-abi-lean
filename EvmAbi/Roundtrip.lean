@@ -241,15 +241,11 @@ theorem go_has_dyn_entry (ts : List ABIType) :
   | nil => intro vs encd _ h; simp at h
   | cons t ts' ih =>
     intro vs encd hgo h
-    simp only [foldAll] at hgo
-    rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
-    rw [hentry] at hgo
-    obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
-    have hdyneq : dyn = isDynamic t := by have h2 := enc_fst_eq_isDynamic t; rw [hentry] at h2; exact h2
+    obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_inv t ts' vs encd hgo
     rw [List.any_cons] at h
     by_cases hd : isDynamic t = true
-    · exact ⟨(dyn, b), by simp, by rw [hdyneq]; exact hd⟩
-    · have hdf : isDynamic t = false := by cases hh : isDynamic t; rfl; exact absurd hh hd
+    · exact ⟨(isDynamic t, b), by simp, hd⟩
+    · have hdf : isDynamic t = false := by simpa using hd
       have h' : ts'.any isDynamic = true := by rw [hdf, Bool.false_or] at h; exact h
       obtain ⟨b', hb', hb'1⟩ := ih vs' tail htail h'
       exact ⟨b', List.mem_cons_of_mem _ hb', hb'1⟩
@@ -292,18 +288,11 @@ theorem go_has_big_dyn_entry (ts : List ABIType) (hwf : ∀ t ∈ ts, WellFormed
   | cons t ts' ih =>
     intro vs encd hgo h hbnd
     have hmemt : t ∈ (t :: ts') := by simp
-    simp only [foldAll] at hgo
-    rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
-    rw [hentry] at hgo
-    obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
-    have hdyneq : dyn = isDynamic t := by have h2 := enc_fst_eq_isDynamic t; rw [hentry] at h2; exact h2
-    have henc_t := entry_snd_eq_encode hentry
+    obtain ⟨v, vs', b, tail, rfl, hb_enc, htail, rfl⟩ := go_cons_inv t ts' vs encd hgo
     rw [List.any_cons] at h
     by_cases hd : isDynamic t = true
-    · refine ⟨(dyn, b), by simp, by rw [hdyneq]; exact hd, ?_⟩
-      have hbsz : b.size < 2^256 := hbnd (dyn, b) (by simp) (by rw [hdyneq]; exact hd)
-      exact dyn_encoding_ge_32 t (hwf t hmemt) hd v b (by rw [← henc_t]; exact hb)
-    · have hdf : isDynamic t = false := by cases hh : isDynamic t; rfl; exact absurd hh hd
+    · exact ⟨(isDynamic t, b), by simp, hd, dyn_encoding_ge_32 t (hwf t hmemt) hd v b hb_enc⟩
+    · have hdf : isDynamic t = false := by simpa using hd
       have h' : ts'.any isDynamic = true := by rw [hdf, Bool.false_or] at h; exact h
       obtain ⟨b', hb', hb'1, hb'sz⟩ := ih (fun t' ht' => hwf t' (List.mem_cons_of_mem t ht')) vs' tail htail h'
         (fun b'' hb'' => hbnd b'' (List.mem_cons_of_mem _ hb''))
