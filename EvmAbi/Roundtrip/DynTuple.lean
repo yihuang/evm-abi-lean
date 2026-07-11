@@ -136,23 +136,13 @@ theorem dtd_concat (fullTs : List ABIType) (data : ByteArray) (offset : Nat)
   induction ts generalizing processed with
   | nil =>
     intro vs encoded tailCur maxEnd acc hsplit hgo hmax _ _ _
-    simp only [foldAll] at hgo ⊢
-    cases vs with
-    | nil =>
-      rw [show encoded = [] from (Except.ok.inj (show Except.ok [] = Except.ok encoded from hgo)).symm]
-      simp only [tupleTails, ByteArray.size_empty, Nat.add_zero, List.append_nil]
-      rw [dtd_nil, hmax]
-    | cons v vs => exact absurd (show Except.error Error.typeValueMismatch = Except.ok encoded from hgo) (by simp)
+    obtain ⟨rfl, rfl⟩ := go_nil_inv vs encoded hgo
+    simp only [foldAll, tupleTails, ByteArray.size_empty, Nat.add_zero, List.append_nil]
+    rw [dtd_nil, hmax]
   | cons t ts' ih =>
     intro vs encoded tailCur maxEnd acc hsplit hgo hmax htbound hheads htails
     have hmemt : t ∈ fullTs := by rw [hsplit]; simp
-    simp only [foldAll] at hgo
-    rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
-    rw [hentry] at hgo
-    obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encoded hgo
-    have henc_t := entry_snd_eq_encode hentry
-    have hdyneq : dyn = isDynamic t := entry_fst_isDynamic hentry
-    have hb_enc : encode t v = Except.ok b := by rw [← henc_t]; exact hb
+    obtain ⟨v, vs', b, tail, rfl, hb_enc, htail, rfl⟩ := go_cons_inv t ts' vs encoded hgo
     -- head offset
     have hhp : (fullTs.take processed.length).foldl (fun acc t => acc + headSize t) 0 = processed.foldl (fun acc t => acc + headSize t) 0 := by
       rw [hsplit, List.take_left]
@@ -169,8 +159,7 @@ theorem dtd_concat (fullTs : List ABIType) (data : ByteArray) (offset : Nat)
     have hsplit' : fullTs = (processed ++ [t]) ++ ts' := by rw [hsplit]; simp
     cases hd : isDynamic t with
     | false =>
-      have hdynf : dyn = false := hdyneq.trans hd
-      subst hdynf
+      rw [hd] at htbound hheads htails
       rw [tupleHeadsFrom_stat, ba_foldl_cons] at hheads
       have hbeq : b.size = headSize t := hsize t hmemt hd v b hb_enc
       have hb_lt : b.size < 2^256 := by have := headSize_mem_le fullTs t hmemt; omega
@@ -187,8 +176,7 @@ theorem dtd_concat (fullTs : List ABIType) (data : ByteArray) (offset : Nat)
       rw [ih (processed ++ [t]) vs' tail tailCur maxEnd (v :: acc) hsplit' htail hmax (by rw [tupleTails_stat] at htbound; exact htbound) hheads' htails']
       simp only [List.reverse_cons, List.append_assoc, List.cons_append, List.nil_append, tupleTails_stat]
     | true =>
-      have hdynt : dyn = true := hdyneq.trans hd
-      subst hdynt
+      rw [hd] at htbound hheads htails
       rw [tupleTails_dyn] at htails htbound
       have htc_lt : tailCur < 2^256 := by rw [ByteArray.size_append] at htbound; omega
       have hb_lt : b.size < 2^256 := by rw [ByteArray.size_append] at htbound; omega
@@ -227,35 +215,24 @@ theorem tupleHeadsFrom_size (ts : List ABIType)
   induction ts with
   | nil =>
     intro vs encoded off hgo _
-    simp only [foldAll] at hgo
-    cases vs with
-    | nil => rw [show encoded = [] from (Except.ok.inj (show Except.ok [] = Except.ok encoded from hgo)).symm]; simp [tupleHeadsFrom]
-    | cons v vs => exact absurd (show Except.error Error.typeValueMismatch = Except.ok encoded from hgo) (by simp)
+    obtain ⟨rfl, rfl⟩ := go_nil_inv vs encoded hgo
+    simp [tupleHeadsFrom]
   | cons t ts' ih =>
     intro vs encoded off hgo hbnd
     have hmemt : t ∈ (t :: ts') := by simp
-    simp only [foldAll] at hgo
-    rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
-    rw [hentry] at hgo
-    obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encoded hgo
-    have henc_t := entry_snd_eq_encode hentry
-    have hb_enc : encode t v = Except.ok b := by rw [← henc_t]; exact hb
-    have hdyneq : dyn = isDynamic t := entry_fst_isDynamic hentry
+    obtain ⟨v, vs', b, tail, rfl, hb_enc, htail, rfl⟩ := go_cons_inv t ts' vs encoded hgo
     have ihs : ∀ t' ∈ ts', isDynamic t' = false → ∀ (v : ABIValue) (ev : ByteArray), encode t' v = Except.ok ev → ev.size = headSize t' := fun t' ht' => hsize t' (by simp [ht'])
     have ihd : ∀ t' ∈ ts', ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode t' v = Except.ok ev → 32 ∣ ev.size := fun t' ht' => hdvd t' (by simp [ht'])
     cases hd : isDynamic t with
     | false =>
-      have hdynf : dyn = false := hdyneq.trans hd
-      subst hdynf
+      rw [hd] at hbnd
       have hbeq : b.size = headSize t := hsize t hmemt hd v b hb_enc
       rw [tupleHeadsFrom_stat, ba_foldl_cons, ByteArray.size_append,
           ih ihs ihd vs' tail off htail (by rw [tupleTails_stat] at hbnd; exact hbnd),
           List.foldl_cons, headSize_foldl_shift (0 + headSize t) ts']
       omega
     | true =>
-      have hdynt : dyn = true := hdyneq.trans hd
-      subst hdynt
-      rw [tupleTails_dyn] at hbnd
+      rw [hd, tupleTails_dyn] at hbnd
       have hbnd2 : off + b.size + (tupleTails tail).size < 2^256 := by rw [ByteArray.size_append] at hbnd; omega
       have hoff_lt : off < 2^256 := by omega
       have hb_lt : b.size < 2^256 := by omega
@@ -275,25 +252,15 @@ theorem tupleHeadsFrom_size_ge (ts : List ABIType)
   | cons t ts' ih =>
     intro vs encoded off hgo
     have hmemt : t ∈ (t :: ts') := by simp
-    simp only [foldAll] at hgo
-    rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
-    rw [hentry] at hgo
-    obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encoded hgo
-    have henc_t := entry_snd_eq_encode hentry
-    have hb_enc : encode t v = Except.ok b := by rw [← henc_t]; exact hb
-    have hdyneq : dyn = isDynamic t := entry_fst_isDynamic hentry
+    obtain ⟨v, vs', b, tail, rfl, hb_enc, htail, rfl⟩ := go_cons_inv t ts' vs encoded hgo
     have ihs : ∀ t' ∈ ts', isDynamic t' = false → ∀ (v : ABIValue) (ev : ByteArray), encode t' v = Except.ok ev → ev.size = headSize t' := fun t' ht' => hsize t' (by simp [ht'])
     rw [List.foldl_cons, headSize_foldl_shift (0 + headSize t) ts']
     cases hd : isDynamic t with
     | false =>
-      have hdynf : dyn = false := hdyneq.trans hd
-      subst hdynf
       have hbeq : b.size = headSize t := hsize t hmemt hd v b hb_enc
       rw [tupleHeadsFrom_stat, ba_foldl_cons, ByteArray.size_append]
       have := ih ihs vs' tail off htail; omega
     | true =>
-      have hdynt : dyn = true := hdyneq.trans hd
-      subst hdynt
       rw [tupleHeadsFrom_dyn, ba_foldl_cons, ByteArray.size_append]
       have hge := uint256ToBytes_size_ge off
       have := ih ihs vs' tail (off + roundUp32 b.size) htail
@@ -450,19 +417,12 @@ theorem tuple_entries_static_dvd (ts : List ABIType)
   induction ts with
   | nil =>
     intro vs encd hgo _ b hb
-    simp only [foldAll] at hgo
-    cases vs with
-    | nil => rw [show encd = [] from (Except.ok.inj (show Except.ok [] = Except.ok encd from hgo)).symm] at hb; simp at hb
-    | cons v vs => exact absurd (show Except.error Error.typeValueMismatch = Except.ok encd from hgo) (by simp)
+    obtain ⟨rfl, rfl⟩ := go_nil_inv vs encd hgo
+    simp at hb
   | cons t ts' ih =>
     intro vs encd hgo hstat b hb
     have hmemt : t ∈ (t :: ts') := by simp
-    simp only [foldAll] at hgo
-    rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
-    rw [hentry] at hgo
-    obtain ⟨v, vs', b0, tail, rfl, hb0, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
-    have henc_t := entry_snd_eq_encode hentry
-    have hb_enc : encode t v = Except.ok b0 := by rw [← henc_t]; exact hb0
+    obtain ⟨v, vs', b0, tail, rfl, hb_enc, htail, rfl⟩ := go_cons_inv t ts' vs encd hgo
     have hstat_t : isDynamic t = false := hstat t hmemt
     have hb0sz : b0.size = headSize t := hsize t hmemt hstat_t v b0 hb_enc
     rcases List.mem_cons.mp hb with h | h
@@ -478,22 +438,15 @@ theorem tuple_entries_dyn_dvd (ts : List ABIType)
   induction ts with
   | nil =>
     intro vs encd hgo _ b hb
-    simp only [foldAll] at hgo
-    cases vs with
-    | nil => rw [show encd = [] from (Except.ok.inj (show Except.ok [] = Except.ok encd from hgo)).symm] at hb; simp at hb
-    | cons v vs => exact absurd (show Except.error Error.typeValueMismatch = Except.ok encd from hgo) (by simp)
+    obtain ⟨rfl, rfl⟩ := go_nil_inv vs encd hgo
+    simp at hb
   | cons t ts' ih =>
     intro vs encd hgo hbnd b hb hdynb
     have hmemt : t ∈ (t :: ts') := by simp
-    simp only [foldAll] at hgo
-    rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
-    rw [hentry] at hgo
-    obtain ⟨v, vs', b0, tail, rfl, hb0, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
-    have henc_t := entry_snd_eq_encode hentry
-    have hb_enc : encode t v = Except.ok b0 := by rw [← henc_t]; exact hb0
+    obtain ⟨v, vs', b0, tail, rfl, hb_enc, htail, rfl⟩ := go_cons_inv t ts' vs encd hgo
     rcases List.mem_cons.mp hb with h | h
     · subst h
-      exact hdvd t hmemt v b0 (hbnd (dyn, b0) (by simp) hdynb) hb_enc
+      exact hdvd t hmemt v b0 (hbnd (isDynamic t, b0) (by simp) hdynb) hb_enc
     · exact ih (fun t' ht' => hdvd t' (by simp [ht'])) vs' tail htail
         (fun b' hb' => hbnd b' (List.mem_cons_of_mem _ hb')) b h hdynb
 
@@ -548,21 +501,13 @@ theorem decodeTupleStatic_concat_wf (ts : List ABIType) (data : ByteArray)
   induction ts with
   | nil =>
     intro vs encd off acc hgo _ hslice
-    simp only [foldAll] at hgo ⊢
-    cases vs with
-    | nil =>
-      rw [show encd = [] from (Except.ok.inj (show Except.ok [] = Except.ok encd from hgo)).symm]
-      simp only [List.foldl_nil, ByteArray.size_empty, Nat.add_zero, List.append_nil]
-      rw [decodeTupleStatic_nil]
-    | cons v vs => exact absurd (show Except.error Error.typeValueMismatch = Except.ok encd from hgo) (by simp)
+    obtain ⟨rfl, rfl⟩ := go_nil_inv vs encd hgo
+    simp only [foldAll, List.foldl_nil, ByteArray.size_empty, Nat.add_zero, List.append_nil]
+    rw [decodeTupleStatic_nil]
   | cons t ts' ih =>
     intro vs encd off acc hgo hbound hslice
     have hmemt : t ∈ (t :: ts') := by simp
-    simp only [foldAll] at hgo
-    rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
-    rw [hentry] at hgo
-    obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
-    have henc_t := entry_snd_eq_encode hentry
+    obtain ⟨v, vs', b, tail, rfl, hb_enc, htail, rfl⟩ := go_cons_inv t ts' vs encd hgo
     rw [ba_foldl_snd_cons] at hslice hbound ⊢
     simp only [] at hslice hbound ⊢
     -- freeze the tail fold to an atom so the generic slice helpers unify without
@@ -573,7 +518,7 @@ theorem decodeTupleStatic_concat_wf (ts : List ABIType) (data : ByteArray)
     have hslice_b := extract_append_left_of_slice data off b tl hslice
     have hslice_tail := extract_append_right_of_slice data off b tl hslice
     have hdec_t : (foldABIType DecoderEntry t) data off = Except.ok (v, off + b.size) :=
-      hrt t hmemt v b off hb_lt (by rw [← henc_t]; exact hb) hslice_b
+      hrt t hmemt v b off hb_lt hb_enc hslice_b
     simp only [foldAll]
     rw [decodeTupleStatic_cons, hdec_t]
     show decodeTupleStatic (foldAll DecoderEntry ts') data (off + b.size) (v :: acc) = _
@@ -590,20 +535,13 @@ theorem tuplePackStatic_size_wf (ts : List ABIType)
   induction ts with
   | nil =>
     intro vs encd hgo
-    simp only [foldAll] at hgo
-    cases vs with
-    | nil => rw [show encd = [] from (Except.ok.inj (show Except.ok [] = Except.ok encd from hgo)).symm]; simp [headSize, isDynamic]
-    | cons v vs => exact absurd (show Except.error Error.typeValueMismatch = Except.ok encd from hgo) (by simp)
+    obtain ⟨rfl, rfl⟩ := go_nil_inv vs encd hgo
+    simp [headSize, isDynamic]
   | cons t ts' ih =>
     intro vs encd hgo
-    have hmemt : t ∈ (t :: ts') := by simp
-    simp only [foldAll] at hgo
-    rcases hentry : foldABIType EncoderEntry t with ⟨dyn, enc⟩
-    rw [hentry] at hgo
-    obtain ⟨v, vs', b, tail, rfl, hb, htail, rfl⟩ := go_cons_ok dyn enc (foldAll EncoderEntry ts') vs encd hgo
-    have henc_t := entry_snd_eq_encode hentry
-    have hbsz : b.size = headSize t := hsize t hmemt (hstat t hmemt) v b (by rw [← henc_t]; exact hb)
-    rw [ba_foldl_snd_cons, ByteArray.size_append, hbsz,
+    obtain ⟨v, vs', b, tail, rfl, hb_enc, htail, rfl⟩ := go_cons_inv t ts' vs encd hgo
+    rw [ba_foldl_snd_cons, ByteArray.size_append,
+        hsize t (by simp) (hstat t (by simp)) v b hb_enc,
         ih (fun t' ht' => hsize t' (by simp [ht'])) (fun t' ht' => hstat t' (List.mem_cons_of_mem t ht')) vs' tail htail,
         headSize_tuple_cons t ts' (isDynamic_tuple_of_all_static (t :: ts') hstat)]
 

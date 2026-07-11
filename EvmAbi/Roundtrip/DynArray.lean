@@ -426,15 +426,8 @@ theorem szdvd_bytes (v : ABIValue) (ev : ByteArray) (_hsz : ev.size < 2^256) (he
     openEnc henc
     split at henc
     · rename_i hlt
-      have hev := Except.ok.inj henc
-      rw [← hev, ByteArray.size_append]
-      have hPsz : (uint256ToBytes v'.size).size = 32 := uint256ToBytes_size v'.size (natToBytes_size_bound v'.size (by assumption))
-      have hpad : (padRight v' (roundUp32 v'.size)).size = roundUp32 v'.size := by
-        unfold padRight; split
-        · have : v'.size ≤ roundUp32 v'.size := by unfold roundUp32; omega
-          omega
-        · simp [zeros_size]; unfold roundUp32; omega
-      rw [hPsz, hpad]; exact Nat.dvd_add (by norm_num) (roundUp32_dvd v'.size)
+      rw [← Except.ok.inj henc, dynBytesEnc_size v' v'.size hlt]
+      exact Nat.dvd_add (by norm_num) (roundUp32_dvd v'.size)
     · badErr henc ev
   | _ => badVal henc
 
@@ -444,15 +437,8 @@ theorem szdvd_string (v : ABIValue) (ev : ByteArray) (_hsz : ev.size < 2^256) (h
     openEnc henc
     split at henc
     · rename_i hlt
-      have hev := Except.ok.inj henc
-      rw [← hev, ByteArray.size_append]
-      have hPsz : (uint256ToBytes v'.toUTF8.size).size = 32 := uint256ToBytes_size v'.toUTF8.size (natToBytes_size_bound v'.toUTF8.size (by assumption))
-      have hpad : (padRight v'.toUTF8 (roundUp32 v'.toUTF8.size)).size = roundUp32 v'.toUTF8.size := by
-        unfold padRight; split
-        · have : v'.toUTF8.size ≤ roundUp32 v'.toUTF8.size := by unfold roundUp32; omega
-          omega
-        · simp [zeros_size]; unfold roundUp32; omega
-      rw [hPsz, hpad]; exact Nat.dvd_add (by norm_num) (roundUp32_dvd v'.toUTF8.size)
+      rw [← Except.ok.inj henc, dynBytesEnc_size v'.toUTF8 v'.toUTF8.size (by assumption)]
+      exact Nat.dvd_add (by norm_num) (roundUp32_dvd v'.toUTF8.size)
     · badErr henc ev
   | _ => badVal henc
 
