@@ -85,10 +85,9 @@ lemma dynamicRoundtrip_preamble (b : ByteArray) (hb256 : b.size < 2 ^ 256) :
     bytesToNat ((uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 0 32) = b.size ∧
     (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 32 (32 + b.size) = b := by
   have ha_sz : (uint256ToBytes b.size).size = 32 := uint256ToBytes_size b.size (natToBytes_size_bound b.size hb256)
-  have h_roundUp_ge : b.size ≤ roundUp32 b.size := by unfold roundUp32; omega
-  have h_pad_sz : (padRight b (roundUp32 b.size)).size = roundUp32 b.size := by
-    unfold padRight; split; omega; simp [zeros_size]; omega
-  have h_size : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size := by simp [ha_sz, h_pad_sz]
+  have h_roundUp_ge : b.size ≤ roundUp32 b.size := le_roundUp32 b.size
+  have h_pad_sz : (padRight b (roundUp32 b.size)).size = roundUp32 b.size := padRight_size b _ (le_roundUp32 b.size)
+  have h_size : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size := dynBytesEnc_size b b.size hb256
   have h_len : bytesToNat ((uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 0 32) = b.size := by
     rw [← ha_sz, extract_first_n, bytesToNat_uint256ToBytes b.size]
   have h_extract_val : (uint256ToBytes b.size ++ padRight b (roundUp32 b.size)).extract 32 (32 + b.size) = b := roundtrip_bytes_val b hb256

@@ -256,11 +256,24 @@ theorem padLeft_extract_address (b : ByteArray) (h20 : b.size = 20) : (padLeft b
   · intro i hi
     simp [h20, zeros_size 12] at hi ⊢
 
-/- padRight b 32 is always 32 bytes when b ≤ 32 bytes. -/
-theorem padRight_size_32 (b : ByteArray) (h : b.size ≤ 32) : (padRight b 32).size = 32 := by
+/- n ≤ roundUp32 n. -/
+theorem le_roundUp32 (n : Nat) : n ≤ roundUp32 n := by unfold roundUp32; omega
+
+/- padRight hits the requested size whenever the payload fits. -/
+theorem padRight_size (b : ByteArray) (n : Nat) (h : b.size ≤ n) : (padRight b n).size = n := by
   unfold padRight; split
   · omega
   · simp [zeros_size]; omega
+
+/- padRight b 32 is always 32 bytes when b ≤ 32 bytes. -/
+theorem padRight_size_32 (b : ByteArray) (h : b.size ≤ 32) : (padRight b 32).size = 32 :=
+  padRight_size b 32 h
+
+/- Size of the length-prefixed padded payload — the shape of dynamic bytes/string encodings. -/
+theorem dynBytesEnc_size (b : ByteArray) (n : Nat) (hn : n < 2 ^ 256) :
+    (uint256ToBytes n ++ padRight b (roundUp32 b.size)).size = 32 + roundUp32 b.size := by
+  rw [ByteArray.size_append, uint256ToBytes_size n (natToBytes_size_bound n hn),
+      padRight_size b (roundUp32 b.size) (le_roundUp32 b.size)]
 
 /- Extract a suffix of an append equals extracting from the second part. -/
 theorem extract_after_suffix (a b : ByteArray) (k : Nat) : (a ++ b).extract a.size (a.size + k) = b.extract 0 k := by
