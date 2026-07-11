@@ -90,26 +90,13 @@ theorem numBytes_ge_pow (n : Nat) (k : Nat) (h : 256 ^ k ≤ n) : k + 1 ≤ numB
 
 /- Size of the recursive natToBytes accumulator. -/
 theorem size_go (n : Nat) (acc : ByteArray) : (natToBytes.go n acc).size = numBytes n + acc.size := by
-  induction n using Nat.strongRecOn generalizing acc with
-  | ind n ihn =>
-    unfold natToBytes.go numBytes; split
-    · simp
-    · rename_i hn
-      have hdiv : n / 256 < n := Nat.div_lt_self (Nat.pos_of_ne_zero hn) (by decide : 1 < 256)
-      have h_sz : ({ data := Array.mk [((n % 256).toUInt8)] } ++ acc).size = 1 + acc.size := by
-        have h1 : ({ data := Array.mk [((n % 256).toUInt8)] } : ByteArray).size = 1 := by
-          calc
-            ({ data := Array.mk [((n % 256).toUInt8)] } : ByteArray).size = (Array.mk [((n % 256).toUInt8)]).size := rfl
-            _ = (Array.mk [((n % 256).toUInt8)]).toList.length := rfl
-            _ = [((n % 256).toUInt8)].length := rfl
-            _ = 1 := by simp
-        simp [h1]
-      have h_ih' : (natToBytes.go (n / 256) ({ data := Array.mk [((n % 256).toUInt8)] } ++ acc)).size =
-          numBytes (n / 256) + (1 + acc.size) := by
-        have h1 := ihn (n / 256) hdiv ({ data := Array.mk [((n % 256).toUInt8)] } ++ acc)
-        rw [h_sz] at h1
-        exact h1
-      rw [h_ih']; omega
+  induction n, acc using natToBytes.go.induct with
+  | case1 acc => simp [natToBytes.go, numBytes]
+  | case2 n acc hn ih =>
+    rw [natToBytes.go, if_neg hn, numBytes, if_neg hn, ih]
+    have h_sz : ({ data := Array.mk [((n % 256).toUInt8)] } ++ acc).size = 1 + acc.size := by
+      simp [ByteArray.size_append]; rfl
+    omega
 
 /- When 2^(8k-1) ≤ n < 2^(8k), natToBytes n has exactly k bytes. -/
 theorem natToBytes_size_range (n : Nat) (k : Nat) (hk : 0 < k) (h_lo : 2 ^ (k * 8 - 1) ≤ n) (h_hi : n < 2 ^ (k * 8)) :
@@ -168,15 +155,9 @@ theorem list_foldl_shift (xs : List UInt8) (x : Nat) :
   induction xs generalizing x with
   | nil => simp
   | cons h t ih =>
-    simp
-    rw [ih (x * 256 + h.toNat), ih (h.toNat)]
-    rw [Nat.add_mul, Nat.pow_succ]
-    have h : x * 256 * (256 ^ t.length) = x * ((256 ^ t.length) * 256) := by
-      calc
-        x * 256 * (256 ^ t.length) = x * (256 * (256 ^ t.length)) := by simp [Nat.mul_assoc]
-        _ = x * ((256 ^ t.length) * 256) := by simp [Nat.mul_comm 256 (256 ^ t.length)]
-    rw [h]
-    omega
+    simp only [List.foldl_cons, List.length_cons]
+    rw [ih (x * 256 + h.toNat), ih (0 * 256 + h.toNat)]
+    ring
 
 /- bytesToNat of (b ++ acc) where b is a single byte. -/
 theorem bytesToNat_append_singleton (b : UInt8) (acc : ByteArray) :
@@ -195,38 +176,20 @@ theorem bytesToNat_append_singleton (b : UInt8) (acc : ByteArray) :
 
 /- bytesToNat of natToBytes.go recovers the original n. -/
 theorem bytesToNat_go (n : Nat) (acc : ByteArray) : bytesToNat (natToBytes.go n acc) = n * 256 ^ acc.size + bytesToNat acc := by
-  induction n using Nat.strongRecOn generalizing acc with
-  | ind n ihn =>
-    unfold natToBytes.go; split
-    · rename_i hzero
-      subst hzero; simp
-    · rename_i hn
-      have hdiv : n / 256 < n := Nat.div_lt_self (Nat.pos_of_ne_zero hn) (by decide : 1 < 256)
-      let b := (mkSingleton ((n % 256).toUInt8) ++ acc)
-      have h_sz : b.size = 1 + acc.size := by
-        unfold b
-        simp [mkSingleton_size]
-      have h_byt : bytesToNat b = (n % 256) * 256 ^ acc.size + bytesToNat acc := by
-        unfold b
-        rw [bytesToNat_append_singleton ((n % 256).toUInt8) acc]
-        simp
-      have h_ih' := ihn (n / 256) hdiv b
-      have h_pow : 256 ^ (1 + acc.size) = 256 * 256 ^ acc.size := by
-        calc
-          256 ^ (1 + acc.size) = 256 ^ (acc.size + 1) := by simp [Nat.add_comm]
-          _ = 256 ^ acc.size * 256 := by simp [Nat.pow_succ]
-          _ = 256 * 256 ^ acc.size := by simp [Nat.mul_comm]
-      calc
-        bytesToNat (natToBytes.go (n / 256) b) = (n / 256) * 256 ^ b.size + bytesToNat b := h_ih'
-        _ = (n / 256) * 256 ^ (1 + acc.size) + ((n % 256) * 256 ^ acc.size + bytesToNat acc) := by rw [h_sz, h_byt]
-        _ = n * 256 ^ acc.size + bytesToNat acc := by
-          have h_divmod : (n / 256) * 256 + (n % 256) = n := by omega
-          calc
-            (n / 256) * 256 ^ (1 + acc.size) + ((n % 256) * 256 ^ acc.size + bytesToNat acc)
-                = ((n / 256) * 256 ^ (1 + acc.size) + (n % 256) * 256 ^ acc.size) + bytesToNat acc := by omega
-            _ = ((n / 256) * (256 * 256 ^ acc.size) + (n % 256) * 256 ^ acc.size) + bytesToNat acc := by ring
-            _ = (((n / 256) * 256 + (n % 256)) * 256 ^ acc.size) + bytesToNat acc := by ring
-            _ = n * 256 ^ acc.size + bytesToNat acc := by rw [h_divmod]
+  induction n, acc using natToBytes.go.induct with
+  | case1 acc => simp [natToBytes.go]
+  | case2 n acc hn ih =>
+    rw [natToBytes.go, if_neg hn, ih]
+    have h_sz : ({ data := Array.mk [((n % 256).toUInt8)] } ++ acc : ByteArray).size = 1 + acc.size := by
+      simp [ByteArray.size_append]; rfl
+    have h_byt : bytesToNat ({ data := Array.mk [((n % 256).toUInt8)] } ++ acc : ByteArray) = (n % 256) * 256 ^ acc.size + bytesToNat acc := by
+      rw [show ({ data := Array.mk [((n % 256).toUInt8)] } ++ acc : ByteArray) = mkSingleton ((n % 256).toUInt8) ++ acc from rfl,
+          bytesToNat_append_singleton]
+      simp
+    rw [h_sz, h_byt]
+    calc n / 256 * 256 ^ (1 + acc.size) + ((n % 256) * 256 ^ acc.size + bytesToNat acc)
+        = (n / 256 * 256 + n % 256) * 256 ^ acc.size + bytesToNat acc := by ring
+      _ = n * 256 ^ acc.size + bytesToNat acc := by rw [show n / 256 * 256 + n % 256 = n from by omega]
 
 /- bytesToNat ∘ natToBytes = id. -/
 theorem bytesToNat_natToBytes (v : Nat) : bytesToNat (natToBytes v) = v := by
@@ -348,13 +311,7 @@ theorem intToBytes_neg_size (v' : Int) (byteLen : Nat) (hv_nonpos : ¬ v' ≥ 0)
 
 
 /- .toNat of (2 : Int) ^ b equals (2 : Nat) ^ b. -/
-theorem two_toNat_eq (b : Nat) : ((2 : Int) ^ b).toNat = (2 : Nat) ^ b := by
-  calc
-    ((2 : Int) ^ b).toNat = (((2 : Nat) ^ b : ℤ)).toNat := by
-      simp
-    _ = (2 : Nat) ^ b := by
-      have h_nonneg : 0 ≤ ((2 : Nat) ^ b : ℤ) := by positivity
-      exact (Nat.cast_inj (R := ℤ)).mp (Int.toNat_of_nonneg h_nonneg)
+theorem two_toNat_eq (b : Nat) : ((2 : Int) ^ b).toNat = (2 : Nat) ^ b := by norm_cast
 theorem two_pow_succ_sub (b : Nat) (hbpos : 0 < b) : (2 : Int) ^ b - (2 : Int) ^ (b - 1) = (2 : Int) ^ (b - 1) := by
   have h : (2 : ℤ) ^ b = (2 : ℤ) ^ (b - 1) * (2 : ℤ) := by
     calc
