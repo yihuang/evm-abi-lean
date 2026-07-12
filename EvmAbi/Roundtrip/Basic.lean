@@ -7,8 +7,25 @@ open EvmAbi.ABI.Encode
 open EvmAbi.ABI.Decode
 set_option autoImplicit false
 
-/-- Discharge a wrong-`ABIValue`-constructor case: the `encode … = ok` hypothesis is false. -/
-macro "badVal" h:ident : tactic =>
+structure RoundtripInput (t : ABIType) (v : ABIValue) where
+  enc  : ByteArray
+  data : ByteArray
+  off  : Nat
+  henc  : encode t v = Except.ok enc
+  hdata : data.extract off (off + enc.size) = enc
+
+namespace RoundtripInput
+
+/-- Smart constructor for the common case `off = 0` and `data = enc` (the encoding IS the buffer). -/
+@[simp]
+def self (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data) : RoundtripInput t v :=
+  { enc := data, data := data, off := 0, henc := henc, hdata := by rw [Nat.zero_add, extract_self] }
+
+end RoundtripInput
+
+/-- Discharge a wrong-`ABIValue`-constructor case: the `encode … = ok` hypothesis is false.
+    Accepts `h:term` so `badVal ri.henc` works without destructing the input. -/
+macro "badVal" h:term : tactic =>
   `(tactic| first
     | exact absurd $h (by simp)
     | exact absurd $h (by unfold encode foldABIType; simp)

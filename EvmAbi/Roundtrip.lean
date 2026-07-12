@@ -68,9 +68,8 @@ def TupleFree : ABIType → Prop
 /-- The three facts a type contributes to a roundtrip composition: the offset-general
     WF roundtrip, the static size law, and 32-byte alignment. -/
 structure WFFacts (t : ABIType) : Prop where
-  rt : ∀ (v : ABIValue) (enc data : ByteArray) (off : Nat), enc.size < 2^256 →
-    encode t v = Except.ok enc → data.extract off (off + enc.size) = enc →
-    decode t data off = Except.ok (v, off + enc.size)
+  rt : ∀ (v : ABIValue) (ri : RoundtripInput t v), ri.enc.size < 2^256 →
+    decode t ri.data ri.off = Except.ok (v, ri.off + ri.enc.size)
   size_eq : isDynamic t = false → ∀ (v : ABIValue) (ev : ByteArray), encode t v = Except.ok ev → ev.size = headSize t
   szdvd : ∀ (v : ABIValue) (ev : ByteArray), ev.size < 2^256 → encode t v = Except.ok ev → 32 ∣ ev.size
 
@@ -78,39 +77,41 @@ structure WFFacts (t : ABIType) : Prop where
     (`wfFacts`) and well-formed (`wfFactsWF`) recursions. -/
 
 theorem WFFacts.uint (s : ByteSize) : WFFacts (.uint s) :=
-  ⟨fun v enc data off _ he hd => roundtrip_off_uint s v enc data off he hd,
+  ⟨fun v ri _ => roundtrip_off_uint s v ri,
    fun _ v ev he => size_eq_uint s v ev he,
    fun v ev _ he => by rw [size_eq_uint s v ev he]; exact headSize_dvd_32 (.uint s)⟩
 theorem WFFacts.int (s : ByteSize) : WFFacts (.int s) :=
-  ⟨fun v enc data off _ he hd => roundtrip_off_int s v enc data off he hd,
+  ⟨fun v ri _ => roundtrip_off_int s v ri,
    fun _ v ev he => size_eq_int s v ev he,
    fun v ev _ he => by rw [size_eq_int s v ev he]; exact headSize_dvd_32 (.int s)⟩
 theorem WFFacts.bool : WFFacts .bool :=
-  ⟨fun v enc data off _ he hd => roundtrip_off_bool v enc data off he hd,
+  ⟨fun v ri _ => roundtrip_off_bool v ri,
    fun _ v ev he => size_eq_bool v ev he,
    fun v ev _ he => by rw [size_eq_bool v ev he]; exact headSize_dvd_32 .bool⟩
 theorem WFFacts.address : WFFacts .address :=
-  ⟨fun v enc data off _ he hd => roundtrip_off_address v enc data off he hd,
+  ⟨fun v ri _ => roundtrip_off_address v ri,
    fun _ v ev he => size_eq_address v ev he,
    fun v ev _ he => by rw [size_eq_address v ev he]; exact headSize_dvd_32 .address⟩
 theorem WFFacts.fixedBytes (s : ByteSize) : WFFacts (.fixedBytes s) :=
-  ⟨fun v enc data off _ he hd => roundtrip_off_fixedBytes s v enc data off he hd,
+  ⟨fun v ri _ => roundtrip_off_fixedBytes s v ri,
    fun _ v ev he => size_eq_fixedBytes s v ev he,
    fun v ev _ he => by rw [size_eq_fixedBytes s v ev he]; exact headSize_dvd_32 (.fixedBytes s)⟩
 theorem WFFacts.bytes : WFFacts .bytes :=
-  ⟨fun v enc data off _ he hd => roundtrip_off_bytes v enc data off he hd,
+  ⟨fun v ri _ => roundtrip_off_bytes v ri,
    fun h => absurd h (by simp [isDynamic]), szdvd_bytes⟩
 theorem WFFacts.string : WFFacts .string :=
-  ⟨fun v enc data off _ he hd => roundtrip_off_string v enc data off he hd,
+  ⟨fun v ri _ => roundtrip_off_string v ri,
    fun h => absurd h (by simp [isDynamic]), szdvd_string⟩
 theorem WFFacts.array (e : ABIType) (ih : WFFacts e) : WFFacts (.array e) :=
-  ⟨fun v enc data off hwf he hd =>
-      roundtrip_array_wf e data (fun v' ev' o' hlt he' hd' => ih.rt v' ev' data o' hlt he' hd') ih.szdvd v enc off hwf he hd,
+  ⟨fun v ri hwf => match ri with
+    | ⟨enc, data, off, he, hd⟩ =>
+        roundtrip_array_wf e data (fun v' ev' o' hlt he' hd' => ih.rt v' ⟨ev', data, o', he', hd'⟩ hlt) ih.szdvd v enc off hwf he hd,
    fun h => absurd h (by simp [isDynamic]),
    fun v ev hwf he => szdvd_array e ih.szdvd v ev hwf he⟩
 theorem WFFacts.fixedArray (n : Nat) (e : ABIType) (ih : WFFacts e) : WFFacts (.fixedArray n e) :=
-  ⟨fun v enc data off hwf he hd =>
-      roundtrip_fixedArray_wf n e data (fun v' ev' o' hlt he' hd' => ih.rt v' ev' data o' hlt he' hd') ih.szdvd v enc off hwf he hd,
+  ⟨fun v ri hwf => match ri with
+    | ⟨enc, data, off, he, hd⟩ =>
+        roundtrip_fixedArray_wf n e data (fun v' ev' o' hlt he' hd' => ih.rt v' ⟨ev', data, o', he', hd'⟩ hlt) ih.szdvd v enc off hwf he hd,
    fun hstat v ev he => by
       have hstat_e : isDynamic e = false := by simpa [isDynamic] using hstat
       exact size_eq_fixedArray_core n e (ih.size_eq hstat_e) hstat_e v ev he,
@@ -133,7 +134,7 @@ theorem wfFacts : (t : ABIType) → TupleFree t → WFFacts t
 theorem roundtrip_wf_tupleFree (t : ABIType) (htf : TupleFree t) (v : ABIValue) (data : ByteArray)
     (hwf : data.size < 2^256) (henc : encode t v = Except.ok data) :
     decode t data 0 = Except.ok (v, data.size) := by
-  have h := (wfFacts t htf).rt v data data 0 hwf henc (by rw [Nat.zero_add, extract_self])
+  have h := (wfFacts t htf).rt v (RoundtripInput.self t v data henc) hwf
   simpa using h
 
 /-- Function-call roundtrip for any tuple-free argument list — no per-signature proof needed. -/
@@ -144,7 +145,7 @@ theorem roundtrip_args_tupleFree_wf (types : List ABIType) (data : ByteArray) (v
     (henc : encodeArgs types values = Except.ok data) :
     decodeArgs types data 0 = Except.ok values :=
   roundtrip_args_wf types data values
-    (fun t ht v ev o hlt he hd => (wfFacts t (htf t ht)).rt v ev data o hlt he hd)
+    (fun t ht v ev o hlt he hd => (wfFacts t (htf t ht)).rt v ⟨ev, data, o, he, hd⟩ hlt)
     (fun t ht => (wfFacts t (htf t ht)).size_eq)
     (fun t ht => (wfFacts t (htf t ht)).szdvd)
     hwf hbd henc
@@ -347,12 +348,13 @@ theorem wfFactsWF : (t : ABIType) → WellFormedType t → WFFacts t
   | .fixedArray n e, hwf => .fixedArray n e (wfFactsWF e (by cases hwf with | fixedArray _ _ _ h => exact h))
   | .tuple ts, hwf =>
       have hfield : ∀ t' ∈ ts, WellFormedType t' := by cases hwf with | tuple _ h => exact h
-      ⟨fun v enc data off hsz henc hdata => by
+      ⟨fun v ri hsz => by
+          rcases ri with ⟨enc, data, off, henc, hdata⟩
           cases hdyn : ts.any isDynamic with
           | false =>
             have hstat_tuple : isDynamic (.tuple ts) = false := by rw [← tuple_any_isDynamic]; simpa [List.any_map] using hdyn
             exact roundtrip_tuple_stat_wf ts data
-              (fun t' ht' v' ev' o' hlt he' hd' => (wfFactsWF t' (hfield t' ht')).rt v' ev' data o' hlt he' hd')
+              (fun t' ht' v' ev' o' hlt he' hd' => (wfFactsWF t' (hfield t' ht')).rt v' ⟨ev', data, o', he', hd'⟩ hlt)
               (fun t' ht' => (wfFactsWF t' (hfield t' ht')).size_eq)
               hstat_tuple v enc off hsz henc hdata
           | true =>
@@ -360,7 +362,7 @@ theorem wfFactsWF : (t : ABIType) → WellFormedType t → WFFacts t
             have hle : off + enc.size ≤ data.size := not_gt_of_extract_eq data off enc.size (by rw [hdata]) (by omega)
             have hbd : off + ts.foldl (fun a t => a + headSize t) 0 + 32 ≤ data.size := by omega
             exact roundtrip_tuple_wf ts data
-              (fun t' ht' v' ev' o' hlt he' hd' => (wfFactsWF t' (hfield t' ht')).rt v' ev' data o' hlt he' hd')
+              (fun t' ht' v' ev' o' hlt he' hd' => (wfFactsWF t' (hfield t' ht')).rt v' ⟨ev', data, o', he', hd'⟩ hlt)
               (fun t' ht' => (wfFactsWF t' (hfield t' ht')).size_eq)
               (fun t' ht' => (wfFactsWF t' (hfield t' ht')).szdvd)
               v enc off hsz hbd henc hdata,
@@ -375,12 +377,18 @@ theorem wfFactsWF : (t : ABIType) → WellFormedType t → WFFacts t
       | omega
       | (have hm := ‹_ ∈ _›; have := List.sizeOf_lt_of_mem hm; omega)
 
+/-- Clean roundtrip (offset 0) for ANY well-formed type via a `RoundtripInput` — atomics,
+    bytes/string, nested arrays/fixedArrays, AND tuples/structs (nested to any depth). -/
+theorem roundtrip_of_input (t : ABIType) (hwf : WellFormedType t) (v : ABIValue) (ri : RoundtripInput t v)
+    (hsz : ri.enc.size < 2^256) : decode t ri.data ri.off = Except.ok (v, ri.off + ri.enc.size) :=
+  (wfFactsWF t hwf).rt v ri hsz
+
 /-- Clean roundtrip (offset 0) for ANY well-formed type — atomics, bytes/string, nested
     arrays/fixedArrays, AND tuples/structs (nested to any depth). -/
 theorem roundtrip_wf (t : ABIType) (hwf : WellFormedType t) (v : ABIValue) (data : ByteArray)
     (hsz : data.size < 2^256) (henc : encode t v = Except.ok data) :
     decode t data 0 = Except.ok (v, data.size) := by
-  have h := (wfFactsWF t hwf).rt v data data 0 hsz henc (by rw [Nat.zero_add, extract_self])
+  have h := roundtrip_of_input t hwf v (RoundtripInput.self t v data henc) hsz
   simpa using h
 
 /-- Function-call roundtrip for ANY well-formed argument list, including struct arguments —
@@ -393,9 +401,10 @@ theorem roundtrip_args_wff (types : List ABIType) (data : ByteArray) (values : L
   unfold encodeArgs at henc
   split at henc
   · simp at henc
-  · have hd : decode (.tuple types) data 0 = Except.ok (.tuple values, 0 + data.size) :=
-      (wfFactsWF (.tuple types) (.tuple types hwf)).rt (.tuple values) data data 0 hsz henc
-        (by rw [Nat.zero_add, extract_self])
+  · have hd : decode (.tuple types) data 0 = Except.ok (.tuple values, data.size) := by
+      simpa using
+        roundtrip_of_input (.tuple types) (.tuple types hwf) (.tuple values)
+          (RoundtripInput.self (.tuple types) (.tuple values) data henc) hsz
     unfold decodeArgs; rw [hd]; rfl
 
 /-! ### Concrete signatures, derived from the well-formed visitor
@@ -411,7 +420,7 @@ theorem roundtrip_tuple_bytes_uint (s : ByteSize) (data : ByteArray)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode (.tuple [.bytes, .uint s]) data off = Except.ok (v, off + enc.size) :=
   (wfFactsWF (.tuple [.bytes, .uint s]) (.tuple _ (by intro t ht; fin_cases ht <;> constructor))).rt
-    v enc data off hwf henc hdata
+    v ⟨enc, data, off, henc, hdata⟩ hwf
 
 /-- ERC20-style `(bytes, uintN)` argument decode. -/
 theorem roundtrip_args_bytes_uint (s : ByteSize) (data : ByteArray) (values : List ABIValue)
@@ -426,7 +435,7 @@ theorem roundtrip_tuple_addr_uint (s : ByteSize) (data : ByteArray)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode (.tuple [.address, .uint s]) data off = Except.ok (v, off + enc.size) :=
   (wfFactsWF (.tuple [.address, .uint s]) (.tuple _ (by intro t ht; fin_cases ht <;> constructor))).rt
-    v enc data off hwf henc hdata
+    v ⟨enc, data, off, henc, hdata⟩ hwf
 
 /-- ERC20 `transfer`-style argument decode. -/
 theorem roundtrip_args_addr_uint (s : ByteSize) (data : ByteArray) (values : List ABIValue)
@@ -441,4 +450,4 @@ theorem roundtrip_tuple_uint_bytes (s : ByteSize) (data : ByteArray)
     (hdata : data.extract off (off + enc.size) = enc) :
     decode (.tuple [.uint s, .bytes]) data off = Except.ok (v, off + enc.size) :=
   (wfFactsWF (.tuple [.uint s, .bytes]) (.tuple _ (by intro t ht; fin_cases ht <;> constructor))).rt
-    v enc data off hwf henc hdata
+    v ⟨enc, data, off, henc, hdata⟩ hwf

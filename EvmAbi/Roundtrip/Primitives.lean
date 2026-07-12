@@ -183,10 +183,9 @@ lemma not_gt_of_extract_eq (data : ByteArray) (off n : Nat) (h : (data.extract o
   rw [h] at h_sub_lt; omega
 
 /-- roundtrip_uint generalized to any offset. -/
-theorem roundtrip_offset_uint (s : ByteSize) (v' : Nat) (enc data : ByteArray) (off : Nat)
-    (henc : encode (.uint s) (.uint v') = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode (.uint s) data off = Except.ok (.uint v', off + enc.size) := by
+theorem roundtrip_offset_uint (s : ByteSize) (v' : Nat) (ri : RoundtripInput (.uint s) (.uint v')) :
+    decode (.uint s) ri.data ri.off = Except.ok (.uint v', ri.off + ri.enc.size) := by
+  rcases ri with ⟨enc, data, off, henc, hdata⟩
   openEnc henc
   by_cases hm : v' < 2 ^ (s.len * 8)
   · simp [hm] at henc
@@ -210,10 +209,9 @@ theorem roundtrip_offset_uint (s : ByteSize) (v' : Nat) (enc data : ByteArray) (
   · simp [hm] at henc
 
 /-- roundtrip_address generalized to any offset. -/
-theorem roundtrip_offset_address (v' : ByteArray) (enc data : ByteArray) (off : Nat)
-    (henc : encode .address (.address v') = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode .address data off = Except.ok (.address v', off + enc.size) := by
+theorem roundtrip_offset_address (v' : ByteArray) (ri : RoundtripInput .address (.address v')) :
+    decode .address ri.data ri.off = Except.ok (.address v', ri.off + ri.enc.size) := by
+  rcases ri with ⟨enc, data, off, henc, hdata⟩
   openEnc henc
   by_cases hsize : v'.size ≠ 20
   · simp [hsize] at henc
@@ -241,10 +239,9 @@ theorem roundtrip_offset_address (v' : ByteArray) (enc data : ByteArray) (off : 
       simp [h_extract_v', hsize32]
 
 /-- roundtrip_bool generalized to any offset. -/
-theorem roundtrip_offset_bool (v' : Bool) (enc data : ByteArray) (off : Nat)
-    (henc : encode .bool (.bool v') = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode .bool data off = Except.ok (.bool v', off + enc.size) := by
+theorem roundtrip_offset_bool (v' : Bool) (ri : RoundtripInput .bool (.bool v')) :
+    decode .bool ri.data ri.off = Except.ok (.bool v', ri.off + ri.enc.size) := by
+  rcases ri with ⟨enc, data, off, henc, hdata⟩
   openEnc henc
   simp at henc
   subst henc
@@ -265,10 +262,9 @@ theorem roundtrip_offset_bool (v' : Bool) (enc data : ByteArray) (off : Nat)
       bytesToNat_uint256ToBytes (if v' then 1 else 0)
     simp [h_val]; cases v' <;> simp
 /-- roundtrip_fixedBytes generalized to any offset. -/
-theorem roundtrip_offset_fixedBytes (s : ByteSize) (v' : ByteArray) (enc data : ByteArray) (off : Nat)
-    (henc : encode (.fixedBytes s) (.bytes v') = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode (.fixedBytes s) data off = Except.ok (.bytes v', off + enc.size) := by
+theorem roundtrip_offset_fixedBytes (s : ByteSize) (v' : ByteArray) (ri : RoundtripInput (.fixedBytes s) (.bytes v')) :
+    decode (.fixedBytes s) ri.data ri.off = Except.ok (.bytes v', ri.off + ri.enc.size) := by
+  rcases ri with ⟨enc, data, off, henc, hdata⟩
   openEnc henc
   by_cases hsz : v'.size = s.len
   · simp [hsz] at henc
@@ -297,10 +293,9 @@ theorem roundtrip_offset_fixedBytes (s : ByteSize) (v' : ByteArray) (enc data : 
   · simp [hsz] at henc
 
 /-- roundtrip_int generalized to any offset. -/
-theorem roundtrip_offset_int (s : ByteSize) (v' : Int) (enc data : ByteArray) (off : Nat)
-    (henc : encode (.int s) (.int v') = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode (.int s) data off = Except.ok (.int v', off + enc.size) := by
+theorem roundtrip_offset_int (s : ByteSize) (v' : Int) (ri : RoundtripInput (.int s) (.int v')) :
+    decode (.int s) ri.data ri.off = Except.ok (.int v', ri.off + ri.enc.size) := by
+  rcases ri with ⟨enc, data, off, henc, hdata⟩
   openEnc henc; simp at henc
   by_cases h1 : v' < -(2 ^ (s.len * 8 - 1) : Int); · simp [h1] at henc
   · by_cases h2 : v' ≥ (2 ^ (s.len * 8 - 1) : Int); · simp [h2] at henc
@@ -380,51 +375,42 @@ lemma decodeDynamicString_roundtrip_off (v' : String) (hv256 : v'.toUTF8.size < 
 
 /-! ## Offset-general atomic full wrappers (handle any `ABIValue`) -/
 
+/-! ## RoundtripInput-based theorems (bundled form) -/
+
 /-- Uniform "wrong constructor ⇒ encode errors" contradiction for atomic encoders. -/
-theorem roundtrip_off_uint (s : ByteSize) (v : ABIValue) (enc data : ByteArray) (off : Nat)
-    (henc : encode (.uint s) v = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode (.uint s) data off = Except.ok (v, off + enc.size) := by
+theorem roundtrip_off_uint (s : ByteSize) (v : ABIValue) (ri : RoundtripInput (.uint s) v) :
+    decode (.uint s) ri.data ri.off = Except.ok (v, ri.off + ri.enc.size) := by
   cases v with
-  | uint v' => exact roundtrip_offset_uint s v' enc data off henc hdata
-  | _ => badVal henc
+  | uint v' => exact roundtrip_offset_uint s v' ri
+  | _ => badVal ri.henc
 
-theorem roundtrip_off_int (s : ByteSize) (v : ABIValue) (enc data : ByteArray) (off : Nat)
-    (henc : encode (.int s) v = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode (.int s) data off = Except.ok (v, off + enc.size) := by
+theorem roundtrip_off_int (s : ByteSize) (v : ABIValue) (ri : RoundtripInput (.int s) v) :
+    decode (.int s) ri.data ri.off = Except.ok (v, ri.off + ri.enc.size) := by
   cases v with
-  | int i => exact roundtrip_offset_int s i enc data off henc hdata
-  | _ => badVal henc
+  | int i => exact roundtrip_offset_int s i ri
+  | _ => badVal ri.henc
 
-theorem roundtrip_off_bool (v : ABIValue) (enc data : ByteArray) (off : Nat)
-    (henc : encode .bool v = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode .bool data off = Except.ok (v, off + enc.size) := by
+theorem roundtrip_off_bool (v : ABIValue) (ri : RoundtripInput .bool v) :
+    decode .bool ri.data ri.off = Except.ok (v, ri.off + ri.enc.size) := by
   cases v with
-  | bool b => exact roundtrip_offset_bool b enc data off henc hdata
-  | _ => badVal henc
+  | bool b => exact roundtrip_offset_bool b ri
+  | _ => badVal ri.henc
 
-theorem roundtrip_off_address (v : ABIValue) (enc data : ByteArray) (off : Nat)
-    (henc : encode .address v = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode .address data off = Except.ok (v, off + enc.size) := by
+theorem roundtrip_off_address (v : ABIValue) (ri : RoundtripInput .address v) :
+    decode .address ri.data ri.off = Except.ok (v, ri.off + ri.enc.size) := by
   cases v with
-  | address addr => exact roundtrip_offset_address addr enc data off henc hdata
-  | _ => badVal henc
+  | address addr => exact roundtrip_offset_address addr ri
+  | _ => badVal ri.henc
 
-theorem roundtrip_off_fixedBytes (s : ByteSize) (v : ABIValue) (enc data : ByteArray) (off : Nat)
-    (henc : encode (.fixedBytes s) v = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode (.fixedBytes s) data off = Except.ok (v, off + enc.size) := by
+theorem roundtrip_off_fixedBytes (s : ByteSize) (v : ABIValue) (ri : RoundtripInput (.fixedBytes s) v) :
+    decode (.fixedBytes s) ri.data ri.off = Except.ok (v, ri.off + ri.enc.size) := by
   cases v with
-  | bytes ba => exact roundtrip_offset_fixedBytes s ba enc data off henc hdata
-  | _ => badVal henc
+  | bytes ba => exact roundtrip_offset_fixedBytes s ba ri
+  | _ => badVal ri.henc
 
-theorem roundtrip_off_bytes (v : ABIValue) (enc data : ByteArray) (off : Nat)
-    (henc : encode .bytes v = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode .bytes data off = Except.ok (v, off + enc.size) := by
+theorem roundtrip_off_bytes (v : ABIValue) (ri : RoundtripInput .bytes v) :
+    decode .bytes ri.data ri.off = Except.ok (v, ri.off + ri.enc.size) := by
+  rcases ri with ⟨enc, data, off, henc, hdata⟩
   have h256_eq := two_pow_256
   cases v
   case bytes v' =>
@@ -440,10 +426,9 @@ theorem roundtrip_off_bytes (v : ABIValue) (enc data : ByteArray) (off : Nat)
         rw [two_pow_256] at hv256; simp [hv256])
   all_goals badVal henc
 
-theorem roundtrip_off_string (v : ABIValue) (enc data : ByteArray) (off : Nat)
-    (henc : encode .string v = Except.ok enc)
-    (hdata : data.extract off (off + enc.size) = enc) :
-    decode .string data off = Except.ok (v, off + enc.size) := by
+theorem roundtrip_off_string (v : ABIValue) (ri : RoundtripInput .string v) :
+    decode .string ri.data ri.off = Except.ok (v, ri.off + ri.enc.size) := by
+  rcases ri with ⟨enc, data, off, henc, hdata⟩
   have h256_eq := two_pow_256
   cases v
   case string v' =>
@@ -460,32 +445,32 @@ theorem roundtrip_off_string (v : ABIValue) (enc data : ByteArray) (off : Nat)
         rw [two_pow_256] at h_ge'; simp [h_ge'])
   all_goals badVal henc
 
-/-! ## Offset-0 corollaries (via `extract_self`) -/
+/-! ## Offset-0 corollaries (via `RoundtripInput.self`) -/
 
 theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray)
     (henc : encode (.uint s) v = Except.ok data) : decode (.uint s) data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_uint s v data data 0 henc (by rw [Nat.zero_add, extract_self])
+  simpa using roundtrip_off_uint s v (RoundtripInput.self (.uint s) v data henc)
 
 theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray)
     (henc : encode (.int s) (ABIValue.int v') = Except.ok data) : decode (.int s) data 0 = Except.ok (ABIValue.int v', data.size) := by
-  simpa using roundtrip_off_int s (.int v') data data 0 henc (by rw [Nat.zero_add, extract_self])
+  simpa using roundtrip_off_int s (.int v') (RoundtripInput.self (.int s) (.int v') data henc)
 
 theorem roundtrip_bool (v : ABIValue) (data : ByteArray)
     (henc : encode .bool v = Except.ok data) : decode .bool data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_bool v data data 0 henc (by rw [Nat.zero_add, extract_self])
+  simpa using roundtrip_off_bool v (RoundtripInput.self .bool v data henc)
 
 theorem roundtrip_address (v : ABIValue) (data : ByteArray)
     (henc : encode .address v = Except.ok data) : decode .address data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_address v data data 0 henc (by rw [Nat.zero_add, extract_self])
+  simpa using roundtrip_off_address v (RoundtripInput.self .address v data henc)
 
 theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
     (henc : encode (.fixedBytes s) v = Except.ok data) : decode (.fixedBytes s) data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_fixedBytes s v data data 0 henc (by rw [Nat.zero_add, extract_self])
+  simpa using roundtrip_off_fixedBytes s v (RoundtripInput.self (.fixedBytes s) v data henc)
 
 theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
     (henc : encode .bytes v = Except.ok data) : decode .bytes data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_bytes v data data 0 henc (by rw [Nat.zero_add, extract_self])
+  simpa using roundtrip_off_bytes v (RoundtripInput.self .bytes v data henc)
 
 theorem roundtrip_string (v : ABIValue) (data : ByteArray)
     (henc : encode .string v = Except.ok data) : decode .string data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_string v data data 0 henc (by rw [Nat.zero_add, extract_self])
+  simpa using roundtrip_off_string v (RoundtripInput.self .string v data henc)
