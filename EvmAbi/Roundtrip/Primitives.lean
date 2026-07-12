@@ -190,8 +190,7 @@ theorem roundtrip_offset_uint (s : ByteSize) (v' : Nat) (enc data : ByteArray) (
   openEnc henc
   by_cases hm : v' < 2 ^ (s.len * 8)
   · simp [hm] at henc
-    have h_enc_eq : uint256ToBytes v' = enc := henc
-    subst h_enc_eq
+    subst henc
     have hsize32 : (uint256ToBytes v').size = 32 := by
       have hv256 : v' < 2 ^ 256 := by
         have hbits256 : s.len * 8 ≤ 256 := by have := s.h.right; omega
@@ -220,8 +219,7 @@ theorem roundtrip_offset_address (v' : ByteArray) (enc data : ByteArray) (off : 
   · simp [hsize] at henc
   · have hsize20 : v'.size = 20 := by omega
     simp [hsize20] at henc
-    have h_enc_eq : padLeft v' 32 = enc := henc
-    subst h_enc_eq
+    subst henc
     have hsize32 : (padLeft v' 32).size = 32 := by
       unfold padLeft; simp [hsize20, zeros_size]
     have hdata' : data.extract off (off + 32) = padLeft v' 32 := by
@@ -249,8 +247,7 @@ theorem roundtrip_offset_bool (v' : Bool) (enc data : ByteArray) (off : Nat)
     decode .bool data off = Except.ok (.bool v', off + enc.size) := by
   openEnc henc
   simp at henc
-  have h_enc_eq : uint256ToBytes (if v' then 1 else 0) = enc := henc
-  subst h_enc_eq
+  subst henc
   have hsize32 : (uint256ToBytes (if v' then 1 else 0)).size = 32 := by
     have hbits : (if v' then 1 else 0) < 2 ^ 256 := by split <;> omega
     exact uint256ToBytes_size (if v' then 1 else 0) (natToBytes_size_bound (if v' then 1 else 0) hbits)
@@ -275,7 +272,7 @@ theorem roundtrip_offset_fixedBytes (s : ByteSize) (v' : ByteArray) (enc data : 
   openEnc henc
   by_cases hsz : v'.size = s.len
   · simp [hsz] at henc
-    have h_enc_eq : padRight v' 32 = enc := henc; subst h_enc_eq
+    subst henc
     have hsize32 : (padRight v' 32).size = 32 := padRight_size_32 v' (by rw [hsz]; exact s.h.right)
     rw [hsize32]
     have hdata' : data.extract off (off + 32) = padRight v' 32 := by

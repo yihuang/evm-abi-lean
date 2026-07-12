@@ -38,9 +38,6 @@ theorem uint256ToBytes_size (v : Nat) (hv : (natToBytes v).size ≤ 32) : (uint2
 /- Number of base-256 digits needed to represent n (0 for n=0). -/
 def numBytes (n : Nat) : Nat :=
   if n = 0 then 0 else 1 + numBytes (n / 256)
-termination_by n
-decreasing_by
-  apply Nat.div_lt_self; omega; decide
 
 /- If n < 256^k then numBytes n ≤ k. -/
 theorem numBytes_lt_pow (n : Nat) (k : Nat) (hn : n < 256 ^ k) : numBytes n ≤ k := by
