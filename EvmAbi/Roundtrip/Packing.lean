@@ -19,11 +19,11 @@ theorem tuple_any_isDynamic (ts : List ABIType) : (ts.map isDynamic).any id = is
 theorem enc_fst_eq_isDynamic (e : ABIType) : (foldABIType EncoderEntry e).1 = isDynamic e := by
   match e with
   | .uint s | .int s | .bool | .address | .bytes | .fixedBytes s | .string =>
-    simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp; simp [isDynamic]
+    simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp
   | .array e' =>
     simp only [foldABIType]; delta instABIVisitorEncoderEntry
     rcases foldABIType EncoderEntry e' with ⟨d, f⟩
-    dsimp; simp [isDynamic]
+    dsimp
   | .fixedArray n e' =>
     have ih := enc_fst_eq_isDynamic e'
     unfold foldABIType
@@ -250,23 +250,18 @@ theorem tuplePack_static (headSizes : List Nat) (dynamics : List Bool) (encd : L
 
 theorem isDynamic_tuple_cons_split (t : ABIType) (ts : List ABIType) (h : isDynamic (.tuple (t :: ts)) = false) :
     isDynamic t = false ∧ isDynamic (.tuple ts) = false := by
-  have he : isDynamic (.tuple (t :: ts)) = (isDynamic t || isDynamic (.tuple ts)) := by conv_lhs => rw [isDynamic]
+  have he : isDynamic (.tuple (t :: ts)) = (isDynamic t || isDynamic (.tuple ts)) := by grind
   rw [he] at h
-  cases ht : isDynamic t <;> cases hts : isDynamic (.tuple ts) <;> simp_all
+  cases ht : isDynamic t <;> cases hts : isDynamic (.tuple ts) <;> grind
 
 theorem isDynamic_tuple_of_all_static (ts : List ABIType) (h : ∀ t ∈ ts, isDynamic t = false) :
     isDynamic (.tuple ts) = false := by
-  induction ts with
-  | nil => simp [isDynamic]
-  | cons t ts ih =>
-    have he : isDynamic (.tuple (t :: ts)) = (isDynamic t || isDynamic (.tuple ts)) := by conv_lhs => rw [isDynamic]
-    rw [he, h t (by simp), ih (fun t' ht' => h t' (by simp [ht'])), Bool.or_self]
+  grind
 
 /-- Head size of a static tuple splits over the cons (false for dynamic tuples: their head is 32). -/
 theorem headSize_tuple_cons (t : ABIType) (ts : List ABIType) (hstat : isDynamic (.tuple (t :: ts)) = false) :
     headSize (.tuple (t :: ts)) = headSize t + headSize (.tuple ts) := by
-  conv_lhs => rw [headSize]
-  simp only [hstat, Bool.false_eq_true, if_false]
+  grind
 
 theorem ba_foldl_snd_init (init : ByteArray) (xs : List (Bool × ByteArray)) :
     xs.foldl (fun acc x => acc ++ x.2) init = init ++ xs.foldl (fun acc x => acc ++ x.2) ByteArray.empty := by

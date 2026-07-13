@@ -108,17 +108,31 @@ class ABIVisitor (φ : ABIType → Type) where
 
 /-! ## Simple properties -/
 
-def isDynamic : ABIType → Bool
-  | .bytes | .string | .array _ => true
-  | .fixedArray _ e => isDynamic e
-  | .tuple []       => false
-  | .tuple (e::es)  => isDynamic e || isDynamic (.tuple es)
-  | _ => false
+mutual
+
+  -- same as List.any isDynamic, but defined recursively for termination checking
+  def isDynamicList : List ABIType → Bool
+    | [] => false
+    | e :: es => isDynamic e || isDynamicList es
+
+  @[simp, grind =] def isDynamic : ABIType → Bool
+    | .bytes | .string | .array _ => true
+    | .fixedArray _ e => isDynamic e
+    | .tuple es       => isDynamicList es
+    | _ => false
+
+end
+
+@[simp, grind =] theorem isDynamicList_eq_any (ts : List ABIType) :
+    isDynamicList ts = ts.any isDynamic := by
+  induction ts with
+  | nil => simp [isDynamicList]
+  | cons t ts ih => grind [isDynamicList]
 
 /-- ABI "head" size of a type when it appears as a tuple/array element: a dynamic
     type always occupies a 32-byte offset pointer in the head; a static type occupies
     its full (static) encoding size. -/
-def headSize (t : ABIType) : Nat :=
+@[simp, grind =] def headSize (t : ABIType) : Nat :=
   if isDynamic t then 32 else
     match t with
     | .fixedArray n e => n * headSize e
