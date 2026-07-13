@@ -17,14 +17,6 @@ theorem bind_ok_inv {ε α β : Type _} {x : Except ε α} {f : α → Except ε
 /-- Single-byte ByteArray constructor. -/
 def mkSingleton (b : UInt8) : ByteArray := { data := Array.mk [b] }
 
-/- Size of mkSingleton is always 1. -/
-theorem mkSingleton_size (b : UInt8) : (mkSingleton b).size = 1 := by
-  unfold mkSingleton ByteArray.size; simp
-
-/- Extracting [0, size) from a ByteArray yields itself. -/
-theorem extract_self (b : ByteArray) : b.extract 0 b.size = b := by
-  rcases b with ⟨arr⟩; simp
-
 /- zeros k produces exactly k zero bytes. -/
 theorem zeros_size (k : Nat) : (zeros k).size = k := by
   simp [zeros, ByteArray.size]
@@ -234,7 +226,7 @@ theorem extract_first_n (b c : ByteArray) : (b ++ c).extract 0 b.size = b := by
 /- padRight b n extracts back to b for the first b.size bytes. -/
 theorem padRight_extract_self (b : ByteArray) (n : Nat) : (padRight b n).extract 0 b.size = b := by
   unfold padRight; split
-  · exact extract_self b
+  · simp
   · exact extract_first_n b (zeros (n - b.size))
 
 theorem padRight_extract_eq (b : ByteArray) (sz : Nat) (hsz : b.size = sz) : (padRight b 32).extract 0 sz = b := by

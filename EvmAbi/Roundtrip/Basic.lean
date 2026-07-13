@@ -19,7 +19,7 @@ namespace RoundtripInput
 /-- Smart constructor for the common case `off = 0` and `data = enc` (the encoding IS the buffer). -/
 @[simp]
 def self (t : ABIType) (v : ABIValue) (data : ByteArray) (henc : encode t v = Except.ok data) : RoundtripInput t v :=
-  { enc := data, data := data, off := 0, henc := henc, hdata := by rw [Nat.zero_add, extract_self] }
+  { enc := data, data := data, off := 0, henc := henc, hdata := by simp }
 
 end RoundtripInput
 

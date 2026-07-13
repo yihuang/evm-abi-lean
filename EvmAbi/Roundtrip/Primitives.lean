@@ -32,7 +32,7 @@ theorem intToBytes_decode_nonneg (s : ByteSize) (v' : Int) (hv_nonneg : v' ≥ 0
     calc
       (intToBytes v' s.len).size = (uint256ToBytes v'.toNat).size := by simp [intToBytes, uint256ToBytes, hv_nonneg]
       _ = 32 := uint256ToBytes_size v'.toNat (natToBytes_size_bound v'.toNat hv_lt_256)
-  have h_self : (intToBytes v' s.len).extract 0 32 = intToBytes v' s.len := by rw [← hsize32, extract_self]
+  have h_self : (intToBytes v' s.len).extract 0 32 = intToBytes v' s.len := by simp [← hsize32]
   have h_lt_pow : v'.toNat < 2 ^ (s.len * 8) := by
     have h_pow : 2 ^ (s.len * 8 - 1) ≤ 2 ^ (s.len * 8) :=
       Nat.pow_le_pow_right (by omega) (Nat.sub_le (s.len * 8) 1)
@@ -74,7 +74,7 @@ theorem intToBytes_decode_neg (s : ByteSize) (v' : Int) (hv_neg : ¬ v' ≥ 0)
     have h_pow : 2 ^ b ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) (by omega); omega
   have hsize32 : (intToBytes v' s.len).size = 32 :=
     intToBytes_neg_size v' s.len (by omega) (by simpa [b, unsigned] using h_unsigned_lt_256)
-  have h_self : (intToBytes v' s.len).extract 0 32 = intToBytes v' s.len := by rw [← hsize32, extract_self]
+  have h_self : (intToBytes v' s.len).extract 0 32 = intToBytes v' s.len := by simp [← hsize32]
   have h_raw_sz : (natToBytes unsigned).size = s.len :=
     natToBytes_size_range unsigned s.len s.h.left
       (by
@@ -167,8 +167,12 @@ theorem intToBytes_size32 (s : ByteSize) (v' : Int)
 
 /-! ## Offset-generalized roundtrip -/
 
--- if you can extract exact `n` slice from data, then the data size is long enough.
-lemma not_gt_of_extract_eq (data : ByteArray) (off n : Nat) (h : (data.extract off (off + n)).size = n) (hn : n > 0) : off + n ≤ data.size := by
+-- if you can extract exact slice from data as requsted, then the data size is long enough.
+lemma not_gt_of_extract_eq
+    (data : ByteArray) (off n : Nat)
+    (h : (data.extract off (off + n)).size = n)
+    (hn : n > 0) :
+    off + n ≤ data.size := by
   simp [ByteArray.size_extract] at h
   omega
 
@@ -180,13 +184,16 @@ theorem roundtrip_offset_uint (s : ByteSize) (v' : Nat) (ri : RoundtripInput (.u
   by_cases hm : v' < 2 ^ (s.len * 8)
   · simp [hm] at henc
     subst henc
+
     have hsize32 : (uint256ToBytes v').size = 32 := by
       have hv256 : v' < 2 ^ 256 := by
         have hbits256 : s.len * 8 ≤ 256 := by have := s.h.right; omega
         have hp : 2 ^ (s.len * 8) ≤ 2 ^ 256 := Nat.pow_le_pow_right (by omega) hbits256; omega
       exact uint256ToBytes_size v' (natToBytes_size_bound v' hv256)
+
     have hdata' : data.extract off (off + 32) = uint256ToBytes v' := by
       simpa [hsize32] using hdata
+
     openDec
     have h_not_too_short : off + 32 ≤ data.size :=
       not_gt_of_extract_eq data off 32 (by rw [hdata', hsize32]) (by omega)
@@ -310,7 +317,7 @@ theorem roundtrip_offset_int (s : ByteSize) (v' : Int) (ri : RoundtripInput (.in
         unfold decode at h_at_0; unfold foldABIType at h_at_0; delta instABIVisitorDecoderEntry at h_at_0; dsimp at h_at_0
         have h_not_short : ¬ (intToBytes v' s.len).size < 32 := by rw [hsize32]; omega
         rw [if_neg h_not_short] at h_at_0
-        have h_ext : (intToBytes v' s.len).extract 0 32 = intToBytes v' s.len := by rw [← hsize32, extract_self]
+        have h_ext : (intToBytes v' s.len).extract 0 32 = intToBytes v' s.len := by simp [← hsize32]
         rw [h_ext] at h_at_0
         by_cases h_cond : bytesToNat (intToBytes v' s.len) % 2 ^ (s.len * 8) < 2 ^ (s.len * 8 - 1)
         · rw [if_pos h_cond] at h_at_0

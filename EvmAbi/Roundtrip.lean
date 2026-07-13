@@ -43,7 +43,7 @@ theorem roundtrip_args_wf (types : List ABIType) (data : ByteArray) (values : Li
   · simp at henc
   · have hrt_tuple : decode (.tuple types) data 0 = Except.ok (.tuple values, 0 + data.size) :=
       roundtrip_tuple_wf types data hrt hsize hdvd (.tuple values) data 0 hwf (by simpa using hbd) henc
-        (by rw [Nat.zero_add, extract_self])
+        (by simp)
     unfold decodeArgs
     rw [hrt_tuple]
     rfl
