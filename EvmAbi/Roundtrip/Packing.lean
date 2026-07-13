@@ -12,9 +12,7 @@ set_option autoImplicit false
 
 /-- The encoder's dynamic flag agrees with `isDynamic`. -/
 theorem tuple_any_isDynamic (ts : List ABIType) : (ts.map isDynamic).any id = isDynamic (.tuple ts) := by
-  induction ts with
-  | nil => simp [isDynamic]
-  | cons t ts ih => simp only [List.map_cons, List.any_cons, id_eq, ih]; simp [isDynamic]
+  simp
 
 theorem enc_fst_eq_isDynamic (e : ABIType) : (foldABIType EncoderEntry e).1 = isDynamic e := by
   match e with
@@ -27,7 +25,7 @@ theorem enc_fst_eq_isDynamic (e : ABIType) : (foldABIType EncoderEntry e).1 = is
   | .fixedArray n e' =>
     have ih := enc_fst_eq_isDynamic e'
     unfold foldABIType
-    simp [isDynamic]
+    simp
     exact ih
   | .tuple ts =>
     simp only [foldABIType]; delta instABIVisitorEncoderEntry; dsimp
@@ -299,11 +297,10 @@ theorem tuple_static_elems (ts : List ABIType) (h : isDynamic (.tuple ts) = fals
     ∀ t ∈ ts, isDynamic t = false := by
   have h2 : (ts.map isDynamic).any id = false := by rw [tuple_any_isDynamic]; exact h
   intro t ht
+  have hmem : isDynamic t ∈ (ts.map isDynamic) := List.mem_map_of_mem ht
   by_contra hc
-  have hd : isDynamic t = true := by cases hh : isDynamic t <;> simp_all
-  have hmem : isDynamic t ∈ ts.map isDynamic := List.mem_map_of_mem ht
   have : (ts.map isDynamic).any id = true := by
-    rw [List.any_eq_true]; exact ⟨isDynamic t, hmem, hd⟩
+    rw [List.any_eq_true]; exact ⟨isDynamic t, hmem, by simpa using hc⟩
   rw [this] at h2; simp at h2
 
 /-! ## Static tuple decode + headSize helpers -/
@@ -316,11 +313,8 @@ theorem headSize_foldl_shift (init : Nat) (ts : List ABIType) :
 
 theorem headSize_tuple_foldl (ts : List ABIType) (hstat : isDynamic (.tuple ts) = false) :
     ts.foldl (fun acc t => acc + headSize t) 0 = headSize (.tuple ts) := by
-  induction ts with
-  | nil => simp [headSize, isDynamic]
-  | cons t ts ih =>
-    obtain ⟨hst, hsts⟩ := isDynamic_tuple_cons_split t ts hstat
-    rw [List.foldl_cons, headSize_foldl_shift, ih hsts, headSize_tuple_cons t ts hstat]; omega
+  rw [headSize, hstat]
+  simp [List.foldl_map, List.sum_eq_foldl]
 
 theorem decodeTupleStatic_nil (data : ByteArray) (off : Nat) (acc : List ABIValue) :
     decodeTupleStatic (All.nil : All DecoderEntry []) data off acc = Except.ok (acc.reverse, off) := rfl

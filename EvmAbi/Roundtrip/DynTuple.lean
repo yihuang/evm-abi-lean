@@ -338,7 +338,6 @@ theorem roundtrip_tuple_dyn_wf (ts : List ABIType) (data : ByteArray)
 
 /-! ### Tuple encoding is 32-byte aligned (szdvd_tuple), for composing tuples as fields/elements -/
 
-
 theorem headSize_dvd_32 : (t : ABIType) → 32 ∣ headSize t
   | .uint _ => by simp [headSize, isDynamic]
   | .int _ => by simp [headSize, isDynamic]
@@ -350,13 +349,17 @@ theorem headSize_dvd_32 : (t : ABIType) → 32 ∣ headSize t
   | .array _ => by simp [headSize, isDynamic]
   | .fixedArray n e => by
       rw [headSize]; split
-      · simp
+      · rfl
       · exact (headSize_dvd_32 e).mul_left n
-  | .tuple [] => by simp [headSize, isDynamic]
-  | .tuple (t' :: ts) => by
+  | .tuple ts => by
       rw [headSize]; split
-      · simp
-      · exact Nat.dvd_add (headSize_dvd_32 t') (headSize_dvd_32 (.tuple ts))
+      · rfl
+      · have h : ∀ n ∈ ts.map headSize, 32 ∣ n := by
+          intro n hn
+          obtain ⟨t, ht, h_eq⟩ := List.mem_map.mp hn
+          rw [← h_eq]
+          exact headSize_dvd_32 t
+        exact List.dvd_sum h
   termination_by t => sizeOf t
 
 theorem foldl_headSize_dvd : ∀ (ts : List ABIType) (init : Nat), 32 ∣ init →

@@ -136,8 +136,7 @@ end
   if isDynamic t then 32 else
     match t with
     | .fixedArray n e => n * headSize e
-    | .tuple []       => 0
-    | .tuple (t'::ts) => headSize t' + headSize (.tuple ts)
+    | .tuple ts       => (ts.map headSize).sum
     | _               => 32
 
 /-! ## Termination lemmas for foldABIType (using sizeOf) -/
