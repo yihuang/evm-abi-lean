@@ -167,20 +167,10 @@ theorem intToBytes_size32 (s : ByteSize) (v' : Int)
 
 /-! ## Offset-generalized roundtrip -/
 
-lemma not_gt_of_extract_eq (data : ByteArray) (off n : Nat) (h : (data.extract off (off + n)).size = n) (hn : n ≠ 0) : off + n ≤ data.size := by
-  have hnpos : 0 < n := Nat.pos_of_ne_zero hn
-  by_contra! H
-  rw [ByteArray.size_extract] at h
-  have hmin : min (off + n) data.size = data.size := Nat.min_eq_right (by omega)
-  rw [hmin] at h
-  -- h: data.size - off = n
-  have h_sub_lt : data.size - off < n := by
-    by_cases h_off_le : off ≤ data.size
-    · calc
-        data.size - off < (off + n) - off := Nat.sub_lt_sub_right h_off_le (by omega)
-        _ = n := by omega
-    · omega
-  rw [h] at h_sub_lt; omega
+-- if you can extract exact `n` slice from data, then the data size is long enough.
+lemma not_gt_of_extract_eq (data : ByteArray) (off n : Nat) (h : (data.extract off (off + n)).size = n) (hn : n > 0) : off + n ≤ data.size := by
+  simp [ByteArray.size_extract] at h
+  omega
 
 /-- roundtrip_uint generalized to any offset. -/
 theorem roundtrip_offset_uint (s : ByteSize) (v' : Nat) (ri : RoundtripInput (.uint s) (.uint v')) :
@@ -346,7 +336,7 @@ lemma decodeDynamicBytes_roundtrip_off (v' : ByteArray) (hv256 : v'.size < 2 ^ 2
   rcases dynamicRoundtrip_preamble v' hv256 with ⟨ha_sz, _h_pad_sz, h_roundUp_ge, h_size, _h_len, h_extract_val⟩
   set A := uint256ToBytes v'.size with hA
   set P := padRight v' (roundUp32 v'.size) with hP
-  have hn0 : (A ++ P).size ≠ 0 := by rw [h_size]; omega
+  have hn0 : (A ++ P).size > 0 := by rw [h_size]; omega
   have hbound_all : off + (A ++ P).size ≤ data.size :=
     not_gt_of_extract_eq data off (A ++ P).size (by rw [hdata]) hn0
   have h_bound32 : ¬ (off + 32 > data.size) := by rw [h_size] at hbound_all; omega
