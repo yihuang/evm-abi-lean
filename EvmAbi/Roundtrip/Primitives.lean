@@ -444,33 +444,3 @@ theorem roundtrip_off_string (v : ABIValue) (ri : RoundtripInput .string v) :
         have h_ge' : ¬ v'.utf8ByteSize < 2 ^ 256 := by simpa using huv256
         rw [two_pow_256] at h_ge'; simp [h_ge'])
   all_goals badVal henc
-
-/-! ## Offset-0 corollaries (via `RoundtripInput.self`) -/
-
-theorem roundtrip_uint (s : ByteSize) (v : ABIValue) (data : ByteArray)
-    (henc : encode (.uint s) v = Except.ok data) : decode (.uint s) data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_uint s v (RoundtripInput.self (.uint s) v data henc)
-
-theorem roundtrip_int (s : ByteSize) (v' : Int) (data : ByteArray)
-    (henc : encode (.int s) (ABIValue.int v') = Except.ok data) : decode (.int s) data 0 = Except.ok (ABIValue.int v', data.size) := by
-  simpa using roundtrip_off_int s (.int v') (RoundtripInput.self (.int s) (.int v') data henc)
-
-theorem roundtrip_bool (v : ABIValue) (data : ByteArray)
-    (henc : encode .bool v = Except.ok data) : decode .bool data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_bool v (RoundtripInput.self .bool v data henc)
-
-theorem roundtrip_address (v : ABIValue) (data : ByteArray)
-    (henc : encode .address v = Except.ok data) : decode .address data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_address v (RoundtripInput.self .address v data henc)
-
-theorem roundtrip_fixedBytes (s : ByteSize) (v : ABIValue) (data : ByteArray)
-    (henc : encode (.fixedBytes s) v = Except.ok data) : decode (.fixedBytes s) data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_fixedBytes s v (RoundtripInput.self (.fixedBytes s) v data henc)
-
-theorem roundtrip_bytes (v : ABIValue) (data : ByteArray)
-    (henc : encode .bytes v = Except.ok data) : decode .bytes data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_bytes v (RoundtripInput.self .bytes v data henc)
-
-theorem roundtrip_string (v : ABIValue) (data : ByteArray)
-    (henc : encode .string v = Except.ok data) : decode .string data 0 = Except.ok (v, data.size) := by
-  simpa using roundtrip_off_string v (RoundtripInput.self .string v data henc)
