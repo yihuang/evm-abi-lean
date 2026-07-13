@@ -48,23 +48,6 @@ theorem roundtrip_args_wf (types : List ABIType) (data : ByteArray) (values : Li
     rw [hrt_tuple]
     rfl
 
-/-! ### A clean recursive `roundtrip_wf` for tuple-free types
-
-A fully general clean visitor is impossible: the dynamic-tuple decoder's unconditional
-32-byte head-check (`Decode.lean:93`) makes a head-area bound *necessary*, and that bound
-is not derivable for pathological nested tuples (e.g. a field `fixedArray 0 (array bytes)`
-that encodes to 0 bytes). But over the **tuple-free** fragment (atomics, bytes, string, and
-arbitrarily nested arrays / fixedArrays) everything composes with no residual bound — arrays
-carry a length prefix the decoder reads within `off + enc.size`. `WFFacts` bundles the three
-facts the composition needs, and `wfFacts` builds them by structural recursion. -/
-
-/-- Types with no `tuple` anywhere in them. -/
-def TupleFree : ABIType → Prop
-  | .tuple _        => False
-  | .array e        => TupleFree e
-  | .fixedArray _ e => TupleFree e
-  | _               => True
-
 /-- The three facts a type contributes to a roundtrip composition: the offset-general
     WF roundtrip, the static size law, and 32-byte alignment. -/
 structure WFFacts (t : ABIType) : Prop where
@@ -116,39 +99,6 @@ theorem WFFacts.fixedArray (n : Nat) (e : ABIType) (ih : WFFacts e) : WFFacts (.
       have hstat_e : isDynamic e = false := by simpa [isDynamic] using hstat
       exact size_eq_fixedArray_core n e (ih.size_eq hstat_e) hstat_e v ev he,
    fun v ev hwf he => szdvd_fixedArray n e ih.szdvd v ev hwf he⟩
-
-theorem wfFacts : (t : ABIType) → TupleFree t → WFFacts t
-  | .uint s, _ => .uint s
-  | .int s, _ => .int s
-  | .bool, _ => .bool
-  | .address, _ => .address
-  | .fixedBytes s, _ => .fixedBytes s
-  | .bytes, _ => .bytes
-  | .string, _ => .string
-  | .array e, htf => .array e (wfFacts e htf)
-  | .fixedArray n e, htf => .fixedArray n e (wfFacts e htf)
-  | .tuple _, htf => by simp [TupleFree] at htf
-  termination_by t => sizeOf t
-
-/-- Clean roundtrip (offset 0) for any tuple-free type, with no residual head-area bound. -/
-theorem roundtrip_wf_tupleFree (t : ABIType) (htf : TupleFree t) (v : ABIValue) (data : ByteArray)
-    (hwf : data.size < 2^256) (henc : encode t v = Except.ok data) :
-    decode t data 0 = Except.ok (v, data.size) := by
-  have h := (wfFacts t htf).rt v (RoundtripInput.self t v data henc) hwf
-  simpa using h
-
-/-- Function-call roundtrip for any tuple-free argument list — no per-signature proof needed. -/
-theorem roundtrip_args_tupleFree_wf (types : List ABIType) (data : ByteArray) (values : List ABIValue)
-    (htf : ∀ t ∈ types, TupleFree t)
-    (hwf : data.size < 2^256)
-    (hbd : (types.foldl (fun a t => a + headSize t) 0) + 32 ≤ data.size)
-    (henc : encodeArgs types values = Except.ok data) :
-    decodeArgs types data 0 = Except.ok values :=
-  roundtrip_args_wf types data values
-    (fun t ht v ev o hlt he hd => (wfFacts t (htf t ht)).rt v ⟨ev, data, o, he, hd⟩ hlt)
-    (fun t ht => (wfFacts t (htf t ht)).size_eq)
-    (fun t ht => (wfFacts t (htf t ht)).szdvd)
-    hwf hbd henc
 
 /-! ### Covering nested tuples (structs): the well-formed fragment
 
