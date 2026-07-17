@@ -5,6 +5,8 @@ import EvmAbi.Ty
 import EvmAbi.Static
 import EvmAbi.Dynamic
 import EvmAbi.Codec
+import EvmAbi.StaticArray
+import EvmAbi.Parts
 
 /-!
 # EvmAbi.Tests
@@ -157,5 +159,64 @@ example : (encode (.uint 256) ⟨42, by decide⟩).length = 32 := by
 
 example : Aligned (encode .bytes ([1, 2, 3] : List UInt8)).length :=
   encode_length_aligned .bytes (by decide) _
+
+/-! ## Static arrays (node 6) -/
+
+#eval encodeWordArray [1, 2, 3]
+example : decodeWordArray 3 (encodeWordArray [1, 2, 3]) = some [1, 2, 3] := by native_decide
+example : decodeWordArray 3 (encodeWordArray [1, 2, 3]) = some [1, 2, 3] :=
+  decodeWordArray_encodeWordArray ([1, 2, 3] : List UInt256)
+example : wordAt (encodeWordArray [7, 8, 9]) 1 = some 8 := by native_decide
+example : wordAt (encodeWordArray [7, 8, 9]) 1 = some 8 :=
+  wordAt_encodeWordArray _ _ (by decide)
+
+/-! ## Head/tail combinator (node 7) -/
+
+/-- Demo tuple `(uint 1, bytes 0x010203, uint 2)`: a dynamic part between
+two static ones. -/
+def demoParts : List Part :=
+  [ ⟨encodeUint 1, [], false⟩,
+    ⟨[], encodeBytes [1, 2, 3], true⟩,
+    ⟨encodeUint 2, [], false⟩ ]
+
+theorem wf_demoParts : WF demoParts :=
+  wf_cons (by native_decide) (wf_cons (by native_decide) (wf_cons (by native_decide) wf_nil))
+
+-- the full encoding: heads word(1), word(96), word(2); tails word(3) ++ 0x010203 padded
+#eval encodeParts demoParts
+example : (encodeParts demoParts).length = 160 := by native_decide
+example : 32 ∣ (encodeParts demoParts).length := dvd_length_encodeParts wf_demoParts
+
+-- the offset word of the dynamic part sits at head position 1 and contains 96
+example : wordAt (encodeParts demoParts) 1 = some (UInt256.ofNat 96) := by native_decide
+example : wordAt (encodeParts demoParts) 1 = some (UInt256.ofNat 96) := by
+  have h := wordAt_offset_append (xs := [⟨encodeUint 1, [], false⟩]) (head := [])
+    (tail := encodeBytes [1, 2, 3]) (ys := [⟨encodeUint 2, [], false⟩]) wf_demoParts
+  exact h
+
+-- dropping to the tail offset lands on the bytes encoding
+example : (encodeParts demoParts).drop 96 = encodeBytes [1, 2, 3] := by native_decide
+example : (encodeParts demoParts).drop (tailOffset demoParts 1) =
+    encodeBytes [1, 2, 3] ++ encodeTails [⟨encodeUint 2, [], false⟩] :=
+  drop_tailOffset_append (xs := [⟨encodeUint 1, [], false⟩]) (head := [])
+    (tail := encodeBytes [1, 2, 3]) (ys := [⟨encodeUint 2, [], false⟩])
+
+-- following the offset word reads the tail back
+example : (wordAt (encodeParts demoParts) 1).map
+    (fun w => ((encodeParts demoParts).drop w.toNat).take 64) =
+    some (encodeBytes [1, 2, 3]) := by
+  have h := readTail_append (xs := [⟨encodeUint 1, [], false⟩]) (head := [])
+    (tail := encodeBytes [1, 2, 3]) (ys := [⟨encodeUint 2, [], false⟩])
+    wf_demoParts (by native_decide)
+  exact h
+
+-- end-to-end: prefix-decode the dynamic bytes value at its tail offset
+example : decodeBytesPrefix ((encodeParts demoParts).drop 96) = some ([1, 2, 3], 64) := by
+  native_decide
+example : decodeBytesPrefix ((encodeParts demoParts).drop (tailOffset demoParts 1)) =
+    some ([1, 2, 3], (encodeBytes [1, 2, 3]).length) := by
+  have h := decodeBytesPrefix_tailOffset (xs := [⟨encodeUint 1, [], false⟩]) (head := [])
+    (bs := [1, 2, 3]) (ys := [⟨encodeUint 2, [], false⟩]) (by native_decide)
+  exact h
 
 end EvmAbi

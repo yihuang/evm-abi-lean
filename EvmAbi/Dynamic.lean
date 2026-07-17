@@ -84,4 +84,40 @@ theorem decodeString_encodeString (h : s.toUTF8.data.toList.length < 2 ^ 256) :
   unfold decodeString encodeString
   rw [decodeBytes_encodeBytes h, Option.bind_some, dataToList_toByteArray, fromUTF8?_toUTF8]
 
+/-! ## prefix decoding (for composition inside tuples) -/
+
+/-- Prefix decoder for dynamic `bytes`: reads a length word, exactly `len`
+data bytes and the zero padding, returning the bytes and the number of
+consumed bytes. Anything beyond the consumed prefix is ignored, so this
+composes with the head/tail layout (`EvmAbi.Parts`). -/
+def decodeBytesPrefix (buf : List UInt8) : Option (List UInt8 × Nat) :=
+  (natAt buf 0).bind fun len =>
+    if ((buf.drop 32).take len).length = len ∧
+       ((buf.drop 32).drop len).take ((32 - len % 32) % 32) =
+         List.replicate ((32 - len % 32) % 32) 0 then
+      some ((buf.drop 32).take len, 32 + len + (32 - len % 32) % 32)
+    else none
+
+/-- **Prefix roundtrip**: an encoded `bytes` value is read back from the
+front of a larger buffer, with the exact consumed length reported. -/
+theorem decodeBytesPrefix_append (h : bs.length < 2 ^ 256) :
+    decodeBytesPrefix (encodeBytes bs ++ rest) = some (bs, (encodeBytes bs).length) := by
+  have hw := natAt_append ([] : List UInt8) (pad32 bs ++ rest) (UInt256.ofNat bs.length) 0
+    (by simp)
+  simp only [List.nil_append] at hw
+  have hlen : (UInt256.ofNat bs.length).toNat = bs.length := by
+    rw [UInt256.toNat_ofNat]; exact Nat.mod_eq_of_lt h
+  rw [hlen] at hw
+  have hdata : ((pad32 bs ++ rest).take bs.length) = bs := by
+    rw [pad32, List.append_assoc]; exact take_append_of_length rfl
+  have hpad : ((pad32 bs ++ rest).drop bs.length).take ((32 - bs.length % 32) % 32) =
+      List.replicate ((32 - bs.length % 32) % 32) 0 := by
+    rw [pad32, List.append_assoc, drop_append_of_length rfl]
+    exact take_append_of_length (by simp)
+  unfold decodeBytesPrefix encodeBytes encodeUint
+  rw [List.append_assoc, hw, Option.bind_some, drop_append_of_length (length_bytesOfWord _),
+    hdata, hpad, if_pos ⟨rfl, rfl⟩]
+  congr 1
+  simp [length_pad32, length_bytesOfWord] <;> omega
+
 end EvmAbi
