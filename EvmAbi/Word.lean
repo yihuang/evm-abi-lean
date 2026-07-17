@@ -2,7 +2,7 @@ import Binary.UInt256
 import EvmAbi.Bytes
 
 /-!
-# Abi.Word
+# EvmAbi.Word
 
 The 32-byte word layer (roadmap node 2): reading and writing EVM words
 (`UInt256`) at aligned positions of a byte buffer.

@@ -1,5 +1,5 @@
 /-!
-# Abi.Bytes
+# EvmAbi.Bytes
 
 Byte-list plumbing for the ABI layer (roadmap node 1): right-padding to a
 multiple of 32, splitting into fixed-size chunks, and `take`/`drop` lemmas
