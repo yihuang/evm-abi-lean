@@ -1,8 +1,10 @@
 import EvmAbi.Bytes
 import EvmAbi.Align
 import EvmAbi.Word
+import EvmAbi.Ty
 import EvmAbi.Static
 import EvmAbi.Dynamic
+import EvmAbi.Codec
 
 /-!
 # EvmAbi.Tests
@@ -14,6 +16,7 @@ Computation-checked instances for the `EvmAbi.*` infrastructure modules:
 namespace EvmAbi
 
 open Binary
+open Ty
 
 /-! ## pad32 -/
 
@@ -106,5 +109,53 @@ example : decodeString (encodeString "Hello, world!") = some "Hello, world!" := 
   native_decide
 example : decodeString (encodeString "Hello, world!") = some "Hello, world!" :=
   decodeString_encodeString (by native_decide)
+
+/-! ## Ty-indexed codec (S2 wrap-up) -/
+
+-- Ty-level roundtrips by computation
+
+example : decode (.uint 8) (encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ := by
+  native_decide
+
+example : decode (.int 16) (encode (.int 16) ⟨-1000, by decide⟩) = some ⟨-1000, by decide⟩ := by
+  native_decide
+
+example : decode .bool (encode .bool true) = some true := by native_decide
+
+example : decode (.bytesN 5) (encode (.bytesN 5) ⟨[1,2,3,4,5], rfl⟩)
+    = some ⟨[1,2,3,4,5], rfl⟩ := by native_decide
+
+example : decode .bytes (encode .bytes [0x61, 0x62, 0x63])
+    = some [0x61, 0x62, 0x63] := by native_decide
+
+example : decode .string (encode .string "Hello, world!")
+    = some "Hello, world!" := by native_decide
+
+-- The same instances via library theorems (no computation)
+
+example : decode (.uint 8) (encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ :=
+  roundtrip (.uint 8) (by decide) _ trivial
+
+example : decode (.int 8) (encode (.int 8) ⟨-5, by decide⟩) = some ⟨-5, by decide⟩ :=
+  roundtrip (.int 8) (by decide) _ trivial
+
+example : decode .bool (encode .bool false) = some false :=
+  roundtrip .bool (by decide) _ trivial
+
+example : decode .bytes (encode .bytes [1, 2, 3]) = some [1, 2, 3] :=
+  roundtrip_bytes [1, 2, 3] (by decide)
+
+example : decode .string (encode .string "hello") = some "hello" :=
+  roundtrip_string "hello" (by native_decide)
+
+-- encodeStatic_length
+
+example : (encode (.uint 256) ⟨42, by decide⟩).length = 32 := by
+  rw [encodeStatic_length (.uint 256) (by exact rfl) (by decide) ⟨42, by decide⟩]
+
+-- encode_length_aligned
+
+example : Aligned (encode .bytes ([1, 2, 3] : List UInt8)).length :=
+  encode_length_aligned .bytes (by decide) _
 
 end EvmAbi

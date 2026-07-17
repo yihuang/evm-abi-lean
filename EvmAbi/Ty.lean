@@ -42,6 +42,9 @@ def Valid : Ty → Prop
   | bytesN m => 1 ≤ m ∧ m ≤ 32
   | _ => True
 
+instance (t : Ty) : Decidable t.Valid := by
+  cases t <;> unfold Valid <;> infer_instance
+
 /-- A type is *static* when its encoding is one fixed-size word, embedded
 inline in any head it appears in. All base types except `bytes`/`string`
 are static. -/
@@ -51,7 +54,11 @@ def IsStatic : Ty → Bool
 
 /-- Values indexed by their ABI type, refined so that every inhabitant is
 encodable: the roundtrip holds for *every* `v : t.Val` of a valid `t`
-(plus the length bound of `LenBound` for dynamic payloads). -/
+(plus the length bound of `LenBound` for dynamic payloads).
+
+Marked `@[reducible]` so the dependent match in `encode`/`decode`
+can see through the type index (roadmap design decision 1). -/
+@[reducible]
 def Val : Ty → Type
   | uint m => { n : Nat // n < 2 ^ m }
   | int m => { i : Int // -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int) }
@@ -64,7 +71,10 @@ def Val : Ty → Type
 /-- The condition under which an encoded value is decodable: dynamic payloads
 must fit the single length word that prefixes them. Without it the length
 word wraps modulo `2^256` and decoding reads a wrong length — the
-unconditional statement would be false, not merely unproven. -/
+unconditional statement would be false, not merely unproven.
+
+Marked `@[reducible]` together with `Val`. -/
+@[reducible]
 def LenBound : (t : Ty) → t.Val → Prop
   | bytes, bs => bs.length < 2 ^ 256
   | string, s => s.toUTF8.size < 2 ^ 256
