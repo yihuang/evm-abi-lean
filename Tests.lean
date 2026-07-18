@@ -332,13 +332,9 @@ example : decode .bytes decodableBytesBuf = some [1, 2, 3] := by native_decide
 example : (decode .bytes (encode .bytes [1, 2, 3])).map (encode .bytes) =
     some (encode .bytes [1, 2, 3]) := by native_decide
 
-example : IsCanonical .bytes decodableBytesBuf := by
-  refine ⟨[1, 2, 3], ?_⟩
-  native_decide
-
-example : ∃ enc, (decode .bytes decodableBytesBuf).map (encode .bytes) = some enc := by
+example : (decode .bytes decodableBytesBuf).map (encode .bytes) =
+    some (encode .bytes [1, 2, 3]) := by
   apply decode_then_encode_roundtrip
-  refine ⟨[1, 2, 3], ?_⟩
   native_decide
 
 example : decode .bytes decodableBytesBuf = some [1, 2, 3] := by native_decide

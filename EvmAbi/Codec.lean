@@ -948,23 +948,12 @@ theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
   have h := decode_encode_append t hv v hl [] (by rwa [List.append_nil])
   rwa [List.append_nil] at h
 
-/-! ## Canonical decoding -/
+/-! ## Decode→encode roundtrip from decode success -/
 
-/-- Canonical input for `t`: decoding succeeds. -/
-def IsCanonical (t : Ty) (buf : List UInt8) : Prop :=
-  ∃ v : t.Val, decode t buf = some v
-
-/-- Build canonicality directly from a successful decode. -/
-theorem isCanonical_of_decode (t : Ty) (buf : List UInt8) (v : t.Val)
-    (hdec : decode t buf = some v) : IsCanonical t buf :=
-  ⟨v, hdec⟩
-
-/-- Canonical inputs decode and therefore re-encode through `Option.map`. -/
-theorem decode_then_encode_roundtrip (t : Ty) (buf : List UInt8)
-    (hcan : IsCanonical t buf) :
-    ∃ enc, (decode t buf).map (encode t) = some enc := by
-  rcases hcan with ⟨v, hdec⟩
-  refine ⟨encode t v, ?_⟩
-  simpa [hdec]
+/-- If decoding succeeds, mapping `encode` over that decode result roundtrips. -/
+theorem decode_then_encode_roundtrip (t : Ty) (buf : List UInt8) (v : t.Val)
+    (hdec : decode t buf = some v) :
+    (decode t buf).map (encode t) = some (encode t v) := by
+  simp [hdec]
 
 end EvmAbi
