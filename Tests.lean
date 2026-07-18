@@ -330,19 +330,30 @@ def nonCanonicalBytesBuf : List UInt8 := encode .bytes [1, 2, 3] ++ [0xff]
 example : decode .bytes nonCanonicalBytesBuf = some [1, 2, 3] := by native_decide
 
 example : (decodeCanonical .bytes (encode .bytes [1, 2, 3])).map (encode .bytes) =
-    some (encode .bytes [1, 2, 3]) := by
-  apply encode_decodeCanonical_eq_id_of_isCanonical
-  exact ⟨[1, 2, 3], by native_decide, rfl⟩
+    some (encode .bytes [1, 2, 3]) := by native_decide
 
-example : decodeCanonical .bytes nonCanonicalBytesBuf = none := by
+example : IsCanonical .bytes nonCanonicalBytesBuf := by
+  refine ⟨[1, 2, 3], ?_, ?_⟩
+  · native_decide
+  · native_decide
+
+example : ∃ enc, (decodeCanonical .bytes nonCanonicalBytesBuf).map (encode .bytes) = some enc ∧
+    nonCanonicalBytesBuf.take enc.length = enc := by
+  apply encode_decodeCanonical_eq_id_of_isCanonical
+  exact ⟨[1, 2, 3], by native_decide, by native_decide⟩
+
+example : decodeCanonical .bytes nonCanonicalBytesBuf = some [1, 2, 3] := by native_decide
+
+def aliasedTupleBuf : List UInt8 :=
+  encodeUint 64 ++ encodeUint 64 ++ encode .bytes [1]
+
+example : decode (.tuple [.bytes, .bytes]) aliasedTupleBuf =
+    some ([1], ([1], ())) := by native_decide
+
+example : decodeCanonical (.tuple [.bytes, .bytes]) aliasedTupleBuf = none := by native_decide
+
+example : decodeCanonical (.tuple [.bytes, .bytes]) aliasedTupleBuf = none := by
   apply decodeCanonical_eq_none_of_not_isCanonical
-  intro hcan
-  rcases hcan with ⟨v, hdec, henc⟩
-  have h1 : (encode .bytes v).length = (encode .bytes [1, 2, 3]).length + 1 := by
-    simpa [nonCanonicalBytesBuf, henc]
-  have h2 : 32 ∣ (encode .bytes v).length := by
-    simp [encode]
-  have h3 : ¬ 32 ∣ (encode .bytes [1, 2, 3]).length + 1 := by native_decide
-  exact h3 (by simpa [h1] using h2)
+  native_decide
 
 end EvmAbi

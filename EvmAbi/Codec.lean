@@ -941,22 +941,27 @@ theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
 
 /-! ## Canonical decoding -/
 
-/-- Canonical input for `t`: decoding succeeds and re-encoding gives the same bytes. -/
+/-- Prefix-canonical input for `t`: decoding succeeds and re-encoding matches
+the consumed prefix (trailing bytes are ignored). -/
 def IsCanonical (t : Ty) (buf : List UInt8) : Prop :=
-  ∃ v : t.Val, decode t buf = some v ∧ encode t v = buf
+  ∃ v : t.Val, decode t buf = some v ∧ buf.take (encode t v).length = encode t v
 
-/-- Canonical decoder: accept exactly fixed points of `encode ∘ decode`. -/
+/-- Canonical decoder up to trailing bytes: accept exactly values whose
+re-encoding matches the decoded prefix. -/
 def decodeCanonical (t : Ty) (buf : List UInt8) : Option t.Val :=
   (decode t buf).bind fun v =>
-    if encode t v = buf then some v else none
+    if buf.take (encode t v).length = encode t v then some v else none
 
-/-- On canonical input, `encode ∘ decodeCanonical = id`. -/
+/-- On canonical input, `decodeCanonical` returns a value whose re-encoding
+is exactly the consumed prefix. -/
 theorem encode_decodeCanonical_eq_id_of_isCanonical (t : Ty) (buf : List UInt8)
     (h : IsCanonical t buf) :
-    (decodeCanonical t buf).map (encode t) = some buf := by
+    ∃ enc, (decodeCanonical t buf).map (encode t) = some enc ∧ buf.take enc.length = enc := by
   rcases h with ⟨v, hv, hb⟩
+  refine ⟨encode t v, ?_, ?_⟩
   unfold decodeCanonical
-  rw [hv, Option.bind_some, if_pos hb, Option.map_some, hb]
+  · rw [hv, Option.bind_some, if_pos hb, Option.map_some]
+  · simpa using hb
 
 /-- Non-canonical inputs are rejected by `decodeCanonical`. -/
 theorem decodeCanonical_eq_none_of_not_isCanonical (t : Ty) (buf : List UInt8)
@@ -966,7 +971,7 @@ theorem decodeCanonical_eq_none_of_not_isCanonical (t : Ty) (buf : List UInt8)
   | none =>
       simp [hdec]
   | some v =>
-      by_cases henc : encode t v = buf
+      by_cases henc : buf.take (encode t v).length = encode t v
       · exact (h ⟨v, hdec, henc⟩).elim
       · simp [hdec, henc]
 
