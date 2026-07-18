@@ -60,7 +60,7 @@ def encode : (t : Ty) → t.Val → List UInt8
   | .array t, vs       => encodeUint vs.length ++ encodeParts (vs.map (partOf t))
   | .fixedArray t _, ⟨vs, _⟩ => encodeParts (vs.map (partOf t))
   | .tuple ts, vs      => encodeParts (partsOfTuple ts vs)
-termination_by t v => (sizeOf t, 0)
+termination_by t => (sizeOf t, 0)
 
 /-- A value seen as a head/tail part: static values sit in the head,
 dynamic values in the tail (their head is the offset word). -/
@@ -74,7 +74,7 @@ termination_by (sizeOf t, 1)
 def partsOfTuple : (ts : List Ty) → TupleVal ts → List Part
   | [], _ => []
   | t :: ts, (v, vs) => partOf t v :: partsOfTuple ts vs
-termination_by ts vs => (sizeOf ts, 2)
+termination_by ts => (sizeOf ts, 2)
 end
 
 /-! ## decode family -/
@@ -110,7 +110,7 @@ def decode : (t : Ty) → List UInt8 → Option t.Val
     | some k => (decodeElems t k (buf.drop 32) 0).map Subtype.val
   | .fixedArray t n, buf => decodeElems t n buf 0
   | .tuple ts, buf => decodeTuple ts buf 0
-termination_by t buf => (sizeOf t, 0)
+termination_by t => (sizeOf t, 0)
 
 /-- Read one component at head offset `off`. -/
 def readElem (t : Ty) (buf : List UInt8) (off : Nat) : Option t.Val :=
@@ -139,7 +139,7 @@ def decodeTuple : (ts : List Ty) → List UInt8 → Nat → Option (TupleVal ts)
   | t :: ts, buf, off => match readElem t buf off with
     | none => none
     | some v => (decodeTuple ts buf (off + t.headSize)).map (v, ·)
-termination_by ts buf off => (sizeOf ts, 2)
+termination_by ts => (sizeOf ts, 2)
 end
 
 /-! ## helper lemmas -/
@@ -222,7 +222,7 @@ theorem dvd_headSize_static : (t : Ty) → t.IsStatic = true → 32 ∣ t.headSi
       have hss : allStatic ts = true := by simp only [IsStatic] at hs; exact hs
       obtain ⟨k, hk⟩ := dvd_headSizeSum_static ts hss
       exact ⟨k, by simp only [headSize]; rw [if_pos hss, hk]⟩
-termination_by t hs => 2 * sizeOf t
+termination_by t => 2 * sizeOf t
 
 /-- The head size sum of an all-static type list is 32-byte aligned. -/
 theorem dvd_headSizeSum_static : (ts : List Ty) → allStatic ts = true → 32 ∣ headSizeSum ts
@@ -234,7 +234,7 @@ theorem dvd_headSizeSum_static : (ts : List Ty) → allStatic ts = true → 32 �
       obtain ⟨k1, hk1⟩ := dvd_headSize_static t hst
       obtain ⟨k2, hk2⟩ := dvd_headSizeSum_static ts hss
       exact ⟨k1 + k2, by simp only [headSizeSum]; rw [hk1, hk2]; omega⟩
-termination_by ts hs => 2 * sizeOf ts + 1
+termination_by ts => 2 * sizeOf ts + 1
 end
 
 mutual
@@ -283,7 +283,7 @@ theorem encode_length_static : (t : Ty) → t.IsStatic = true → t.Valid → (v
       rw [hgoal]
       simp only [encode]
       exact encode_length_static_tuple ts hss hvts vs
-termination_by t hs hv v => 2 * sizeOf t
+termination_by t => 2 * sizeOf t
 
 /-- Static tuple encodings occupy exactly their head size sum. -/
 theorem encode_length_static_tuple : (ts : List Ty) → allStatic ts = true → AllValid ts →
@@ -305,7 +305,7 @@ theorem encode_length_static_tuple : (ts : List Ty) → allStatic ts = true → 
       simp only [headSizes, tailSizes, Part.headSize, Part.tailSize, headSizeSum]
       rw [encode_length_static t hst hvt v]
       omega
-termination_by ts hs hv vs => 2 * sizeOf ts + 1
+termination_by ts => 2 * sizeOf ts + 1
 end
 
 /-- The head section of a static tuple encoding is exactly `headSizeSum ts` bytes. -/
@@ -423,7 +423,7 @@ theorem wf_partsOfTuple : (ts : List Ty) → AllValid ts → (vs : TupleVal ts) 
           · show 32 ∣ (encode t v).length
             exact encode_length_aligned t hvt v
       · exact wf_partsOfTuple ts hvs vs
-termination_by ts hv vs => 4 * sizeOf ts + 2
+termination_by ts => 4 * sizeOf ts + 2
 end
 
 /-! ## Package C: static-prefix roundtrip -/
@@ -564,7 +564,7 @@ theorem decode_encode_append_static : (t : Ty) → t.IsStatic = true → t.Valid
       simp only [decode, encode]
       have h := decodeTuple_static_append ts hss hvts v [] [] 0 (by simp [headSizes]) rest
       simpa using h
-termination_by t hs hv v rest => 4 * sizeOf t
+termination_by t => 4 * sizeOf t
 
 /-- Static element lists decode from their own encoding inside a larger
 head/tail layout. -/
@@ -580,7 +580,7 @@ theorem decodeElems_static_append (t : Ty) (hs : t.IsStatic = true) (hv : t.Vali
   | cons w ws ih =>
       have hk' : k = ws.length + 1 := by rw [← hk, List.length_cons]
       subst hk'
-      simp only [List.map_cons, List.cons_append, decodeElems]
+      simp only [List.map_cons, decodeElems]
       simp only [List.append_assoc, List.cons_append]
       rw [readElem_static t _ _ hs]
       rw [drop_head_partOf_static t hs w xs (ws.map (partOf t) ++ ys) rest off hoff]
@@ -628,7 +628,7 @@ theorem decodeTuple_static_append : (ts : List Ty) → allStatic ts = true → A
       rw [decodeTuple_static_append ts hss hvs vs (xs ++ [partOf t v]) ys
         (off + t.headSize) hoff' rest]
       rfl
-termination_by ts hall hv vs xs ys off hoff rest => 4 * sizeOf ts + 2
+termination_by ts => 4 * sizeOf ts + 2
 end
 
 /-! ## Roundtrips derived from the prefix forms -/
@@ -833,8 +833,8 @@ theorem decodeElems_append (t : Ty) (hv : t.Valid) (vs : List t.Val) (k : Nat)
       subst hk'
       have hlc : LenBound t w ∧ AllLenBound t ws := by simpa [AllLenBound] using hls
       obtain ⟨hlw, hlsw⟩ := hlc
-      simp only [List.map_cons, List.cons_append, decodeElems] at ⊢
-      simp only [List.map_cons, List.cons_append] at hwf hb
+      simp only [List.map_cons, decodeElems] at ⊢
+      simp only [List.map_cons] at hwf hb
       simp only [List.append_assoc, List.cons_append] at hwf hb ⊢
       have hre : xs ++ (partOf t w :: (ws.map (partOf t) ++ ys)) =
           ((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys := by
@@ -929,7 +929,7 @@ theorem decodeTuple_append : (ts : List Ty) → AllValid ts → (vs : TupleVal t
         rw [decodeTuple_append ts hvs vs hlvs (xs ++ [partOf t v]) ys (off + t.headSize) hoff'
           rest hwf' hb']
         rfl
-termination_by ts hv vs hls xs ys off hoff rest hwf hb => 8 * sizeOf ts + 2
+termination_by ts => 8 * sizeOf ts + 2
 end
 
 /-- **Unified roundtrip**: every value of a valid type decodes from its own
