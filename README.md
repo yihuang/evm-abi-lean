@@ -27,7 +27,7 @@ No `sorry`.  All types (`uintM`, `intM`, `bool`, `address`, `bytesM`, `bytes`, `
 | `Parts`   | Head/tail combinator (`Part`, `encodeParts`, offset correctness theorems) |
 | `StaticArray` | Static arrays `T[k]` over word-sized elements |
 | `Codec`   | `Ty`-indexed `encode`/`decode` for the full universe, unified roundtrip proof |
-| `Tests`   | Spec-vector encoding checks, roundtrip regression, error-case tests |
+| `Tests`   | Spec-vector encoding checks, roundtrip regression, error-case tests (separate target) |
 
 ## Quick Example
 
@@ -57,8 +57,13 @@ example : decode t (encode t v) = some v :=
 lake build
 ```
 
-All tests (spec vectors, roundtrips, error cases) run as part of the build
-via `native_decide` / `decide` checks in `EvmAbi/Tests.lean`.
+Tests (spec vectors, roundtrips, error cases) live in a separate target and
+run via `native_decide` / `decide` checks in `Tests.lean`:
+
+```bash
+lake test          # build and run all test targets
+lake build Tests   # compile the test module
+```
 
 ## License
 

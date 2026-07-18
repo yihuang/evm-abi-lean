@@ -9,7 +9,7 @@ import EvmAbi.StaticArray
 import EvmAbi.Parts
 
 /-!
-# EvmAbi.Tests
+# Tests
 
 Computation-checked instances for the `EvmAbi.*` infrastructure modules:
 `#eval` sanity checks plus `decide` / `native_decide` regression tests.

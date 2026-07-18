@@ -5,6 +5,9 @@ defaultTargets = ["EvmAbi"]
 [[lean_lib]]
 name = "EvmAbi"
 
+[[lean_lib]]
+name = "Tests"
+
 [[require]]
 name = "binary"
 git = "https://github.com/yihuang/lean-binary.git"

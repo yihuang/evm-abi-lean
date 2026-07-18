@@ -7,7 +7,6 @@ import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.StaticArray
 import EvmAbi.Parts
--- NOTE: `EvmAbi/Tests.lean` is intended for development/regression checks; avoid importing it from the public entrypoint.
 
 /-!
 # EvmAbi
@@ -30,7 +29,6 @@ Current contents (roadmap nodes 1–8):
 * `EvmAbi.Parts`   — head/tail combinator: `Part`, `encodeParts`, offset theorems
 * `EvmAbi.Keccak`  — Keccak-256 kept opaque; the four-byte selector
 * `EvmAbi.Calldata` — call data: selector ++ tuple encoding, calldata roundtrip
-* `EvmAbi.Tests`   — computation-checked regression instances + spec vectors
 
 Node 8 (complete): the full type universe (uint/int/bool/address/bytesN/
 bytes/string/array/fixedArray/tuple), the `Ty`-indexed codec with the
