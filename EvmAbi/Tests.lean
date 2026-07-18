@@ -7,6 +7,7 @@ import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.StaticArray
 import EvmAbi.Parts
+import EvmAbi.Calldata
 
 /-!
 # EvmAbi.Tests
@@ -136,13 +137,13 @@ example : decode .string (encode .string "Hello, world!")
 -- The same instances via library theorems (no computation)
 
 example : decode (.uint 8) (encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ :=
-  roundtrip (.uint 8) (by decide) _ trivial
+  roundtrip_static (.uint 8) rfl (by native_decide) _
 
 example : decode (.int 8) (encode (.int 8) ⟨-5, by decide⟩) = some ⟨-5, by decide⟩ :=
-  roundtrip (.int 8) (by decide) _ trivial
+  roundtrip_static (.int 8) rfl (by native_decide) _
 
 example : decode .bool (encode .bool false) = some false :=
-  roundtrip .bool (by decide) _ trivial
+  roundtrip_static .bool rfl (by native_decide) _
 
 example : decode .bytes (encode .bytes [1, 2, 3]) = some [1, 2, 3] :=
   roundtrip_bytes [1, 2, 3] (by decide)
@@ -153,12 +154,13 @@ example : decode .string (encode .string "hello") = some "hello" :=
 -- encodeStatic_length
 
 example : (encode (.uint 256) ⟨42, by decide⟩).length = 32 := by
-  rw [encodeStatic_length (.uint 256) (by exact rfl) (by decide) ⟨42, by decide⟩]
+  rw [encode_length_static (.uint 256) rfl (by native_decide) ⟨42, by decide⟩]
+  simp [headSize]
 
 -- encode_length_aligned
 
 example : Aligned (encode .bytes ([1, 2, 3] : List UInt8)).length :=
-  encode_length_aligned .bytes (by decide) _
+  encode_length_aligned .bytes (by native_decide) _
 
 /-! ## Static arrays (node 6) -/
 
@@ -218,5 +220,132 @@ example : decodeBytesPrefix ((encodeParts demoParts).drop (tailOffset demoParts 
   have h := decodeBytesPrefix_tailOffset (xs := [⟨encodeUint 1, [], false⟩]) (head := [])
     (bs := [1, 2, 3]) (ys := [⟨encodeUint 2, [], false⟩]) (by native_decide)
   exact h
+
+/-! ## Spec vectors (node 8): Solidity ABI specification examples -/
+
+/- The canonical vectors of the Solidity ABI specification, encoded at the
+`Ty` level (without the selector): `sam("dave", true, [1,2,3])`,
+`f(0x123, [0x456, 0x789], "1234567890", "Hello, world!")` and
+`g([[1, 2], [3]], ["one", "two", "three"])`.  Byte-exact encodings are
+checked by computation; `sam` and `f` are additionally re-proved through
+the library theorems (no computation). -/
+
+/-- `sam`'s argument tuple: `(bytes, bool, uint256[])`. -/
+def specSamTy : Ty := .tuple [.bytes, .bool, .array (.uint 256)]
+
+/-- `sam("dave", true, [1,2,3])`'s arguments. -/
+def specSamVal : specSamTy.Val :=
+  ([0x64, 0x61, 0x76, 0x65], true, ([⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], ()))
+
+/-- The spec encoding of `sam`'s arguments. -/
+def specSamBytes : List UInt8 :=
+  encodeUint 0x60 ++ encodeUint 1 ++ encodeUint 0xa0 ++
+  encodeUint 4 ++ [0x64, 0x61, 0x76, 0x65] ++ List.replicate 28 0 ++
+  encodeUint 3 ++ encodeUint 1 ++ encodeUint 2 ++ encodeUint 3
+
+example : encode specSamTy specSamVal = specSamBytes := by native_decide
+
+example : decode specSamTy (encode specSamTy specSamVal) = some specSamVal :=
+  roundtrip specSamTy (by native_decide) specSamVal
+    (by
+      simp only [specSamTy, specSamVal, LenBound]
+      repeat first
+        | rw [Ty.TupleLenBounds.eq_2]
+        | rw [Ty.TupleLenBounds.eq_1]
+        | rw [Ty.AllLenBound.eq_2]
+        | rw [Ty.AllLenBound.eq_1]
+      simp only [Ty.LenBound]
+      repeat first
+        | rw [Ty.AllLenBound.eq_2]
+        | rw [Ty.AllLenBound.eq_1]
+      simp only [Ty.LenBound]
+      decide)
+    (by native_decide)
+
+/-- `f`'s argument types: `(uint256, uint32[], bytes10, bytes)`. -/
+def specFArgs : List Ty := [.uint 256, .array (.uint 32), .bytesN 10, .bytes]
+
+/-- `f`'s argument tuple. -/
+def specFTy : Ty := .tuple specFArgs
+
+/-- `f(0x123, [0x456, 0x789], "1234567890", "Hello, world!")`'s arguments. -/
+def specFVal : specFTy.Val :=
+  (⟨0x123, by decide⟩, [⟨0x456, by decide⟩, ⟨0x789, by decide⟩],
+    ⟨[0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30], rfl⟩,
+    ([0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21], ()))
+
+/-- The spec encoding of `f`'s arguments. -/
+def specFBytes : List UInt8 :=
+  encodeUint 0x123 ++ encodeUint 0x80 ++
+  [0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30] ++ List.replicate 22 0 ++
+  encodeUint 0xe0 ++
+  encodeUint 2 ++ encodeUint 0x456 ++ encodeUint 0x789 ++
+  encodeUint 13 ++
+  [0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21] ++
+  List.replicate 19 0
+
+example : encode specFTy specFVal = specFBytes := by native_decide
+
+example : decode specFTy (encode specFTy specFVal) = some specFVal :=
+  roundtrip specFTy (by native_decide) specFVal
+    (by
+      simp only [specFTy, specFVal, specFArgs, LenBound]
+      repeat first
+        | rw [Ty.TupleLenBounds.eq_2]
+        | rw [Ty.TupleLenBounds.eq_1]
+        | rw [Ty.AllLenBound.eq_2]
+        | rw [Ty.AllLenBound.eq_1]
+      simp only [Ty.LenBound]
+      repeat first
+        | rw [Ty.AllLenBound.eq_2]
+        | rw [Ty.AllLenBound.eq_1]
+      simp only [Ty.LenBound]
+      decide)
+    (by native_decide)
+
+/-- `g`'s argument tuple: `(uint256[][], string[])`. -/
+def specGTy : Ty := .tuple [.array (.array (.uint 256)), .array .string]
+
+/-- `g([[1, 2], [3]], ["one", "two", "three"])`'s arguments. -/
+def specGVal : specGTy.Val :=
+  ([[⟨1, by decide⟩, ⟨2, by decide⟩], [⟨3, by decide⟩]],
+    (["one", "two", "three"], ()))
+
+/-- The spec encoding of `g`'s arguments. -/
+def specGBytes : List UInt8 :=
+  encodeUint 0x40 ++ encodeUint 0x140 ++
+  encodeUint 2 ++ encodeUint 0x40 ++ encodeUint 0xa0 ++
+  encodeUint 2 ++ encodeUint 1 ++ encodeUint 2 ++
+  encodeUint 1 ++ encodeUint 3 ++
+  encodeUint 3 ++ encodeUint 0x60 ++ encodeUint 0xa0 ++ encodeUint 0xe0 ++
+  encodeUint 3 ++ [0x6f, 0x6e, 0x65] ++ List.replicate 29 0 ++
+  encodeUint 3 ++ [0x74, 0x77, 0x6f] ++ List.replicate 29 0 ++
+  encodeUint 5 ++ [0x74, 0x68, 0x72, 0x65, 0x65] ++ List.replicate 27 0
+
+example : encode specGTy specGVal = specGBytes := by native_decide
+
+/-! ## Calldata (node 8) -/
+
+-- The calldata roundtrip, exercised at the `f` spec vector (the selector
+-- stays abstract).
+
+example : decodeCall specFArgs
+    (encodeCall "f(uint256,uint32[],bytes10,bytes)" specFArgs specFVal) =
+    some specFVal :=
+  roundtrip_call _ specFArgs (by native_decide) specFVal
+    (by
+      simp only [specFArgs, specFVal]
+      repeat first
+        | rw [Ty.TupleLenBounds.eq_2]
+        | rw [Ty.TupleLenBounds.eq_1]
+        | rw [Ty.AllLenBound.eq_2]
+        | rw [Ty.AllLenBound.eq_1]
+      simp only [Ty.LenBound]
+      repeat first
+        | rw [Ty.AllLenBound.eq_2]
+        | rw [Ty.AllLenBound.eq_1]
+      simp only [Ty.LenBound]
+      decide)
+    (by native_decide)
 
 end EvmAbi

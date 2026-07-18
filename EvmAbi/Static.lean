@@ -117,16 +117,23 @@ def encodeBytesN (bs : List UInt8) : List UInt8 := bs ++ List.replicate (32 - bs
 theorem length_encodeBytesN (h : bs.length ≤ 32) : (encodeBytesN bs).length = 32 := by
   simp [encodeBytesN]; omega
 
-/-- Strict `bytesN` decoder: the tail must be exactly `32 - n` zero bytes. -/
+/-- Prefix-tolerant `bytesN` decoder: reads the 32-byte word at the front of
+the buffer; the payload is its first `n` bytes and the rest of the *word*
+must be zero padding.  Anything beyond the word is ignored, so the decoder
+composes inside a head section (strictness is a separate concern). -/
 def decodeBytesN (n : Nat) (buf : List UInt8) : Option (List UInt8) :=
-  if (buf.take n).length = n ∧ buf.drop n = List.replicate (32 - n) 0 then
-    some (buf.take n)
+  if ((buf.take 32).take n).length = n ∧ (buf.take 32).drop n = List.replicate (32 - n) 0 then
+    some ((buf.take 32).take n)
   else none
 
-/-- **Roundtrip** for `bytesN`. -/
-theorem decodeBytesN_encodeBytesN {n : Nat} (h : bs.length = n) :
+/-- **Roundtrip** for `bytesN` (prefix-tolerant decoder). -/
+theorem decodeBytesN_encodeBytesN {n : Nat} (h32 : n ≤ 32) (h : bs.length = n) :
     decodeBytesN n (encodeBytesN bs) = some bs := by
   unfold decodeBytesN encodeBytesN
-  rw [take_append_of_length h, drop_append_of_length h, if_pos ⟨h, by rw [h]⟩]
+  have hlen : (bs ++ List.replicate (32 - bs.length) 0).length = 32 := by
+    rw [List.length_append, List.length_replicate]; omega
+  have htk : (bs ++ List.replicate (32 - bs.length) 0).take 32 =
+      bs ++ List.replicate (32 - bs.length) 0 := List.take_of_length_le (by omega)
+  rw [htk, take_append_of_length h, drop_append_of_length h, if_pos ⟨h, by rw [h]⟩]
 
 end EvmAbi
