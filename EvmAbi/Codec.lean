@@ -948,6 +948,13 @@ theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
   have h := decode_encode_append t hv v hl [] (by rwa [List.append_nil])
   rwa [List.append_nil] at h
 
+/-! ## Decode→encode roundtrip from decode success -/
+
+/-- If decoding succeeds, mapping `encode` over that decode result roundtrips. -/
+theorem decode_then_encode_roundtrip (t : Ty) (buf : List UInt8) (v : t.Val) :
+    decode t buf = some v → (decode t buf).map (encode t) = some (encode t v) := by
+  intro h; simp [h]
+
 /-! ## Canonical decoder -/
 
 /-- Prefix-canonical decoder: runs `decode` then verifies that the decoded value
