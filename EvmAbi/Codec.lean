@@ -939,4 +939,25 @@ theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
   have h := decode_encode_append t hv v hl [] (by rwa [List.append_nil])
   rwa [List.append_nil] at h
 
+/-! ## The function-argument level
+
+An ABI function call's arguments are encoded exactly as the tuple of their
+types; the 4-byte selector (`EvmAbi.Hash.selectorBytes`) is prepended by the
+caller. So this level is definitionally the tuple level. -/
+
+/-- Encode a function's argument list. -/
+def encodeArgs (ts : List Ty) (vs : TupleVal ts) : List UInt8 :=
+  encode (.tuple ts) vs
+
+/-- Decode a function's argument list. -/
+def decodeArgs (ts : List Ty) (buf : List UInt8) : Option (TupleVal ts) :=
+  decode (.tuple ts) buf
+
+/-- **Function-call roundtrip**: an argument tuple decodes from its own
+encoding, under the same length bound as `roundtrip`. -/
+theorem roundtrip_args (ts : List Ty) (hv : AllValid ts) (vs : TupleVal ts)
+    (hl : LenBound (.tuple ts) vs) (hb : (encodeArgs ts vs).length < 2 ^ 256) :
+    decodeArgs ts (encodeArgs ts vs) = some vs :=
+  roundtrip (.tuple ts) hv vs hl hb
+
 end EvmAbi

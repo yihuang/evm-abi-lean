@@ -7,6 +7,7 @@ import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.StaticArray
 import EvmAbi.Parts
+import EvmAbi.Hash
 
 /-!
 # Tests
@@ -322,5 +323,37 @@ def specGBytes : List UInt8 :=
   encodeUint 5 ++ [0x74, 0x68, 0x72, 0x65, 0x65] ++ List.replicate 27 0
 
 example : encode specGTy specGVal = specGBytes := by native_decide
+
+/-! ## Function selectors (Keccak-256) — known vectors
+
+The only check on the executable, unverified keccak: these pin the four-byte
+selector on solc's own values (the ERC-20 interface + the two spec examples
+`f`/`g` above). -/
+
+example : Hash.selectorBytes "transfer(address,uint256)" = [0xa9, 0x05, 0x9c, 0xbb] := by
+  native_decide
+example : Hash.selectorBytes "balanceOf(address)" = [0x70, 0xa0, 0x82, 0x31] := by
+  native_decide
+example : Hash.selectorBytes "approve(address,uint256)" = [0x09, 0x5e, 0xa7, 0xb3] := by
+  native_decide
+example : Hash.selectorBytes "f(uint256,uint32[],bytes10,bytes)" = [0x8b, 0xe6, 0x52, 0x46] := by
+  native_decide
+example : Hash.selectorBytes "g(uint256[][],string[])" = [0x22, 0x89, 0xb1, 0x8c] := by
+  native_decide
+
+/-! ## The function-argument level (`encodeArgs` / `decodeArgs`) -/
+
+-- args encode exactly as the tuple: `sam`'s `(bytes, bool, uint256[])`
+example : encodeArgs [.bytes, .bool, .array (.uint 256)] specSamVal = specSamBytes := by
+  native_decide
+example : decodeArgs [.bytes, .bool, .array (.uint 256)]
+      (encodeArgs [.bytes, .bool, .array (.uint 256)] specSamVal) = some specSamVal := by
+  native_decide
+
+-- a fresh mixed static/dynamic argument list
+example : decodeArgs [.uint 256, .bytes, .array (.uint 8)]
+      (encodeArgs [.uint 256, .bytes, .array (.uint 8)]
+        (⟨9, by decide⟩, [1, 2], [⟨3, by decide⟩], ()))
+    = some (⟨9, by decide⟩, [1, 2], [⟨3, by decide⟩], ()) := by native_decide
 
 end EvmAbi

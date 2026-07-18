@@ -7,6 +7,7 @@ import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.StaticArray
 import EvmAbi.Parts
+import EvmAbi.Hash
 
 /-!
 # EvmAbi
@@ -24,14 +25,17 @@ Current contents (roadmap nodes 1–8):
 * `EvmAbi.Static`  — static primitives: `uintM`, `intM`, `bool`, `address`,
                   `bytesN`, with roundtrips
 * `EvmAbi.Dynamic` — dynamic `bytes` / `string` with roundtrips, prefix decoder
-* `EvmAbi.Codec`   — `Ty`-indexed encode/decode for all types + unified roundtrip
+* `EvmAbi.Codec`   — `Ty`-indexed encode/decode for all types + unified roundtrip;
+                  the function-argument level (`encodeArgs`/`decodeArgs`/`roundtrip_args`)
 * `EvmAbi.StaticArray` — static arrays `T[k]` over word-sized elements
 * `EvmAbi.Parts`   — head/tail combinator: `Part`, `encodeParts`, offset theorems
-* `EvmAbi.Keccak`  — Keccak-256 kept opaque; the four-byte selector
-* `EvmAbi.Calldata` — call data: selector ++ tuple encoding, calldata roundtrip
+* `EvmAbi.Hash`    — Keccak-256 (executable) + the four-byte function selector
+
+Regression tests live in the root `Tests.lean` (the `Tests` lake target, kept out
+of the core library): Solidity spec vectors, roundtrips, selector vectors, decoder
+rejection. Run with `lake build Tests`.
 
 Node 8 (complete): the full type universe (uint/int/bool/address/bytesN/
 bytes/string/array/fixedArray/tuple), the `Ty`-indexed codec with the
-unified roundtrip `roundtrip`, and calldata built on the head/tail
-combinator of `EvmAbi.Parts`.
+unified roundtrip `roundtrip`, the function-argument level, and selectors.
 -/
