@@ -939,4 +939,35 @@ theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
   have h := decode_encode_append t hv v hl [] (by rwa [List.append_nil])
   rwa [List.append_nil] at h
 
+/-! ## Canonical decoding -/
+
+/-- Canonical input for `t`: decoding succeeds and re-encoding gives the same bytes. -/
+def IsCanonical (t : Ty) (buf : List UInt8) : Prop :=
+  ∃ v : t.Val, decode t buf = some v ∧ encode t v = buf
+
+/-- Canonical decoder: accept exactly fixed points of `encode ∘ decode`. -/
+def decodeCanonical (t : Ty) (buf : List UInt8) : Option t.Val :=
+  (decode t buf).bind fun v =>
+    if encode t v = buf then some v else none
+
+/-- On canonical input, `encode ∘ decodeCanonical = id`. -/
+theorem encode_decodeCanonical_eq_id_of_isCanonical (t : Ty) (buf : List UInt8)
+    (h : IsCanonical t buf) :
+    (decodeCanonical t buf).map (encode t) = some buf := by
+  rcases h with ⟨v, hv, hb⟩
+  unfold decodeCanonical
+  rw [hv, Option.bind_some, if_pos hb, Option.map_some, hb]
+
+/-- Non-canonical inputs are rejected by `decodeCanonical`. -/
+theorem decodeCanonical_eq_none_of_not_isCanonical (t : Ty) (buf : List UInt8)
+    (h : ¬ IsCanonical t buf) : decodeCanonical t buf = none := by
+  unfold decodeCanonical
+  cases hdec : decode t buf with
+  | none =>
+      simp [hdec]
+  | some v =>
+      by_cases henc : encode t v = buf
+      · exact (h ⟨v, hdec, henc⟩).elim
+      · simp [hdec, henc]
+
 end EvmAbi

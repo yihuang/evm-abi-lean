@@ -323,4 +323,26 @@ def specGBytes : List UInt8 :=
 
 example : encode specGTy specGVal = specGBytes := by native_decide
 
+/-! ## Canonical decoding -/
+
+def nonCanonicalBytesBuf : List UInt8 := encode .bytes [1, 2, 3] ++ [0xff]
+
+example : decode .bytes nonCanonicalBytesBuf = some [1, 2, 3] := by native_decide
+
+example : (decodeCanonical .bytes (encode .bytes [1, 2, 3])).map (encode .bytes) =
+    some (encode .bytes [1, 2, 3]) := by
+  apply encode_decodeCanonical_eq_id_of_isCanonical
+  exact ⟨[1, 2, 3], by native_decide, rfl⟩
+
+example : decodeCanonical .bytes nonCanonicalBytesBuf = none := by
+  apply decodeCanonical_eq_none_of_not_isCanonical
+  intro hcan
+  rcases hcan with ⟨v, hdec, henc⟩
+  have h1 : (encode .bytes v).length = (encode .bytes [1, 2, 3]).length + 1 := by
+    simpa [nonCanonicalBytesBuf, henc]
+  have h2 : 32 ∣ (encode .bytes v).length := by
+    simp [encode]
+  have h3 : ¬ 32 ∣ (encode .bytes [1, 2, 3]).length + 1 := by native_decide
+  exact h3 (by simpa [h1] using h2)
+
 end EvmAbi
