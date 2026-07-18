@@ -952,7 +952,6 @@ theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
 
 /-- If decoding succeeds, mapping `encode` over that decode result roundtrips. -/
 theorem decode_then_encode_roundtrip (t : Ty) (buf : List UInt8) (v : t.Val)
-    (hdec : decode t buf = some v) :
     (decode t buf).map (encode t) = some (encode t v) := by
   simp [hdec]
 
