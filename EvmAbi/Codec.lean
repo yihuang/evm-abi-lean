@@ -948,12 +948,24 @@ theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
   have h := decode_encode_append t hv v hl [] (by rwa [List.append_nil])
   rwa [List.append_nil] at h
 
-/-! ## Decode→encode roundtrip from decode success -/
+/-! ## Decode→encode roundtrip characterization -/
 
-/-- If decoding succeeds, mapping `encode` over that decode result roundtrips. -/
+/-- Real decode→encode roundtrip: `decodeCanonical t buf = some v` if and only if
+the lenient decoder returns `v` **and** re-encoding `v` reproduces the consumed prefix of
+`buf`.  Non-canonical inputs that the lenient decoder accepts (e.g. aliased offsets) fail
+the prefix check and are therefore rejected here. -/
 theorem decode_then_encode_roundtrip (t : Ty) (buf : List UInt8) (v : t.Val) :
-    decode t buf = some v → (decode t buf).map (encode t) = some (encode t v) := by
-  intro h; simp [h]
+    decodeCanonical t buf = some v ↔
+    decode t buf = some v ∧ buf.take (encode t v).length = encode t v := by
+  simp only [decodeCanonical, Option.bind_eq_some]
+  constructor
+  · rintro ⟨w, hdec, hif⟩
+    by_cases hc : buf.take (encode t w).length = encode t w
+    · simp [hc] at hif
+      exact ⟨hif ▸ hdec, hif ▸ hc⟩
+    · simp [hc] at hif
+  · rintro ⟨hdec, hprefix⟩
+    exact ⟨v, hdec, by simp [hprefix]⟩
 
 /-! ## Canonical decoder -/
 

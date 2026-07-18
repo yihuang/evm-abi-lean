@@ -339,6 +339,13 @@ example (h : decodeCanonical .bytes decodableBytesBuf = some [1, 2, 3]) :
     decodableBytesBuf.take (encode .bytes [1, 2, 3]).length = encode .bytes [1, 2, 3] :=
   decodeCanonical_encode_prefix .bytes decodableBytesBuf [1, 2, 3] h
 
+-- decode_then_encode_roundtrip characterizes when the canonical decoder succeeds:
+-- the lenient decoder must succeed AND re-encoding must match the consumed prefix.
+example : decodeCanonical .bytes decodableBytesBuf = some [1, 2, 3] ↔
+    decode .bytes decodableBytesBuf = some [1, 2, 3] ∧
+    decodableBytesBuf.take (encode .bytes [1, 2, 3]).length = encode .bytes [1, 2, 3] :=
+  decode_then_encode_roundtrip .bytes decodableBytesBuf [1, 2, 3]
+
 def aliasedTupleBuf : List UInt8 :=
   encodeUint 64 ++ encodeUint 64 ++ encode .bytes [1]
 
