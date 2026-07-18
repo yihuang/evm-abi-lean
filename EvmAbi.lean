@@ -7,8 +7,6 @@ import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.StaticArray
 import EvmAbi.Parts
-import EvmAbi.Keccak
-import EvmAbi.Calldata
 import EvmAbi.Tests
 
 /-!

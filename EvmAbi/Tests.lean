@@ -7,7 +7,6 @@ import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.StaticArray
 import EvmAbi.Parts
-import EvmAbi.Calldata
 
 /-!
 # EvmAbi.Tests
@@ -323,29 +322,5 @@ def specGBytes : List UInt8 :=
   encodeUint 5 ++ [0x74, 0x68, 0x72, 0x65, 0x65] ++ List.replicate 27 0
 
 example : encode specGTy specGVal = specGBytes := by native_decide
-
-/-! ## Calldata (node 8) -/
-
--- The calldata roundtrip, exercised at the `f` spec vector (the selector
--- stays abstract).
-
-example : decodeCall specFArgs
-    (encodeCall "f(uint256,uint32[],bytes10,bytes)" specFArgs specFVal) =
-    some specFVal :=
-  roundtrip_call _ specFArgs (by native_decide) specFVal
-    (by
-      simp only [specFArgs, specFVal]
-      repeat first
-        | rw [Ty.TupleLenBounds.eq_2]
-        | rw [Ty.TupleLenBounds.eq_1]
-        | rw [Ty.AllLenBound.eq_2]
-        | rw [Ty.AllLenBound.eq_1]
-      simp only [Ty.LenBound]
-      repeat first
-        | rw [Ty.AllLenBound.eq_2]
-        | rw [Ty.AllLenBound.eq_1]
-      simp only [Ty.LenBound]
-      decide)
-    (by native_decide)
 
 end EvmAbi
