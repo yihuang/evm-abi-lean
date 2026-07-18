@@ -979,33 +979,4 @@ the consumed prefix (trailing bytes are ignored). -/
 def IsCanonical (t : Ty) (buf : List UInt8) : Prop :=
   ∃ v : t.Val, decode t buf = some v ∧ buf.take (encode t v).length = encode t v
 
-/-- Canonical decoder up to trailing bytes: accept exactly values whose
-re-encoding matches the decoded prefix. -/
-def decodeCanonical (t : Ty) (buf : List UInt8) : Option t.Val :=
-  (decode t buf).bind fun v =>
-    if buf.take (encode t v).length = encode t v then some v else none
-
-/-- On canonical input, `decodeCanonical` returns a value whose re-encoding
-is exactly the consumed prefix. -/
-theorem encode_decodeCanonical_eq_id_of_isCanonical (t : Ty) (buf : List UInt8)
-    (h : IsCanonical t buf) :
-    ∃ enc, (decodeCanonical t buf).map (encode t) = some enc ∧ buf.take enc.length = enc := by
-  rcases h with ⟨v, hv, hb⟩
-  refine ⟨encode t v, ?_, ?_⟩
-  unfold decodeCanonical
-  · rw [hv, Option.bind_some, if_pos hb, Option.map_some]
-  · simpa using hb
-
-/-- Non-canonical inputs are rejected by `decodeCanonical`. -/
-theorem decodeCanonical_eq_none_of_not_isCanonical (t : Ty) (buf : List UInt8)
-    (h : ¬ IsCanonical t buf) : decodeCanonical t buf = none := by
-  unfold decodeCanonical
-  cases hdec : decode t buf with
-  | none =>
-      simp [hdec]
-  | some v =>
-      by_cases henc : buf.take (encode t v).length = encode t v
-      · exact (h ⟨v, hdec, henc⟩).elim
-      · simp [hdec, henc]
-
 end EvmAbi
