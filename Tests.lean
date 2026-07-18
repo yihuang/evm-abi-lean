@@ -349,6 +349,7 @@ example : decode .bytes nonCanonicalBytesBuf = some [1, 2, 3] := by native_decid
 def aliasedTupleBuf : List UInt8 :=
   encodeUint 64 ++ encodeUint 64 ++ encode .bytes [1]
 
-example : decode (.tuple [.bytes, .bytes]) aliasedTupleBuf = none := by native_decide
+example : decode (.tuple [.bytes, .bytes]) aliasedTupleBuf =
+    some ([1], ([1], ())) := by native_decide
 
 end EvmAbi

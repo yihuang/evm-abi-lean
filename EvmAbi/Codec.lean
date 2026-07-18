@@ -108,17 +108,11 @@ def decode : (t : Ty) → List UInt8 → Option t.Val
   | .array t, buf => match natAt buf 0 with
     | none => none
     | some k =>
-        (decodeElems t k (buf.drop 32) 0).bind fun ⟨vs, _⟩ =>
-          if buf.take (encode (.array t) vs).length = encode (.array t) vs then some vs else none
+        (decodeElems t k (buf.drop 32) 0).map fun ⟨vs, _⟩ => vs
   | .fixedArray t n, buf =>
-      (decodeElems t n buf 0).bind fun vs =>
-        if buf.take (encode (.fixedArray t n) vs).length = encode (.fixedArray t n) vs then
-          some vs
-        else
-          none
+      decodeElems t n buf 0
   | .tuple ts, buf =>
-      (decodeTuple ts buf 0).bind fun vs =>
-        if buf.take (encode (.tuple ts) vs).length = encode (.tuple ts) vs then some vs else none
+      decodeTuple ts buf 0
 termination_by t => (sizeOf t, 0)
 
 /-- Read one component at head offset `off`. -/
@@ -568,12 +562,7 @@ theorem decode_encode_append_static : (t : Ty) → t.IsStatic = true → t.Valid
       have hraw := decodeElems_static_append t hst hvt vs n hvs [] [] 0 (by simp [headSizes]) rest
       have h : decodeElems t n (encodeParts (vs.map (partOf t)) ++ rest) 0 = some ⟨vs, hvs⟩ := by
         simpa [List.nil_append, List.append_nil] using hraw
-      have henc :
-          (encodeParts (vs.map (partOf t)) ++ rest).take
-              (encode (.fixedArray t n) ⟨vs, hvs⟩).length =
-            encode (.fixedArray t n) ⟨vs, hvs⟩ := by
-        simp [encode, take_append_of_length]
-      rw [h, Option.bind_some, if_pos henc]
+      simpa [decode, encode] using h
   | tuple ts, hs, hv, v, rest => by
       have hss : allStatic ts = true := by simp only [IsStatic] at hs; exact hs
       have hvts : AllValid ts := hv
@@ -581,10 +570,7 @@ theorem decode_encode_append_static : (t : Ty) → t.IsStatic = true → t.Valid
       have hraw := decodeTuple_static_append ts hss hvts v [] [] 0 (by simp [headSizes]) rest
       have h : decodeTuple ts (encodeParts (partsOfTuple ts v) ++ rest) 0 = some v := by
         simpa [List.nil_append, List.append_nil] using hraw
-      have henc : (encodeParts (partsOfTuple ts v) ++ rest).take
-          (encodeParts (partsOfTuple ts v)).length = encodeParts (partsOfTuple ts v) := by
-        exact take_append_of_length rfl
-      rw [h, Option.bind_some, if_pos henc]
+      simpa [decode, encode] using h
 termination_by t => 4 * sizeOf t
 
 /-- Static element lists decode from their own encoding inside a larger
@@ -825,13 +811,7 @@ theorem decode_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound 
           (by simpa using wf_map_partOf t hvt vs) (by simpa [encode] using hb)
         have h : decodeElems t n (encodeParts (vs.map (partOf t)) ++ rest) 0 = some ⟨vs, hvs⟩ := by
           simpa [List.nil_append, List.append_nil] using hraw
-        simp only [decode, encode]
-        have henc :
-            (encodeParts (vs.map (partOf t)) ++ rest).take
-                (encode (.fixedArray t n) ⟨vs, hvs⟩).length =
-              encode (.fixedArray t n) ⟨vs, hvs⟩ := by
-          simp [encode, take_append_of_length]
-        rw [h, Option.bind_some, if_pos henc]
+        simpa [decode, encode] using h
     | tuple ts =>
         have hvts : AllValid ts := hv
         have hls : TupleLenBounds ts v := by simpa [LenBound] using hl
@@ -839,11 +819,7 @@ theorem decode_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound 
           (by simpa using wf_partsOfTuple ts hvts v) (by simpa [encode] using hb)
         have h : decodeTuple ts (encodeParts (partsOfTuple ts v) ++ rest) 0 = some v := by
           simpa [List.nil_append, List.append_nil] using hraw
-        simp only [decode, encode]
-        have henc : (encodeParts (partsOfTuple ts v) ++ rest).take
-            (encodeParts (partsOfTuple ts v)).length = encodeParts (partsOfTuple ts v) := by
-          exact take_append_of_length rfl
-        rw [h, Option.bind_some, if_pos henc]
+        simpa [decode, encode] using h
 termination_by 8 * sizeOf t
 
 /-- Element lists decode from their own encoding inside a larger head/tail
