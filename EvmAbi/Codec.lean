@@ -107,9 +107,18 @@ def decode : (t : Ty) → List UInt8 → Option t.Val
       String.fromUTF8? bs.toByteArray
   | .array t, buf => match natAt buf 0 with
     | none => none
-    | some k => (decodeElems t k (buf.drop 32) 0).map Subtype.val
-  | .fixedArray t n, buf => decodeElems t n buf 0
-  | .tuple ts, buf => decodeTuple ts buf 0
+    | some k =>
+        (decodeElems t k (buf.drop 32) 0).bind fun ⟨vs, _⟩ =>
+          if buf.take (encode (.array t) vs).length = encode (.array t) vs then some vs else none
+  | .fixedArray t n, buf =>
+      (decodeElems t n buf 0).bind fun vs =>
+        if buf.take (encode (.fixedArray t n) vs).length = encode (.fixedArray t n) vs then
+          some vs
+        else
+          none
+  | .tuple ts, buf =>
+      (decodeTuple ts buf 0).bind fun vs =>
+        if buf.take (encode (.tuple ts) vs).length = encode (.tuple ts) vs then some vs else none
 termination_by t => (sizeOf t, 0)
 
 /-- Read one component at head offset `off`. -/
