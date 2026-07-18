@@ -7,7 +7,7 @@ import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.StaticArray
 import EvmAbi.Parts
-import EvmAbi.Tests
+-- NOTE: `EvmAbi/Tests.lean` is intended for development/regression checks; avoid importing it from the public entrypoint.
 
 /-!
 # EvmAbi
