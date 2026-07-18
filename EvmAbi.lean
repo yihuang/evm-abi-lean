@@ -1,20 +1,37 @@
-import EvmAbi.ABI
-import EvmAbi.Encode
-import EvmAbi.Decode
-import EvmAbi.Hash
-import EvmAbi.Roundtrip
-
+import EvmAbi.Bytes
+import EvmAbi.Align
+import EvmAbi.Word
+import EvmAbi.Ty
+import EvmAbi.Static
+import EvmAbi.Dynamic
+import EvmAbi.Codec
+import EvmAbi.StaticArray
+import EvmAbi.Parts
 
 /-!
-# EvmAbi — EVM ABI encoding/decoding in Lean 4
+# EvmAbi
 
-This library provides:
-- `EvmAbi.ABI`: Core ABI types (`ABIType`, `ABIValue`) and byte-level helpers
-- `EvmAbi.ABI.Encode`: Encode ABI values to bytes
-- `EvmAbi.ABI.Decode`: Decode bytes to ABI values
-- `EvmAbi.Hash`: Keccak-256 and Ethereum function selectors
-- `EvmAbi.Roundtrip`: Roundtrip theorem and proofs
+Infrastructure for EVM ABI encoding/decoding, kept as a module tree separate
+from the byte-order core (`Binary.*`, provided by the `lean-binary`
+dependency).
 
-See the online <https://docs.soliditylang.org/en/latest/abi-spec.html>
-for the Solidity ABI specification.
+Current contents (roadmap nodes 1–8):
+
+* `EvmAbi.Bytes`   — byte-list plumbing: `pad32`, `splitEvery`, take/drop lemmas
+* `EvmAbi.Align`   — 32-byte alignment arithmetic (`Aligned`)
+* `EvmAbi.Word`    — reading/writing 32-byte words (`UInt256`) at aligned offsets
+* `EvmAbi.Ty`      — the full ABI type universe + type-indexed value family
+* `EvmAbi.Static`  — static primitives: `uintM`, `intM`, `bool`, `address`,
+                  `bytesN`, with roundtrips
+* `EvmAbi.Dynamic` — dynamic `bytes` / `string` with roundtrips, prefix decoder
+* `EvmAbi.Codec`   — `Ty`-indexed encode/decode for all types + unified roundtrip
+* `EvmAbi.StaticArray` — static arrays `T[k]` over word-sized elements
+* `EvmAbi.Parts`   — head/tail combinator: `Part`, `encodeParts`, offset theorems
+* `EvmAbi.Keccak`  — Keccak-256 kept opaque; the four-byte selector
+* `EvmAbi.Calldata` — call data: selector ++ tuple encoding, calldata roundtrip
+
+Node 8 (complete): the full type universe (uint/int/bool/address/bytesN/
+bytes/string/array/fixedArray/tuple), the `Ty`-indexed codec with the
+unified roundtrip `roundtrip`, and calldata built on the head/tail
+combinator of `EvmAbi.Parts`.
 -/

@@ -5,11 +5,10 @@ defaultTargets = ["EvmAbi"]
 [[lean_lib]]
 name = "EvmAbi"
 
-[[lean_exe]]
-name = "abi-lean-test"
-root = "EvmAbi.Test"
+[[lean_lib]]
+name = "Tests"
 
 [[require]]
-name = "mathlib"
-scope = "leanprover-community"
-rev = "v4.31.0"
+name = "binary"
+git = "https://github.com/yihuang/lean-binary.git"
+rev = "main"

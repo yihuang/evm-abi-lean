@@ -1,70 +1,69 @@
 # abi-lean
 
-EVM ABI encoding, decoding, and function selector computation, verified in Lean 4.
+EVM ABI encoding and decoding, formally verified in Lean 4.
 
-Based on the [Solidity ABI specification](https://docs.soliditylang.org/en/latest/abi-spec.html).
-
-## Roundtrip Theorem
-
-Decoding an ABI-encoded value recovers the original. Static types roundtrip unconditionally; dynamic-element containers (arrays, tuples) roundtrip under a well-formedness bound `enc.size < 2 ^ 256` — without it an encode can succeed while producing head pointers that overflow 32 bytes and corrupt the layout, so the *unconditional* statement is genuinely false, not merely unproven. The top-level results (no `sorry`):
+Conforms to the [Solidity ABI Specification](https://docs.soliditylang.org/en/latest/abi-spec.html).
+The central result is a **roundtrip theorem**: for every valid ABI type `t` and every value `v`
+whose encoding fits in `2^256` bytes, decoding the encoding recovers the original value.
 
 ```lean4
--- any well-formed type (nested structs included), decoded at offset 0
-theorem roundtrip_wf (t : ABIType) (hwf : WellFormedType t)
-    (v : ABIValue) (data : ByteArray) (hsz : data.size < 2 ^ 256)
-    (henc : encode t v = Except.ok data) : decode t data 0 = Except.ok (v, data.size)
-
--- function-call level: encode an argument list then decode it back
-theorem roundtrip_args_wff (types : List ABIType) (data : ByteArray) (values : List ABIValue)
-    (hwf : ∀ t ∈ types, WellFormedType t) (hsz : data.size < 2 ^ 256)
-    (henc : encodeArgs types values = Except.ok data) : decodeArgs types data 0 = Except.ok values
+theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
+    (hb : (encode t v).length < 2 ^ 256) : decode t (encode t v) = some v
 ```
 
-### Proof structure
+No `sorry`.  All types (`uintM`, `intM`, `bool`, `address`, `bytesM`, `bytes`, `string`,
+`T[]`, `T[k]`, `(T₁,…,Tₙ)`) and arbitrarily nested combinations thereof are covered.
 
-Encoding and decoding are both structural folds over `ABIType` (`foldABIType`) via an `ABIVisitor`. Roundtrip proofs piggyback on the same fold: `WFFacts` bundles the three facts a type contributes (offset-general roundtrip, static size law, 32-byte alignment), and `wfFactsWF` builds them by structural recursion over every well-formed type — so compound types (arrays, nested tuples/structs) compose automatically, with no per-signature proof.
+## Architecture
 
-The proof is organized as a dependency chain under `EvmAbi/Roundtrip/`: `Basic` (tactic macros + ByteArray-slice read helpers) → `Primitives` (atom/bytes/string roundtrips) → `Packing` (encoder characterization + the `encode_*_inv` inversion lemmas) → `DynArray` / `DynTuple` (the WF container roundtrips, each built from grid/pack step lemmas) → `EvmAbi/Roundtrip.lean` (the `wfFactsWF` visitor and the top-level results).
+| Module | Purpose |
+|---|---|
+| `Ty`      | Full ABI type grammar, indexed value family `Val`, validity & length-bound predicates |
+| `Bytes`   | Byte-list plumbing (`pad32`, `splitEvery`, take/drop lemmas) |
+| `Align`   | 32-byte alignment arithmetic (`Aligned n := 32 ∣ n`) |
+| `Word`    | Reading/writing `UInt256` at aligned buffer offsets |
+| `Static`  | Standalone codecs for `uintM`, `intM`, `bool`, `address`, `bytesN` |
+| `Dynamic` | Standalone codecs for `bytes`, `string`, plus prefix-tolerant variant |
+| `Parts`   | Head/tail combinator (`Part`, `encodeParts`, offset correctness theorems) |
+| `StaticArray` | Static arrays `T[k]` over word-sized elements |
+| `Codec`   | `Ty`-indexed `encode`/`decode` for the full universe, unified roundtrip proof |
+| `Tests`   | Spec-vector encoding checks, roundtrip regression, error-case tests (separate target) |
 
-### Proven cases
-
-| Type | Status | Theorems |
-|---|---|---|
-| `uintN` / `intN` | ✅ | `roundtrip_uint` / `roundtrip_int` (+ `roundtrip_offset_*`) |
-| `bool` / `address` / `fixedBytesN` | ✅ | `roundtrip_bool` / `roundtrip_address` / `roundtrip_fixedBytes` |
-| `bytes` / `string` | ✅ | `roundtrip_bytes` / `roundtrip_string` |
-| `T[]` (dynamic) | ✅ WF | `roundtrip_array_wf` (both static- and dynamic-element) |
-| `T[n]` (dynamic) | ✅ WF | `roundtrip_fixedArray_wf` |
-| `(T1,...,Tn)` (dynamic) | ✅ WF | `roundtrip_tuple_wf` (static + dynamic dispatch) |
-| any well-formed type (nested structs) | ✅ WF | `wfFactsWF`, `roundtrip_wf` |
-| function args (`encodeArgs`/`decodeArgs`) | ✅ WF | `roundtrip_args_wff` |
-
-✅ WF = proved under the well-formedness bound `enc.size < 2 ^ 256`; the one excluded case is an empty dynamic fixed-array (`fixedArray 0 e`, `e` dynamic), which encodes to 0 bytes and genuinely fails to decode. Full alignment lemmas (`szdvd_*`) and offset-generalized atom variants (`roundtrip_offset_*`, needed to decode elements from non-zero positions) are proved too. No `sorry`.
-
-## Usage
+## Quick Example
 
 ```lean4
 import EvmAbi
 
-open EvmAbi.ABI
-open EvmAbi.ABI.Encode
-open EvmAbi.ABI.Decode
+open EvmAbi
+open EvmAbi.Ty
 
-let t : ABIType := .uint (ByteSize.ofLen 32 (by omega))
-let v : ABIValue := .uint 42
-let encoded := encode t v
-let decoded := decode t (Except.ok? encoded) 0
--- roundtrip theorem guarantees: decoded = ok(.uint 42, 32)
+-- encode a static tuple (uint256, bool)
+let t : Ty := .tuple [.uint 256, .bool]
+let v : t.Val := (⟨42, by decide⟩, (true, ()))
+let enc := encode t v
+-- enc = word(42) ++ word(1)
+
+-- roundtrip
+example : decode t (encode t v) = some v :=
+  roundtrip t (by
+    simp [Valid, AllValid])
+    v (by simp [LenBound, TupleLenBounds])
+    (by native_decide)
 ```
 
-## Tests
+## Build & Test
 
 ```bash
 lake build
-lake exe abi-lean-test
 ```
 
-Covers spec encoding vectors, decoding, 12 standard Ethereum function selectors (transfer, balanceOf, approve, ...), 40+ roundtrip assertions across all type categories, and error cases.
+Tests (spec vectors, roundtrips, error cases) live in a separate target and
+run via `native_decide` / `decide` checks in `Tests.lean`:
+
+```bash
+lake test          # build and run all test targets
+lake build Tests   # compile the test module
+```
 
 ## License
 
