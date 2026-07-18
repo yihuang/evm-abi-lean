@@ -948,11 +948,30 @@ theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
   have h := decode_encode_append t hv v hl [] (by rwa [List.append_nil])
   rwa [List.append_nil] at h
 
-/-! ## Decode→encode roundtrip from decode success -/
+/-! ## Canonical decoder -/
 
-/-- If decoding succeeds, mapping `encode` over that decode result roundtrips. -/
-theorem decode_then_encode_roundtrip (t : Ty) (buf : List UInt8) (v : t.Val) :
-    decode t buf = some v → (decode t buf).map (encode t) = some (encode t v) := by
-  intro h; simp [h]
+/-- Prefix-canonical decoder: runs `decode` then verifies that the decoded value
+re-encodes to exactly the consumed prefix of `buf`.  Trailing bytes are allowed;
+aliased offsets and other non-canonical layouts are rejected. -/
+def decodeCanonical (t : Ty) (buf : List UInt8) : Option t.Val :=
+  (decode t buf).bind fun v =>
+    if buf.take (encode t v).length = encode t v then some v else none
+
+/-- If `decodeCanonical` succeeds, the re-encoding is a prefix of the input. -/
+theorem decodeCanonical_encode_prefix (t : Ty) (buf : List UInt8) (v : t.Val)
+    (h : decodeCanonical t buf = some v) : buf.take (encode t v).length = encode t v := by
+  simp only [decodeCanonical, Option.bind_eq_some] at h
+  obtain ⟨w, _, hif⟩ := h
+  by_cases hc : buf.take (encode t w).length = encode t w
+  · simp [hc] at hif; subst hif; exact hc
+  · simp [hc] at hif
+
+/-- `decodeCanonical` is a left-inverse of `encode`: every well-formed value followed by
+an arbitrary suffix is accepted, and the original value is returned. -/
+theorem decodeCanonical_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
+    (rest : List UInt8) (hb : (encode t v ++ rest).length < 2 ^ 256) :
+    decodeCanonical t (encode t v ++ rest) = some v := by
+  simp only [decodeCanonical, decode_encode_append t hv v hl rest hb, Option.some_bind]
+  simp [take_append_of_length rfl]
 
 end EvmAbi

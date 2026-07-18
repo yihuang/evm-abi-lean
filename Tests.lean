@@ -327,22 +327,26 @@ example : encode specGTy specGVal = specGBytes := by native_decide
 
 def decodableBytesBuf : List UInt8 := encode .bytes [1, 2, 3] ++ [0xff]
 
+-- Lenient decode accepts trailing bytes.
 example : decode .bytes decodableBytesBuf = some [1, 2, 3] := by native_decide
 
-example : (decode .bytes (encode .bytes [1, 2, 3])).map (encode .bytes) =
-    some (encode .bytes [1, 2, 3]) := by native_decide
+-- decodeCanonical requires the prefix to match: it accepts the canonical buffer with a trailing
+-- byte (the trailing byte is beyond the prefix) …
+example : decodeCanonical .bytes decodableBytesBuf = some [1, 2, 3] := by native_decide
 
-example : (decode .bytes decodableBytesBuf).map (encode .bytes) =
-    some (encode .bytes [1, 2, 3]) := by
-  apply decode_then_encode_roundtrip
-  native_decide
-
-example : decode .bytes decodableBytesBuf = some [1, 2, 3] := by native_decide
+-- … and the encode result is indeed a prefix of the input.
+example (h : decodeCanonical .bytes decodableBytesBuf = some [1, 2, 3]) :
+    decodableBytesBuf.take (encode .bytes [1, 2, 3]).length = encode .bytes [1, 2, 3] :=
+  decodeCanonical_encode_prefix .bytes decodableBytesBuf [1, 2, 3] h
 
 def aliasedTupleBuf : List UInt8 :=
   encodeUint 64 ++ encodeUint 64 ++ encode .bytes [1]
 
+-- Lenient decode accepts aliased offsets …
 example : decode (.tuple [.bytes, .bytes]) aliasedTupleBuf =
     some ([1], ([1], ())) := by native_decide
+
+-- … but decodeCanonical rejects them because the re-encoding is longer than the input.
+example : decodeCanonical (.tuple [.bytes, .bytes]) aliasedTupleBuf = none := by native_decide
 
 end EvmAbi
