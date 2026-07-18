@@ -333,7 +333,9 @@ example : (decode .bytes (encode .bytes [1, 2, 3])).map (encode .bytes) =
     some (encode .bytes [1, 2, 3]) := by native_decide
 
 example : (decode .bytes decodableBytesBuf).map (encode .bytes) =
-    some (encode .bytes [1, 2, 3]) := by native_decide
+    some (encode .bytes [1, 2, 3]) := by
+  apply decode_then_encode_roundtrip
+  native_decide
 
 example : decode .bytes decodableBytesBuf = some [1, 2, 3] := by native_decide
 
