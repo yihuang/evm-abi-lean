@@ -339,7 +339,8 @@ example : IsCanonical .bytes nonCanonicalBytesBuf := by
 
 example : ∃ enc, (decode .bytes nonCanonicalBytesBuf).map (encode .bytes) = some enc ∧
     nonCanonicalBytesBuf.take enc.length = enc := by
-  refine ⟨encode .bytes [1, 2, 3], ?_, ?_⟩
+  apply decode_then_encode_roundtrip
+  refine ⟨[1, 2, 3], ?_, ?_⟩
   · native_decide
   · native_decide
 

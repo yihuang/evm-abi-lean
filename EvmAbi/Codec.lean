@@ -979,4 +979,20 @@ the consumed prefix (trailing bytes are ignored). -/
 def IsCanonical (t : Ty) (buf : List UInt8) : Prop :=
   ∃ v : t.Val, decode t buf = some v ∧ buf.take (encode t v).length = encode t v
 
+/-- Build canonicality from a decode result plus a matching re-encoded prefix. -/
+theorem isCanonical_of_decode_prefix (t : Ty) (buf : List UInt8) (v : t.Val)
+    (hdec : decode t buf = some v)
+    (hprefix : buf.take (encode t v).length = encode t v) : IsCanonical t buf :=
+  ⟨v, hdec, hprefix⟩
+
+/-- Decode-then-encode roundtrip in prefix form: canonical inputs always
+produce a re-encoding that matches the consumed prefix. -/
+theorem decode_then_encode_roundtrip (t : Ty) (buf : List UInt8)
+    (hcan : IsCanonical t buf) :
+    ∃ enc, (decode t buf).map (encode t) = some enc ∧ buf.take enc.length = enc := by
+  rcases hcan with ⟨v, hdec, hprefix⟩
+  refine ⟨encode t v, ?_, ?_⟩
+  · simpa [hdec]
+  · simpa using hprefix
+
 end EvmAbi
