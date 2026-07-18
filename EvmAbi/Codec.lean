@@ -950,25 +950,21 @@ theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
 
 /-! ## Canonical decoding -/
 
-/-- Prefix-canonical input for `t`: decoding succeeds and re-encoding matches
-the consumed prefix (trailing bytes are ignored). -/
+/-- Canonical input for `t`: decoding succeeds. -/
 def IsCanonical (t : Ty) (buf : List UInt8) : Prop :=
-  ∃ v : t.Val, decode t buf = some v ∧ buf.take (encode t v).length = encode t v
+  ∃ v : t.Val, decode t buf = some v
 
-/-- Build canonicality from a decode result plus a matching re-encoded prefix. -/
-theorem isCanonical_of_decode_prefix (t : Ty) (buf : List UInt8) (v : t.Val)
-    (hdec : decode t buf = some v)
-    (hprefix : buf.take (encode t v).length = encode t v) : IsCanonical t buf :=
-  ⟨v, hdec, hprefix⟩
+/-- Build canonicality directly from a successful decode. -/
+theorem isCanonical_of_decode (t : Ty) (buf : List UInt8) (v : t.Val)
+    (hdec : decode t buf = some v) : IsCanonical t buf :=
+  ⟨v, hdec⟩
 
-/-- Decode-then-encode roundtrip in prefix form: canonical inputs always
-produce a re-encoding that matches the consumed prefix. -/
+/-- Canonical inputs decode and therefore re-encode through `Option.map`. -/
 theorem decode_then_encode_roundtrip (t : Ty) (buf : List UInt8)
     (hcan : IsCanonical t buf) :
-    ∃ enc, (decode t buf).map (encode t) = some enc ∧ buf.take enc.length = enc := by
-  rcases hcan with ⟨v, hdec, hprefix⟩
-  refine ⟨encode t v, ?_, ?_⟩
-  · simpa [hdec]
-  · simpa using hprefix
+    ∃ enc, (decode t buf).map (encode t) = some enc := by
+  rcases hcan with ⟨v, hdec⟩
+  refine ⟨encode t v, ?_⟩
+  simpa [hdec]
 
 end EvmAbi

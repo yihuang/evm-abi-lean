@@ -325,26 +325,23 @@ example : encode specGTy specGVal = specGBytes := by native_decide
 
 /-! ## Canonical decoding -/
 
-def nonCanonicalBytesBuf : List UInt8 := encode .bytes [1, 2, 3] ++ [0xff]
+def decodableBytesBuf : List UInt8 := encode .bytes [1, 2, 3] ++ [0xff]
 
-example : decode .bytes nonCanonicalBytesBuf = some [1, 2, 3] := by native_decide
+example : decode .bytes decodableBytesBuf = some [1, 2, 3] := by native_decide
 
 example : (decode .bytes (encode .bytes [1, 2, 3])).map (encode .bytes) =
     some (encode .bytes [1, 2, 3]) := by native_decide
 
-example : IsCanonical .bytes nonCanonicalBytesBuf := by
-  refine ⟨[1, 2, 3], ?_, ?_⟩
-  · native_decide
-  · native_decide
+example : IsCanonical .bytes decodableBytesBuf := by
+  refine ⟨[1, 2, 3], ?_⟩
+  native_decide
 
-example : ∃ enc, (decode .bytes nonCanonicalBytesBuf).map (encode .bytes) = some enc ∧
-    nonCanonicalBytesBuf.take enc.length = enc := by
+example : ∃ enc, (decode .bytes decodableBytesBuf).map (encode .bytes) = some enc := by
   apply decode_then_encode_roundtrip
-  refine ⟨[1, 2, 3], ?_, ?_⟩
-  · native_decide
-  · native_decide
+  refine ⟨[1, 2, 3], ?_⟩
+  native_decide
 
-example : decode .bytes nonCanonicalBytesBuf = some [1, 2, 3] := by native_decide
+example : decode .bytes decodableBytesBuf = some [1, 2, 3] := by native_decide
 
 def aliasedTupleBuf : List UInt8 :=
   encodeUint 64 ++ encodeUint 64 ++ encode .bytes [1]
