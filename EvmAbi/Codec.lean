@@ -565,14 +565,26 @@ theorem decode_encode_append_static : (t : Ty) → t.IsStatic = true → t.Valid
       have hst : t.IsStatic = true := by simp only [IsStatic] at hs; exact hs
       have hvt : t.Valid := hv
       simp only [decode, encode]
-      have h := decodeElems_static_append t hst hvt vs n hvs [] [] 0 (by simp [headSizes]) rest
-      simpa using h
+      have hraw := decodeElems_static_append t hst hvt vs n hvs [] [] 0 (by simp [headSizes]) rest
+      have h : decodeElems t n (encodeParts (vs.map (partOf t)) ++ rest) 0 = some ⟨vs, hvs⟩ := by
+        simpa [List.nil_append, List.append_nil] using hraw
+      have henc :
+          (encodeParts (vs.map (partOf t)) ++ rest).take
+              (encode (.fixedArray t n) ⟨vs, hvs⟩).length =
+            encode (.fixedArray t n) ⟨vs, hvs⟩ := by
+        simp [encode, take_append_of_length]
+      rw [h, Option.bind_some, if_pos henc]
   | tuple ts, hs, hv, v, rest => by
       have hss : allStatic ts = true := by simp only [IsStatic] at hs; exact hs
       have hvts : AllValid ts := hv
       simp only [decode, encode]
-      have h := decodeTuple_static_append ts hss hvts v [] [] 0 (by simp [headSizes]) rest
-      simpa using h
+      have hraw := decodeTuple_static_append ts hss hvts v [] [] 0 (by simp [headSizes]) rest
+      have h : decodeTuple ts (encodeParts (partsOfTuple ts v) ++ rest) 0 = some v := by
+        simpa [List.nil_append, List.append_nil] using hraw
+      have henc : (encodeParts (partsOfTuple ts v) ++ rest).take
+          (encodeParts (partsOfTuple ts v)).length = encodeParts (partsOfTuple ts v) := by
+        exact take_append_of_length rfl
+      rw [h, Option.bind_some, if_pos henc]
 termination_by t => 4 * sizeOf t
 
 /-- Static element lists decode from their own encoding inside a larger
@@ -798,28 +810,40 @@ theorem decode_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound 
           have h := decodeElems_append t hvt v v.length rfl hls [] [] 0 (by simp [headSizes])
             rest (by simpa using wf_map_partOf t hvt v) (by simpa using hbT)
           simpa using h
-        have hfin : (decodeElems t v.length (encodeParts (v.map (partOf t)) ++ rest) 0).map
-            Subtype.val = some v := by
-          rw [hde]
-          rfl
-        simp only [decode, encode, List.append_assoc]
-        rw [hcnt, hdrop]
-        exact hfin
+        have henc :
+            (encodeUint v.length ++ (encodeParts (v.map (partOf t)) ++ rest)).take
+                (32 + (encodeParts (v.map (partOf t))).length) =
+              encodeUint v.length ++ encodeParts (v.map (partOf t)) := by
+          rw [← List.append_assoc]
+          exact take_append_of_length (by simp [length_encodeUint])
+        simpa [decode, encode, hcnt, hdrop, hde, henc, List.append_assoc]
     | fixedArray t n =>
         obtain ⟨vs, hvs⟩ := v
         have hvt : t.Valid := hv
         have hls : AllLenBound t vs := by simpa [LenBound] using hl
-        have h := decodeElems_append t hvt vs n hvs hls [] [] 0 (by simp [headSizes]) rest
+        have hraw := decodeElems_append t hvt vs n hvs hls [] [] 0 (by simp [headSizes]) rest
           (by simpa using wf_map_partOf t hvt vs) (by simpa [encode] using hb)
+        have h : decodeElems t n (encodeParts (vs.map (partOf t)) ++ rest) 0 = some ⟨vs, hvs⟩ := by
+          simpa [List.nil_append, List.append_nil] using hraw
         simp only [decode, encode]
-        simpa using h
+        have henc :
+            (encodeParts (vs.map (partOf t)) ++ rest).take
+                (encode (.fixedArray t n) ⟨vs, hvs⟩).length =
+              encode (.fixedArray t n) ⟨vs, hvs⟩ := by
+          simp [encode, take_append_of_length]
+        rw [h, Option.bind_some, if_pos henc]
     | tuple ts =>
         have hvts : AllValid ts := hv
         have hls : TupleLenBounds ts v := by simpa [LenBound] using hl
-        have h := decodeTuple_append ts hvts v hls [] [] 0 (by simp [headSizes]) rest
+        have hraw := decodeTuple_append ts hvts v hls [] [] 0 (by simp [headSizes]) rest
           (by simpa using wf_partsOfTuple ts hvts v) (by simpa [encode] using hb)
+        have h : decodeTuple ts (encodeParts (partsOfTuple ts v) ++ rest) 0 = some v := by
+          simpa [List.nil_append, List.append_nil] using hraw
         simp only [decode, encode]
-        simpa using h
+        have henc : (encodeParts (partsOfTuple ts v) ++ rest).take
+            (encodeParts (partsOfTuple ts v)).length = encodeParts (partsOfTuple ts v) := by
+          exact take_append_of_length rfl
+        rw [h, Option.bind_some, if_pos henc]
 termination_by 8 * sizeOf t
 
 /-- Element lists decode from their own encoding inside a larger head/tail
