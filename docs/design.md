@@ -262,22 +262,7 @@ smaller values, and the `decreasing_tactic` discharges every goal.
 
 ## 6. Future Work
 
-### 6.1 Calldata / Function Selector
-
-The ABI specification defines function call data as a 4-byte Keccak-256
-selector followed by the ABI encoding of the argument tuple.  Adding a
-calldata roundtrip theorem — given a selector and argument values, decoding
-recovers both — would complete the contract-interface verification.
-
-### 6.2 Keccak-256
-
-The Keccak-256 hash is kept opaque: selector values are concrete bytes
-verified against test vectors (`native_decide`), but no property of the
-hash function itself is proved.  A future extension could model Keccak
-as an abstract sponge construction or verify it against a reference
-implementation.
-
-### 6.3 Canonical Encoding
+### 6.1 Canonical Encoding
 
 The current decoder is *lenient*: it accepts encodings that may contain
 non-canonical padding or redundant zero bytes in the tail.  An
@@ -285,7 +270,7 @@ non-canonical padding or redundant zero bytes in the tail.  An
 encoding is canonical, and that the lenient decoder on canonical input
 is complete (no false rejections).
 
-### 6.4 ByteArray Interface
+### 6.2 ByteArray Interface
 
 The library works entirely with `List UInt8` for proofs and `ByteArray`
 only at the I/O boundary.  A future layer could lift the roundtrip theorem
