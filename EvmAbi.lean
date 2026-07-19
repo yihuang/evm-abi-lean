@@ -27,11 +27,12 @@ Current contents (roadmap nodes 1–8):
 * `EvmAbi.Codec`   — `Ty`-indexed encode/decode for all types + unified roundtrip
 * `EvmAbi.StaticArray` — static arrays `T[k]` over word-sized elements
 * `EvmAbi.Parts`   — head/tail combinator: `Part`, `encodeParts`, offset theorems
-* `EvmAbi.Keccak`  — Keccak-256 kept opaque; the four-byte selector
-* `EvmAbi.Calldata` — call data: selector ++ tuple encoding, calldata roundtrip
+* `EvmAbi.Canonical` — canonical-layout validation: `validate`, `IsCanonical`,
+                  `decodeCanonical`, and the C1–C3 theorems (encodings
+                  validate; canonical input lenient-decodes; canonical
+                  buffers are exactly the image of `encode`)
 
 Node 8 (complete): the full type universe (uint/int/bool/address/bytesN/
 bytes/string/array/fixedArray/tuple), the `Ty`-indexed codec with the
-unified roundtrip `roundtrip`, and calldata built on the head/tail
-combinator of `EvmAbi.Parts`.
+unified roundtrip `roundtrip`, and canonical strictness on top.
 -/
