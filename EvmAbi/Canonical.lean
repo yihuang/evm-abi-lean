@@ -313,43 +313,33 @@ theorem validate_static_len (t : Ty) (hs : t.IsStatic = true) (buf : List UInt8)
     (h : validate t buf = some n) : n = t.headSize := by
   cases t with
   | uint m =>
-      simp only [validate] at h
-      split at h
-      · split at h
-        · rw [Option.some.injEq] at h
-          simp [h, headSize]
-        · contradiction
-      · contradiction
+      simp [headSize] at *
+      simp [validate] at h
+      cases hdu : decodeUint buf with
+      | none => simp [hdu] at h
+      | some x => simp [hdu] at h; simp [h]
   | int m =>
-      simp only [validate] at h
-      split at h
-      · split at h
-        · rw [Option.some.injEq] at h
-          simp [h, headSize]
-        · contradiction
-      · contradiction
+      simp [headSize] at *
+      simp [validate] at h
+      cases hdi : decodeInt buf with
+      | none => simp [hdi] at h
+      | some i => simp [hdi] at h; omega
   | bool =>
-      simp only [validate] at h
-      split at h
-      · rw [Option.some.injEq] at h
-        simp [h, headSize]
-      · contradiction
+      simp [headSize] at *
+      simp [validate] at h
+      split at h <;> simp at h <;> omega
   | address =>
-      simp only [validate] at h
-      split at h
-      · split at h
-        · rw [Option.some.injEq] at h
-          simp [h, headSize]
-        · contradiction
-      · contradiction
+      simp [headSize] at *
+      simp [validate] at h
+      cases hda : decodeAddress buf with
+      | none => simp [hda] at h
+      | some x => simp [hda] at h; omega
   | bytesN m =>
-      simp only [validate] at h
-      split at h
-      · split at h
-        · rw [Option.some.injEq] at h
-          simp [h, headSize]
-        · contradiction
-      · contradiction
+      simp [headSize] at *
+      simp [validate] at h
+      cases hdb : decodeBytesN m buf with
+      | none => simp [hdb] at h
+      | some bs => simp [hdb] at h; omega
   | bytes => simp [IsStatic] at hs
   | string => simp [IsStatic] at hs
   | array t => simp [IsStatic] at hs
@@ -385,6 +375,7 @@ accepts everything the encoder produces.  The walker lemmas thread the
 frontier invariant `E = tailOffset ps xs.length` (the tail offset of the
 current part) and advance it exactly along the tails, mirroring Package D
 of `EvmAbi.Codec`. -/
+
 mutual
 /-- **Canonical completeness, prefix form**: the encoding of every value
 validates, consuming exactly the encoding's length.  `hb` bounds the whole
@@ -873,6 +864,15 @@ the frontier as the first tail offset), the tail segment equals
 `Valid` is needed for the head-size arithmetic; note the statement is
 otherwise unconditional (no `2^256` bound — the offset-equality check
 itself bounds every frontier). -/
+
+/-- When `decodeUint` succeeds, the first 32 bytes of the buffer are the
+big-endian encoding of the decoded value. -/
+theorem buf_take_32_eq_encodeUint_of_decodeUint (buf : List UInt8) (x : Nat)
+    (hdu : decodeUint buf = some x) : buf.take 32 = encodeUint x := by
+  have h := take_32_eq_encodeUint_of_natAt buf 0 x hdu
+  simp [Nat.mul_zero, List.drop_zero] at h
+  exact h
+
 mutual
 /-- **Canonical soundness**: validation plus lenient decoding pins the
 buffer down to the encoding of the decoded value. -/
@@ -893,11 +893,9 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
             simp only [hdu] at hd
             rw [dif_pos hx] at hd
             have hv' : v = ⟨x, hx⟩ := (Option.some.inj hd).symm
-            subst hv'
-            subst hn
-            have htake := take_32_eq_encodeUint_of_natAt buf 0 x hdu
-            simp only [Nat.mul_zero, List.drop_zero] at htake
-            exact ⟨by simp only [encode]; exact htake, by simp [encode]⟩
+            subst hv'; subst hn
+            have htake := buf_take_32_eq_encodeUint_of_decodeUint buf x hdu
+            simp [encode, length_encodeUint, htake]
           · rw [if_neg hx] at hval; contradiction
   | int m =>
       simp only [validate] at hval
@@ -947,17 +945,12 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
           have hn : n = 32 := (Option.some.inj hval).symm
           have hdu : decodeUint buf = some (if b then 1 else 0) :=
             (decodeBool_eq_some_iff buf b).mp hdb
-          have htake := take_32_eq_encodeUint_of_natAt buf 0 (if b then 1 else 0) hdu
-          simp only [Nat.mul_zero, List.drop_zero] at htake
+          have htake := buf_take_32_eq_encodeUint_of_decodeUint buf (if b then 1 else 0) hdu
           simp only [decode] at hd
           rw [hdb] at hd
           have hbv : b = v := Option.some.inj hd
-          subst hbv
-          subst hn
-          constructor
-          · simp only [encode, encodeBool]
-            exact htake
-          · simp only [encode, encodeBool, length_encodeUint]
+          subst hbv; subst hn
+          simp [encode, encodeBool, length_encodeUint, htake]
   | address =>
       simp only [validate] at hval
       cases hda : decodeAddress buf with
@@ -971,12 +964,9 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
             simp only [hda] at hd
             rw [dif_pos hx] at hd
             have hv' : v = ⟨x, hx⟩ := (Option.some.inj hd).symm
-            subst hv'
-            subst hn
-            have htake := take_32_eq_encodeUint_of_natAt buf 0 x hda
-            simp only [Nat.mul_zero, List.drop_zero] at htake
-            exact ⟨by simp only [encode, encodeAddress]; exact htake,
-              by simp only [encode, encodeAddress, length_encodeUint]⟩
+            subst hv'; subst hn
+            have htake := buf_take_32_eq_encodeUint_of_decodeUint buf x hda
+            simp [encode, encodeAddress, length_encodeUint, htake]
           · rw [if_neg hx] at hval; contradiction
   | bytesN m =>
       simp only [validate] at hval
