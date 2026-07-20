@@ -589,12 +589,9 @@ theorem validate_decode (t : Ty) (buf : List UInt8) (n : Nat)
       obtain ⟨v, hv, _⟩ := Option.map_eq_some_iff.mp h
       exact ⟨v, hv⟩
   | bytes =>
-      simp only [validate] at h
-      cases hp : decodeBytesPrefix buf with
-      | none => simp only [hp] at h; contradiction
-      | some p =>
-          obtain ⟨bs, m⟩ := p
-          exact ⟨bs, by simp only [decode, hp, Option.map_some]⟩
+      rw [validate] at h
+      obtain ⟨p, hp, _⟩ := Option.map_eq_some_iff.mp h
+      exact ⟨p.1, by simp only [decode, hp, Option.map_some]⟩
   | string =>
       simp only [validate] at h
       cases hp : decodeBytesPrefix buf with
@@ -899,10 +896,8 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
               obtain ⟨htake, hlen⟩ := take_eq_encodeBytes_of_decodeBytesPrefix buf bs m' hp
               have hutf : s.toUTF8 = bs.toByteArray := toUTF8_of_fromUTF8? hs
               have hbs : bs = s.toUTF8.data.toList := by
-                have h1 : s.toUTF8.data.toList = bs := by
-                  rw [hutf]
-                  simp [List.data_toByteArray]
-                exact h1.symm
+                rw [hutf]
+                simp [List.data_toByteArray]
               rw [hbs] at htake hlen
               simp only [encode, encodeString]
               exact ⟨htake, hlen⟩
