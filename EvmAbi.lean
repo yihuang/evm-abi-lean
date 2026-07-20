@@ -7,6 +7,7 @@ import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.StaticArray
 import EvmAbi.Parts
+import EvmAbi.Canonical
 
 /-!
 # EvmAbi
