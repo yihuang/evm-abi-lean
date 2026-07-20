@@ -344,36 +344,10 @@ theorem validate_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBoun
     (rest : List UInt8) (hb : (encode t v ++ rest).length < 2 ^ 256) :
     validate t (encode t v ++ rest) = some (encode t v).length := by
   cases t with
-  | uint m =>
-      obtain ⟨n, hn⟩ := v
-      have hdec : decodeUint (encodeUint n ++ rest) = some n :=
-        decodeUint_append n rest
-          (Nat.lt_of_lt_of_le hn (Nat.pow_le_pow_right (n := 2) (by decide) hv.2.1))
-      simp only [validate, encode, decode, hdec, dif_pos hn, Option.map_some,
-        length_encodeUint]
-  | int m =>
-      obtain ⟨i, hi⟩ := v
-      have h0 : 0 < m := by have h8 := hv.1; omega
-      have hdec : decodeInt (encodeInt i ++ rest) = some i :=
-        decodeInt_append h0 hv.2.1 hi.1 hi.2 rest
-      simp only [validate, encode, decode, hdec, dif_pos hi, Option.map_some]
-      simp [encodeInt, length_encodeUint]
-  | bool =>
-      have hdec := decodeBool_append v rest
-      simp only [validate, encode, decode, hdec, Option.map_some]
-      simp [encodeBool, length_encodeUint]
-  | address =>
-      obtain ⟨n, hn⟩ := v
-      have hdec : decodeAddress (encodeAddress n ++ rest) = some n :=
-        decodeAddress_append n rest hn
-      simp only [validate, encode, decode, hdec, dif_pos hn, Option.map_some]
-      simp [encodeAddress, length_encodeUint]
-  | bytesN m =>
-      obtain ⟨bs, hbs⟩ := v
-      have hdec : decodeBytesN m (encodeBytesN bs ++ rest) = some bs :=
-        decodeBytesN_append hv.2 hbs rest
-      simp only [validate, encode, decode, hdec, dif_pos hbs, Option.map_some]
-      rw [length_encodeBytesN (by rw [hbs]; exact hv.2)]
+  | uint _ | int _ | bool | address | bytesN _ =>
+      rw [validate, decode_encode_append_static _ rfl hv v rest, Option.map_some,
+        encode_length_static _ rfl hv v]
+      rfl
   | bytes =>
       have hlb : v.length < 2 ^ 256 := by simpa [LenBound] using hl
       have hr := decodeBytesPrefix_append (bs := v) (rest := rest) hlb
