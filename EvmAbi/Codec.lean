@@ -308,30 +308,6 @@ theorem encode_length_static_tuple : (ts : List Ty) → allStatic ts = true → 
 termination_by ts => 2 * sizeOf ts + 1
 end
 
-/-- The head section of a static tuple encoding is exactly `headSizeSum ts` bytes. -/
-theorem headSizes_partsOfTuple : (ts : List Ty) → allStatic ts = true → AllValid ts →
-    (vs : TupleVal ts) → headSizes (partsOfTuple ts vs) = headSizeSum ts
-  | [], _, _, _ => by simp [partsOfTuple, headSizes, headSizeSum]
-  | t :: ts, hs, hv, (v, vs) => by
-      simp only [allStatic] at hs
-      rw [Bool.and_eq_true] at hs
-      obtain ⟨hvt, hvs⟩ := hv
-      simp only [partsOfTuple]
-      rw [partOf_static t v hs.1]
-      simp only [headSizes, Part.headSize, headSizeSum]
-      rw [encode_length_static t hs.1 hvt v, headSizes_partsOfTuple ts hs.2 hvs vs]
-
-/-- The head section of a static element list mapped through `partOf`. -/
-theorem headSizes_map_partOf (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid) :
-    (vs : List t.Val) → headSizes (vs.map (partOf t)) = vs.length * t.headSize
-  | [] => by simp [headSizes]
-  | v :: vs => by
-      rw [List.map_cons, partOf_static t v hs]
-      simp only [headSizes, Part.headSize, List.length_cons]
-      rw [encode_length_static t hs hv v, headSizes_map_partOf t hs hv vs,
-        Nat.add_mul, Nat.one_mul]
-      omega
-
 /-! ## Package B: alignment and well-formedness -/
 
 /- Every encoding is 32-byte aligned; equivalently every part list produced

@@ -80,14 +80,6 @@ theorem headSizes_partsOfTuple_any : (ts : List Ty) → AllValid ts → (vs : Tu
         simp only [headSizes, Part.headSize, headSizeSum]
         rw [ih, headSize_of_dynamic t hsf]
 
-/-- A tuple part list has one part per component type. -/
-theorem length_partsOfTuple : (ts : List Ty) → (vs : TupleVal ts) →
-    (partsOfTuple ts vs).length = ts.length
-  | [], _ => by simp [partsOfTuple]
-  | t :: ts, (v, vs) => by
-      simp only [partsOfTuple, List.length_cons, List.length_cons]
-      rw [length_partsOfTuple ts vs]
-
 /-- A successful word read determines the word's bytes: the 32 bytes at the
 read position are the big-endian encoding of the value read. -/
 theorem take_32_eq_encodeUint_of_natAt (buf : List UInt8) (i : Nat) (n : Nat)
