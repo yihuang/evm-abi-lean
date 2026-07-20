@@ -228,77 +228,79 @@ def decodeCanonical (t : Ty) (buf : List UInt8) : Option t.Val :=
   | some n => if n = buf.length then decode t buf else none
   | none => none
 
-/-! ## static validators keep the frontier and consume exactly `headSize` -/
+/-! ## static delegation: validating a static type IS strict decoding -/
 
-/-- A static component never advances the tail frontier. -/
-theorem validateElem_static_E (t : Ty) (hs : t.IsStatic = true) (buf : List UInt8)
-    (off E E' : Nat) (h : validateElem t buf off E = some E') : E' = E := by
-  rw [validateElem_static t _ _ _ hs] at h
-  cases hv : validate t (buf.drop off) with
-  | none => simp only [hv] at h; contradiction
-  | some _ =>
-      simp only [hv] at h
-      exact (Option.some.inj h).symm
+mutual
+/-- **Static delegation**: for a static type, canonical validation succeeds
+exactly when the lenient decoder does, consuming exactly the head size.
+Atoms hold by definition of `validate`; the walkers extend the fact through
+static containers, where the frontier never moves. -/
+theorem validate_static (t : Ty) (hs : t.IsStatic = true) (buf : List UInt8) :
+    validate t buf = (decode t buf).map fun _ => t.headSize := by
+  cases t with
+  | uint _ | int _ | bool | address | bytesN _ => rw [validate]; rfl
+  | bytes | string | array _ => simp [IsStatic] at hs
+  | fixedArray t n =>
+      have hst : t.IsStatic = true := by simpa [IsStatic] using hs
+      rw [validate, decode, show (Ty.fixedArray t n).headSize = n * t.headSize by
+        simp [headSize, hst]]
+      exact validateElems_static t hst n buf 0 (n * t.headSize)
+  | tuple ts =>
+      have hss : allStatic ts = true := by simpa [IsStatic] using hs
+      rw [validate, decode, show (Ty.tuple ts).headSize = headSizeSum ts by
+        simp [headSize, hss]]
+      exact validateTuple_static ts hss buf 0 (headSizeSum ts)
+termination_by 8 * sizeOf t
 
-/-- A run of static elements never advances the tail frontier. -/
-theorem validateElems_static_E (t : Ty) (hs : t.IsStatic = true) (k : Nat)
-    (buf : List UInt8) (off E E' : Nat)
-    (h : validateElems t k buf off E = some E') : E' = E := by
-  induction k generalizing off E with
-  | zero =>
-      simp only [validateElems] at h
-      exact (Option.some.inj h).symm
+/-- Static element runs validate in lockstep with the decoder, keeping the
+frontier. -/
+theorem validateElems_static (t : Ty) (hs : t.IsStatic = true) (k : Nat)
+    (buf : List UInt8) (off E : Nat) :
+    validateElems t k buf off E = (decodeElems t k buf off).map fun _ => E := by
+  induction k generalizing off with
+  | zero => rw [validateElems, decodeElems]; rfl
   | succ k ih =>
-      simp only [validateElems] at h
-      cases he : validateElem t buf off E with
-      | none => simp only [he] at h; contradiction
-      | some E₁ =>
-          simp only [he] at h
-          have hE₁ : E₁ = E := validateElem_static_E t hs buf off E E₁ he
-          subst hE₁
-          exact ih _ _ h
+      rw [validateElems, decodeElems, validateElem_static t _ _ _ hs,
+        readElem_static t _ _ hs, validate_static t hs (buf.drop off)]
+      cases decode t (buf.drop off) with
+      | none => rfl
+      | some v =>
+          simp only [Option.map_some]
+          rw [ih (off + t.headSize)]
+          cases decodeElems t k buf (off + t.headSize) with
+          | none => rfl
+          | some vs => rfl
+termination_by 8 * sizeOf t + 1
 
-/-- A run of static tuple components never advances the tail frontier. -/
-theorem validateTuple_static_E : (ts : List Ty) → allStatic ts = true →
-    (buf : List UInt8) → (off E E' : Nat) →
-    validateTuple ts buf off E = some E' → E' = E
-  | [], _, _, _, _, _, h => by
-      simp only [validateTuple] at h
-      exact (Option.some.inj h).symm
-  | t :: ts, hall, buf, off, E, E', h => by
+/-- Static tuple walks validate in lockstep with the decoder, keeping the
+frontier. -/
+theorem validateTuple_static : (ts : List Ty) → allStatic ts = true →
+    (buf : List UInt8) → (off E : Nat) →
+    validateTuple ts buf off E = (decodeTuple ts buf off).map fun _ => E
+  | [], _, _, _, _ => by rw [validateTuple, decodeTuple]; rfl
+  | t :: ts, hall, buf, off, E => by
       simp only [allStatic] at hall
       rw [Bool.and_eq_true] at hall
       obtain ⟨hst, hss⟩ := hall
-      simp only [validateTuple] at h
-      cases he : validateElem t buf off E with
-      | none => simp only [he] at h; contradiction
-      | some E₁ =>
-          simp only [he] at h
-          have hE₁ : E₁ = E := validateElem_static_E t hst buf off E E₁ he
-          subst hE₁
-          exact validateTuple_static_E ts hss buf (off + t.headSize) E₁ E' h
+      rw [validateTuple, decodeTuple, validateElem_static t _ _ _ hst,
+        readElem_static t _ _ hst, validate_static t hst (buf.drop off)]
+      cases decode t (buf.drop off) with
+      | none => rfl
+      | some v =>
+          simp only [Option.map_some]
+          rw [validateTuple_static ts hss buf (off + t.headSize) E]
+          cases decodeTuple ts buf (off + t.headSize) with
+          | none => rfl
+          | some vs => rfl
+termination_by ts => 8 * sizeOf ts + 2
+end
 
 /-- A static type's validator consumes exactly its head size. -/
 theorem validate_static_len (t : Ty) (hs : t.IsStatic = true) (buf : List UInt8) (n : Nat)
     (h : validate t buf = some n) : n = t.headSize := by
-  cases t with
-  | uint _ | int _ | bool | address | bytesN _ =>
-      rw [validate] at h
-      rcases Option.map_eq_some_iff.mp h with ⟨_, _, hn⟩
-      simp [headSize, hn]
-  | bytes | string | array _ => simp [IsStatic] at hs
-  | fixedArray t n' =>
-      have hst : t.IsStatic = true := by simpa [IsStatic] using hs
-      simp only [validate] at h
-      have : n = n' * t.headSize := validateElems_static_E t hst n' buf 0 _ n h
-      rw [this]
-      simp [headSize, if_pos hst]
-  | tuple ts =>
-      have hss : allStatic ts = true := by simpa [IsStatic] using hs
-      simp only [validate] at h
-      have : n = headSizeSum ts := validateTuple_static_E ts hss buf 0 _ n h
-      rw [this]
-      simp [headSize, if_pos hss]
+  rw [validate_static t hs] at h
+  obtain ⟨_, _, hn⟩ := Option.map_eq_some_iff.mp h
+  exact hn.symm
 
 /-- The tail size of a static component's part is zero. -/
 theorem tailSize_partOf_static (t : Ty) (v : t.Val) (h : t.IsStatic = true) :
