@@ -51,17 +51,9 @@ theorem headSizes_map_partOf_any (t : Ty) (hv : t.Valid) :
   | [] => by simp [headSizes]
   | v :: vs => by
       rw [List.map_cons]
-      have ih := headSizes_map_partOf_any t hv vs
-      by_cases hs : t.IsStatic
-      · rw [partOf_static t v hs]
-        simp only [headSizes, Part.headSize, List.length_cons]
-        rw [encode_length_static t hs hv v, ih, Nat.add_mul, Nat.one_mul]
-        omega
-      · have hsf : t.IsStatic = false := by simp at hs; exact hs
-        rw [partOf_dynamic t v hsf]
-        simp only [headSizes, Part.headSize, List.length_cons]
-        rw [ih, headSize_of_dynamic t hsf]
-        omega
+      simp only [headSizes, headSize_partOf t hv v, List.length_cons]
+      rw [headSizes_map_partOf_any t hv vs, Nat.succ_mul]
+      omega
 
 /-- The head section of a tuple part list, for arbitrary component types. -/
 theorem headSizes_partsOfTuple_any : (ts : List Ty) → AllValid ts → (vs : TupleVal ts) →
@@ -69,24 +61,17 @@ theorem headSizes_partsOfTuple_any : (ts : List Ty) → AllValid ts → (vs : Tu
   | [], _, _ => by simp [partsOfTuple, headSizes, headSizeSum]
   | t :: ts, hv, (v, vs) => by
       obtain ⟨hvt, hvs⟩ := hv
-      simp only [partsOfTuple]
-      have ih := headSizes_partsOfTuple_any ts hvs vs
-      by_cases hs : t.IsStatic
-      · rw [partOf_static t v hs]
-        simp only [headSizes, Part.headSize, headSizeSum]
-        rw [encode_length_static t hs hvt v, ih]
-      · have hsf : t.IsStatic = false := by simp at hs; exact hs
-        rw [partOf_dynamic t v hsf]
-        simp only [headSizes, Part.headSize, headSizeSum]
-        rw [ih, headSize_of_dynamic t hsf]
+      simp only [partsOfTuple, headSizes, headSize_partOf t hvt v, headSizeSum]
+      rw [headSizes_partsOfTuple_any ts hvs vs]
 
-/-- A tuple part list has one part per component type. -/
-theorem length_partsOfTuple : (ts : List Ty) → (vs : TupleVal ts) →
-    (partsOfTuple ts vs).length = ts.length
-  | [], _ => by simp [partsOfTuple]
-  | t :: ts, (v, vs) => by
-      simp only [partsOfTuple, List.length_cons, List.length_cons]
-      rw [length_partsOfTuple ts vs]
+/-- Split a slice at an interior offset: reading `[E, E')` is reading
+`[E, E₁)` and then `[E₁, E')`.  The tail sections of the soundness walkers
+are recombined with this. -/
+theorem take_split (buf : List UInt8) (E E₁ E' : Nat) (h1 : E ≤ E₁) (h2 : E₁ ≤ E') :
+    (buf.drop E).take (E' - E) =
+      (buf.drop E).take (E₁ - E) ++ (buf.drop E₁).take (E' - E₁) := by
+  rw [show E' - E = (E₁ - E) + (E' - E₁) by omega, List.take_add, List.drop_drop,
+    show E + (E₁ - E) = E₁ by omega]
 
 /-- A successful word read determines the word's bytes: the 32 bytes at the
 read position are the big-endian encoding of the value read. -/
@@ -243,77 +228,79 @@ def decodeCanonical (t : Ty) (buf : List UInt8) : Option t.Val :=
   | some n => if n = buf.length then decode t buf else none
   | none => none
 
-/-! ## static validators keep the frontier and consume exactly `headSize` -/
+/-! ## static delegation: validating a static type IS strict decoding -/
 
-/-- A static component never advances the tail frontier. -/
-theorem validateElem_static_E (t : Ty) (hs : t.IsStatic = true) (buf : List UInt8)
-    (off E E' : Nat) (h : validateElem t buf off E = some E') : E' = E := by
-  rw [validateElem_static t _ _ _ hs] at h
-  cases hv : validate t (buf.drop off) with
-  | none => simp only [hv] at h; contradiction
-  | some _ =>
-      simp only [hv] at h
-      exact (Option.some.inj h).symm
+mutual
+/-- **Static delegation**: for a static type, canonical validation succeeds
+exactly when the lenient decoder does, consuming exactly the head size.
+Atoms hold by definition of `validate`; the walkers extend the fact through
+static containers, where the frontier never moves. -/
+theorem validate_static (t : Ty) (hs : t.IsStatic = true) (buf : List UInt8) :
+    validate t buf = (decode t buf).map fun _ => t.headSize := by
+  cases t with
+  | uint _ | int _ | bool | address | bytesN _ => rw [validate]; rfl
+  | bytes | string | array _ => simp [IsStatic] at hs
+  | fixedArray t n =>
+      have hst : t.IsStatic = true := by simpa [IsStatic] using hs
+      rw [validate, decode, show (Ty.fixedArray t n).headSize = n * t.headSize by
+        simp [headSize, hst]]
+      exact validateElems_static t hst n buf 0 (n * t.headSize)
+  | tuple ts =>
+      have hss : allStatic ts = true := by simpa [IsStatic] using hs
+      rw [validate, decode, show (Ty.tuple ts).headSize = headSizeSum ts by
+        simp [headSize, hss]]
+      exact validateTuple_static ts hss buf 0 (headSizeSum ts)
+termination_by 8 * sizeOf t
 
-/-- A run of static elements never advances the tail frontier. -/
-theorem validateElems_static_E (t : Ty) (hs : t.IsStatic = true) (k : Nat)
-    (buf : List UInt8) (off E E' : Nat)
-    (h : validateElems t k buf off E = some E') : E' = E := by
-  induction k generalizing off E with
-  | zero =>
-      simp only [validateElems] at h
-      exact (Option.some.inj h).symm
+/-- Static element runs validate in lockstep with the decoder, keeping the
+frontier. -/
+theorem validateElems_static (t : Ty) (hs : t.IsStatic = true) (k : Nat)
+    (buf : List UInt8) (off E : Nat) :
+    validateElems t k buf off E = (decodeElems t k buf off).map fun _ => E := by
+  induction k generalizing off with
+  | zero => rw [validateElems, decodeElems]; rfl
   | succ k ih =>
-      simp only [validateElems] at h
-      cases he : validateElem t buf off E with
-      | none => simp only [he] at h; contradiction
-      | some E₁ =>
-          simp only [he] at h
-          have hE₁ : E₁ = E := validateElem_static_E t hs buf off E E₁ he
-          subst hE₁
-          exact ih _ _ h
+      rw [validateElems, decodeElems, validateElem_static t _ _ _ hs,
+        readElem_static t _ _ hs, validate_static t hs (buf.drop off)]
+      cases decode t (buf.drop off) with
+      | none => rfl
+      | some v =>
+          simp only [Option.map_some]
+          rw [ih (off + t.headSize)]
+          cases decodeElems t k buf (off + t.headSize) with
+          | none => rfl
+          | some vs => rfl
+termination_by 8 * sizeOf t + 1
 
-/-- A run of static tuple components never advances the tail frontier. -/
-theorem validateTuple_static_E : (ts : List Ty) → allStatic ts = true →
-    (buf : List UInt8) → (off E E' : Nat) →
-    validateTuple ts buf off E = some E' → E' = E
-  | [], _, _, _, _, _, h => by
-      simp only [validateTuple] at h
-      exact (Option.some.inj h).symm
-  | t :: ts, hall, buf, off, E, E', h => by
+/-- Static tuple walks validate in lockstep with the decoder, keeping the
+frontier. -/
+theorem validateTuple_static : (ts : List Ty) → allStatic ts = true →
+    (buf : List UInt8) → (off E : Nat) →
+    validateTuple ts buf off E = (decodeTuple ts buf off).map fun _ => E
+  | [], _, _, _, _ => by rw [validateTuple, decodeTuple]; rfl
+  | t :: ts, hall, buf, off, E => by
       simp only [allStatic] at hall
       rw [Bool.and_eq_true] at hall
       obtain ⟨hst, hss⟩ := hall
-      simp only [validateTuple] at h
-      cases he : validateElem t buf off E with
-      | none => simp only [he] at h; contradiction
-      | some E₁ =>
-          simp only [he] at h
-          have hE₁ : E₁ = E := validateElem_static_E t hst buf off E E₁ he
-          subst hE₁
-          exact validateTuple_static_E ts hss buf (off + t.headSize) E₁ E' h
+      rw [validateTuple, decodeTuple, validateElem_static t _ _ _ hst,
+        readElem_static t _ _ hst, validate_static t hst (buf.drop off)]
+      cases decode t (buf.drop off) with
+      | none => rfl
+      | some v =>
+          simp only [Option.map_some]
+          rw [validateTuple_static ts hss buf (off + t.headSize) E]
+          cases decodeTuple ts buf (off + t.headSize) with
+          | none => rfl
+          | some vs => rfl
+termination_by ts => 8 * sizeOf ts + 2
+end
 
 /-- A static type's validator consumes exactly its head size. -/
 theorem validate_static_len (t : Ty) (hs : t.IsStatic = true) (buf : List UInt8) (n : Nat)
     (h : validate t buf = some n) : n = t.headSize := by
-  cases t with
-  | uint _ | int _ | bool | address | bytesN _ =>
-      rw [validate] at h
-      rcases Option.map_eq_some_iff.mp h with ⟨_, _, hn⟩
-      simp [headSize, hn]
-  | bytes | string | array _ => simp [IsStatic] at hs
-  | fixedArray t n' =>
-      have hst : t.IsStatic = true := by simpa [IsStatic] using hs
-      simp only [validate] at h
-      have : n = n' * t.headSize := validateElems_static_E t hst n' buf 0 _ n h
-      rw [this]
-      simp [headSize, if_pos hst]
-  | tuple ts =>
-      have hss : allStatic ts = true := by simpa [IsStatic] using hs
-      simp only [validate] at h
-      have : n = headSizeSum ts := validateTuple_static_E ts hss buf 0 _ n h
-      rw [this]
-      simp [headSize, if_pos hss]
+  rw [validate_static t hs] at h
+  obtain ⟨_, _, hn⟩ := Option.map_eq_some_iff.mp h
+  exact hn.symm
 
 /-- The tail size of a static component's part is zero. -/
 theorem tailSize_partOf_static (t : Ty) (v : t.Val) (h : t.IsStatic = true) :
@@ -327,13 +314,27 @@ theorem tailSize_partOf_dynamic (t : Ty) (v : t.Val) (h : t.IsStatic = false) :
   rw [partOf_dynamic t v h]
   rfl
 
+/-- The frontier invariant is preserved by extending the head prefix: a part
+advances the expected tail position by its own tail size — zero for a static
+component, its encoding length for a dynamic one. -/
+theorem tailOffset_snoc (p : Part) (xs zs : List Part) (E : Nat)
+    (hE : E = tailOffset (xs ++ p :: zs) xs.length) :
+    E + p.tailSize = tailOffset (xs ++ p :: zs) (xs ++ [p]).length := by
+  have hll : (xs ++ [p]).length = xs.length + 1 := by simp [List.length_append]
+  rw [hll, tailOffset_succ _ xs p zs rfl, hE]
+
 /-! ## Package C1: canonical completeness -/
 
 /- Every encoding validates, consuming exactly its own length — the checker
 accepts everything the encoder produces.  The walker lemmas thread the
 frontier invariant `E = tailOffset ps xs.length` (the tail offset of the
 current part) and advance it exactly along the tails, mirroring Package D
-of `EvmAbi.Codec`. -/
+of `EvmAbi.Codec`.
+
+The per-component step is `validateElem_encode_append`: one component
+validates at its head slot and advances the frontier by `(partOf t v).tailSize`
+— zero for a static component, its encoding length for a dynamic one — which
+is why the walkers need no static/dynamic split of their own. -/
 
 mutual
 /-- **Canonical completeness, prefix form**: the encoding of every value
@@ -344,36 +345,10 @@ theorem validate_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBoun
     (rest : List UInt8) (hb : (encode t v ++ rest).length < 2 ^ 256) :
     validate t (encode t v ++ rest) = some (encode t v).length := by
   cases t with
-  | uint m =>
-      obtain ⟨n, hn⟩ := v
-      have hdec : decodeUint (encodeUint n ++ rest) = some n :=
-        decodeUint_append n rest
-          (Nat.lt_of_lt_of_le hn (Nat.pow_le_pow_right (n := 2) (by decide) hv.2.1))
-      simp only [validate, encode, decode, hdec, dif_pos hn, Option.map_some,
-        length_encodeUint]
-  | int m =>
-      obtain ⟨i, hi⟩ := v
-      have h0 : 0 < m := by have h8 := hv.1; omega
-      have hdec : decodeInt (encodeInt i ++ rest) = some i :=
-        decodeInt_append h0 hv.2.1 hi.1 hi.2 rest
-      simp only [validate, encode, decode, hdec, dif_pos hi, Option.map_some]
-      simp [encodeInt, length_encodeUint]
-  | bool =>
-      have hdec := decodeBool_append v rest
-      simp only [validate, encode, decode, hdec, Option.map_some]
-      simp [encodeBool, length_encodeUint]
-  | address =>
-      obtain ⟨n, hn⟩ := v
-      have hdec : decodeAddress (encodeAddress n ++ rest) = some n :=
-        decodeAddress_append n rest hn
-      simp only [validate, encode, decode, hdec, dif_pos hn, Option.map_some]
-      simp [encodeAddress, length_encodeUint]
-  | bytesN m =>
-      obtain ⟨bs, hbs⟩ := v
-      have hdec : decodeBytesN m (encodeBytesN bs ++ rest) = some bs :=
-        decodeBytesN_append hv.2 hbs rest
-      simp only [validate, encode, decode, hdec, dif_pos hbs, Option.map_some]
-      rw [length_encodeBytesN (by rw [hbs]; exact hv.2)]
+  | uint _ | int _ | bool | address | bytesN _ =>
+      rw [validate, decode_encode_append_static _ rfl hv v rest, Option.map_some,
+        encode_length_static _ rfl hv v]
+      rfl
   | bytes =>
       have hlb : v.length < 2 ^ 256 := by simpa [LenBound] using hl
       have hr := decodeBytesPrefix_append (bs := v) (rest := rest) hlb
@@ -443,6 +418,34 @@ theorem validate_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBoun
       rw [length_encodeParts, headSizes_partsOfTuple_any ts hvts v]
 termination_by 8 * sizeOf t
 
+/-- **The per-component completeness step**: one component validates at its
+head slot and advances the frontier by exactly its own tail size.  For a
+dynamic component this is where the canonical-layout check bites: its offset
+word holds the frontier value `E`, so the `o = expectedTail` test passes. -/
+theorem validateElem_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
+    (xs zs : List Part) (off : Nat) (hoff : off = headSizes xs)
+    (E : Nat) (hE : E = tailOffset (xs ++ partOf t v :: zs) xs.length)
+    (rest : List UInt8)
+    (hwf : WF (xs ++ partOf t v :: zs))
+    (hb : (encodeParts (xs ++ partOf t v :: zs) ++ rest).length < 2 ^ 256) :
+    validateElem t (encodeParts (xs ++ partOf t v :: zs) ++ rest) off E =
+      some (E + (partOf t v).tailSize) := by
+  cases hs : t.IsStatic
+  · have heq := drop_tail_partOf_dynamic t v hs xs zs rest
+    rw [validateElem_dynamic t _ _ _ hs, show off / 32 = headSizes xs / 32 by rw [hoff],
+      natAt_offset_partOf_dynamic t v hs xs zs rest hwf hb]
+    dsimp only
+    rw [if_pos hE.symm, heq,
+      validate_encode_append t hv v hl _ (by rw [← heq, List.length_drop]; omega)]
+    dsimp only
+    rw [tailSize_partOf_dynamic t v hs, hE]
+  · have heq := drop_head_partOf_static t hs v xs zs rest off hoff
+    rw [validateElem_static t _ _ _ hs, heq,
+      validate_encode_append t hv v hl _ (by rw [← heq, List.length_drop]; omega)]
+    dsimp only
+    rw [tailSize_partOf_static t v hs, Nat.add_zero]
+termination_by 8 * sizeOf t + 1
+
 /-- Element lists validate from their own encoding inside a larger
 head/tail layout, the frontier advancing exactly along the tails. -/
 theorem validateElems_encode_append (t : Ty) (hv : t.Valid) (vs : List t.Val) (k : Nat)
@@ -472,59 +475,15 @@ theorem validateElems_encode_append (t : Ty) (hv : t.Valid) (vs : List t.Val) (k
       have hwf' : WF (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) := by rwa [← hre]
       have hb' : (encodeParts (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) ++ rest).length <
           2 ^ 256 := by rwa [← hre]
-      by_cases hs : t.IsStatic
-      · rw [validateElem_static t _ _ _ hs]
-        rw [drop_head_partOf_static t hs w xs (ws.map (partOf t) ++ ys) rest off hoff]
-        rw [validate_encode_append t hv w hlw _
-          (by
-            have heq := drop_head_partOf_static t hs w xs (ws.map (partOf t) ++ ys) rest off hoff
-            rw [← heq, List.length_drop]
-            omega)]
-        dsimp only
-        have hoff' : off + t.headSize = headSizes (xs ++ [partOf t w]) := by
-          rw [hoff, headSizes_append]
-          simp only [headSizes, partOf_static t w hs, Part.headSize]
-          rw [encode_length_static t hs hv w]
-          omega
-        have hE' : E = tailOffset (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys)
-            (xs ++ [partOf t w]).length := by
-          have hll : (xs ++ [partOf t w]).length = xs.length + 1 := by simp [List.length_append]
-          rw [hll, tailOffset_succ _ _ _ _ hre.symm, tailSize_partOf_static t w hs,
-            Nat.add_zero, ← hre]
-          exact hE
-        rw [hre] at hE ⊢
-        rw [ih (ws.length) rfl hlsw (xs ++ [partOf t w]) (off + t.headSize) hoff' E hE' hwf' hb']
-        simp only [tailSizes, tailSize_partOf_static t w hs, Nat.zero_add]
-      · have hsf : t.IsStatic = false := by simp at hs; exact hs
-        rw [validateElem_dynamic t _ _ _ hsf]
-        rw [show off / 32 = headSizes xs / 32 by rw [hoff]]
-        rw [natAt_offset_partOf_dynamic t w hsf xs (ws.map (partOf t) ++ ys) rest hwf hb]
-        dsimp only
-        rw [if_pos hE.symm]
-        rw [drop_tail_partOf_dynamic t w hsf xs (ws.map (partOf t) ++ ys) rest]
-        rw [validate_encode_append t hv w hlw _
-          (by
-            have heq := drop_tail_partOf_dynamic t w hsf xs (ws.map (partOf t) ++ ys) rest
-            rw [← heq, List.length_drop]
-            omega)]
-        dsimp only
-        have hoff' : off + t.headSize = headSizes (xs ++ [partOf t w]) := by
-          rw [hoff, headSizes_append]
-          simp only [headSizes, partOf_dynamic t w hsf, Part.headSize]
-          rw [headSize_of_dynamic t hsf]
-        have hE' : tailOffset (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) xs.length +
-            (encode t w).length =
-            tailOffset (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys)
-              (xs ++ [partOf t w]).length := by
-          have hll : (xs ++ [partOf t w]).length = xs.length + 1 := by simp [List.length_append]
-          rw [hll, tailOffset_succ _ _ _ _ hre.symm, tailSize_partOf_dynamic t w hsf]
-        rw [hre] at hE ⊢
-        rw [ih (ws.length) rfl hlsw (xs ++ [partOf t w]) (off + t.headSize) hoff' _ hE' hwf' hb']
-        simp only [tailSizes, tailSize_partOf_dynamic t w hsf]
-        rw [hE]
-        congr 1
-        omega
-termination_by 8 * sizeOf t + 1
+      have hE' := tailOffset_snoc (partOf t w) xs (ws.map (partOf t) ++ ys) E hE
+      rw [validateElem_encode_append t hv w hlw xs (ws.map (partOf t) ++ ys) off hoff E hE
+        rest hwf hb]
+      dsimp only
+      rw [hre] at hE' ⊢
+      rw [ih (ws.length) rfl hlsw (xs ++ [partOf t w]) (off + t.headSize)
+        (headSizes_snoc_partOf t hv w xs off hoff) (E + (partOf t w).tailSize) hE' hwf' hb']
+      simp only [tailSizes, Nat.add_assoc]
+termination_by 8 * sizeOf t + 2
 
 /-- Tuples validate from their own encoding inside a larger head/tail
 layout, the frontier advancing exactly along the tails. -/
@@ -550,61 +509,15 @@ theorem validateTuple_encode_append : (ts : List Ty) → AllValid ts → (vs : T
       have hwf' : WF (((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys) := by rwa [← hre]
       have hb' : (encodeParts (((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys) ++ rest).length <
           2 ^ 256 := by rwa [← hre]
-      by_cases hs : t.IsStatic
-      · rw [validateElem_static t _ _ _ hs]
-        rw [drop_head_partOf_static t hs v xs (partsOfTuple ts vs ++ ys) rest off hoff]
-        rw [validate_encode_append t hvt v hlv _
-          (by
-            have heq := drop_head_partOf_static t hs v xs (partsOfTuple ts vs ++ ys) rest off hoff
-            rw [← heq, List.length_drop]
-            omega)]
-        dsimp only
-        have hoff' : off + t.headSize = headSizes (xs ++ [partOf t v]) := by
-          rw [hoff, headSizes_append]
-          simp only [headSizes, partOf_static t v hs, Part.headSize]
-          rw [encode_length_static t hs hvt v]
-          omega
-        have hE' : E = tailOffset (((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys)
-            (xs ++ [partOf t v]).length := by
-          have hll : (xs ++ [partOf t v]).length = xs.length + 1 := by simp [List.length_append]
-          rw [hll, tailOffset_succ _ _ _ _ hre.symm, tailSize_partOf_static t v hs,
-            Nat.add_zero, ← hre]
-          exact hE
-        rw [hre] at hE ⊢
-        rw [validateTuple_encode_append ts hvs vs hlvs (xs ++ [partOf t v]) ys (off + t.headSize)
-          hoff' E hE' rest hwf' hb']
-        simp only [tailSizes, tailSize_partOf_static t v hs, Nat.zero_add]
-      · have hsf : t.IsStatic = false := by simp at hs; exact hs
-        rw [validateElem_dynamic t _ _ _ hsf]
-        rw [show off / 32 = headSizes xs / 32 by rw [hoff]]
-        rw [natAt_offset_partOf_dynamic t v hsf xs (partsOfTuple ts vs ++ ys) rest hwf hb]
-        dsimp only
-        rw [if_pos hE.symm]
-        rw [drop_tail_partOf_dynamic t v hsf xs (partsOfTuple ts vs ++ ys) rest]
-        rw [validate_encode_append t hvt v hlv _
-          (by
-            have heq := drop_tail_partOf_dynamic t v hsf xs (partsOfTuple ts vs ++ ys) rest
-            rw [← heq, List.length_drop]
-            omega)]
-        dsimp only
-        have hoff' : off + t.headSize = headSizes (xs ++ [partOf t v]) := by
-          rw [hoff, headSizes_append]
-          simp only [headSizes, partOf_dynamic t v hsf, Part.headSize]
-          rw [headSize_of_dynamic t hsf]
-        have hE' : tailOffset (((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys) xs.length +
-            (encode t v).length =
-            tailOffset (((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys)
-              (xs ++ [partOf t v]).length := by
-          have hll : (xs ++ [partOf t v]).length = xs.length + 1 := by simp [List.length_append]
-          rw [hll, tailOffset_succ _ _ _ _ hre.symm, tailSize_partOf_dynamic t v hsf]
-        rw [hre] at hE ⊢
-        rw [validateTuple_encode_append ts hvs vs hlvs (xs ++ [partOf t v]) ys (off + t.headSize)
-          hoff' _ hE' rest hwf' hb']
-        simp only [tailSizes, tailSize_partOf_dynamic t v hsf]
-        rw [hE]
-        congr 1
-        omega
-termination_by ts => 8 * sizeOf ts + 2
+      have hE' := tailOffset_snoc (partOf t v) xs (partsOfTuple ts vs ++ ys) E hE
+      rw [validateElem_encode_append t hvt v hlv xs (partsOfTuple ts vs ++ ys) off hoff E hE
+        rest hwf hb]
+      dsimp only
+      rw [hre] at hE' ⊢
+      rw [validateTuple_encode_append ts hvs vs hlvs (xs ++ [partOf t v]) ys (off + t.headSize)
+        (headSizes_snoc_partOf t hvt v xs off hoff) (E + (partOf t v).tailSize) hE' rest hwf' hb']
+      simp only [tailSizes, Nat.add_assoc]
+termination_by ts => 8 * sizeOf ts + 3
 end
 
 /-! ## Package C2: lenient decoding is complete on canonical input -/
@@ -623,12 +536,9 @@ theorem validate_decode (t : Ty) (buf : List UInt8) (n : Nat)
       obtain ⟨v, hv, _⟩ := Option.map_eq_some_iff.mp h
       exact ⟨v, hv⟩
   | bytes =>
-      simp only [validate] at h
-      cases hp : decodeBytesPrefix buf with
-      | none => simp only [hp] at h; contradiction
-      | some p =>
-          obtain ⟨bs, m⟩ := p
-          exact ⟨bs, by simp only [decode, hp, Option.map_some]⟩
+      rw [validate] at h
+      obtain ⟨p, hp, _⟩ := Option.map_eq_some_iff.mp h
+      exact ⟨p.1, by simp only [decode, hp, Option.map_some]⟩
   | string =>
       simp only [validate] at h
       cases hp : decodeBytesPrefix buf with
@@ -726,6 +636,17 @@ termination_by ts => 8 * sizeOf ts + 3
 end
 
 /-! ## Package C3: canonical soundness -/
+
+/- A buffer that validates and decodes to `v` has `encode t v` as its consumed
+prefix — the checker is not too lenient.  The walkers work segment-wise: the
+head slice is `encodeHeads`, the frontier slice is `encodeTails`, and the
+frontier lands where the tail sizes say it should.
+
+The per-component step is `segments_of_validateElem`.  Its head conclusion is
+quantified over the remaining parts because a dynamic part's `head` is empty —
+the offset word is synthesized by `encodeHeads`, not stored in the `Part` — so
+the only statement covering both cases is the `encodeHeads` equation itself,
+which also threads the advanced frontier to the rest of the head. -/
 
 /-- `decodeBool` succeeds exactly on the canonical boolean words. -/
 theorem decodeBool_eq_some_iff (buf : List UInt8) (b : Bool) :
@@ -933,10 +854,8 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
               obtain ⟨htake, hlen⟩ := take_eq_encodeBytes_of_decodeBytesPrefix buf bs m' hp
               have hutf : s.toUTF8 = bs.toByteArray := toUTF8_of_fromUTF8? hs
               have hbs : bs = s.toUTF8.data.toList := by
-                have h1 : s.toUTF8.data.toList = bs := by
-                  rw [hutf]
-                  simp [List.data_toByteArray]
-                exact h1.symm
+                rw [hutf]
+                simp [List.data_toByteArray]
               rw [hbs] at htake hlen
               simp only [encode, encodeString]
               exact ⟨htake, hlen⟩
@@ -1029,6 +948,68 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
         rw [length_encodeParts, hE₀]
 termination_by 8 * sizeOf t
 
+/-- **The per-component soundness step**: a component that validates at its
+head slot and decodes to `v` pins all three segments — its head slot holds
+exactly what `encodeHeads` writes for `partOf t v` (the inline encoding when
+static, the offset word `encodeUint E` when dynamic, in both cases handing
+the frontier `E₁` on to the remaining parts), the frontier slice holds its
+tail, and the frontier advanced by its tail size. -/
+theorem segments_of_validateElem (t : Ty) (hv : t.Valid) (buf : List UInt8)
+    (off E E₁ : Nat) (ho : 32 ∣ off)
+    (hval : validateElem t buf off E = some E₁)
+    (v : t.Val) (hd : readElem t buf off = some v) :
+    (∀ ps, encodeHeads E (partOf t v :: ps) =
+        (buf.drop off).take t.headSize ++ encodeHeads E₁ ps) ∧
+    (buf.drop E).take (E₁ - E) = (partOf t v).tail ∧
+    E₁ = E + (partOf t v).tailSize := by
+  cases hs : t.IsStatic
+  · rw [validateElem_dynamic t _ _ _ hs] at hval
+    cases hn : natAt buf (off / 32) with
+    | none => simp only [hn] at hval; contradiction
+    | some o =>
+        simp only [hn] at hval
+        by_cases hoE : o = E
+        · rw [if_pos hoE] at hval
+          cases hvn : validate t (buf.drop o) with
+          | none => simp only [hvn] at hval; contradiction
+          | some n₁ =>
+              simp only [hvn] at hval
+              have hE₁ : E₁ = o + n₁ := (Option.some.inj hval).symm
+              subst o
+              subst hE₁
+              rw [readElem_dynamic t _ _ hs] at hd
+              simp only [hn] at hd
+              obtain ⟨htake₁, hlen₁⟩ := encode_eq_take_of_validate t hv (buf.drop E) n₁ hvn v hd
+              have hword : (buf.drop off).take 32 = encodeUint E := by
+                have h1 := take_32_eq_encodeUint_of_natAt buf (off / 32) E hn
+                rwa [Nat.mul_div_cancel' ho] at h1
+              refine ⟨fun ps => ?_, ?_, ?_⟩
+              · rw [partOf_dynamic t v hs]
+                simp only [encodeHeads]
+                rw [headSize_of_dynamic t hs, hword, hlen₁]
+              · rw [Nat.add_sub_cancel_left, partOf_dynamic t v hs]
+                exact htake₁
+              · rw [tailSize_partOf_dynamic t v hs, hlen₁]
+        · rw [if_neg hoE] at hval; contradiction
+  · rw [validateElem_static t _ _ _ hs] at hval
+    cases hvn : validate t (buf.drop off) with
+    | none => simp only [hvn] at hval; contradiction
+    | some n₁ =>
+        simp only [hvn] at hval
+        have hE₁ : E = E₁ := Option.some.inj hval
+        subst hE₁
+        rw [readElem_static t _ _ hs] at hd
+        obtain ⟨htake₁, _⟩ := encode_eq_take_of_validate t hv (buf.drop off) n₁ hvn v hd
+        have hn₁ : n₁ = t.headSize := validate_static_len t hs _ _ hvn
+        subst hn₁
+        refine ⟨fun ps => ?_, ?_, ?_⟩
+        · rw [partOf_static t v hs]
+          simp only [encodeHeads]
+          rw [htake₁]
+        · rw [Nat.sub_self, List.take_zero, partOf_static t v hs]
+        · rw [tailSize_partOf_static t v hs, Nat.add_zero]
+termination_by 8 * sizeOf t + 1
+
 /-- Segment-wise soundness for element runs. -/
 theorem segments_of_validateElems (t : Ty) (hv : t.Valid) (k : Nat)
     (buf : List UInt8) (off E E' : Nat) (ho : 32 ∣ off)
@@ -1068,89 +1049,20 @@ theorem segments_of_validateElems (t : Ty) (hv : t.Valid) (k : Nat)
                   obtain ⟨hveq, hwseq⟩ := List.cons.inj hvw
                   subst hveq
                   subst hwseq
-                  by_cases hs : t.IsStatic
-                  · rw [validateElem_static t _ _ _ hs] at he
-                    cases hvn : validate t (buf.drop off) with
-                    | none => simp only [hvn] at he; contradiction
-                    | some n₁ =>
-                        simp only [hvn] at he
-                        have hE₁ : E = E₁ := Option.some.inj he
-                        subst hE₁
-                        rw [readElem_static t _ _ hs] at hr
-                        obtain ⟨htake₁, hlen₁⟩ :=
-                          encode_eq_take_of_validate t hv (buf.drop off) n₁ hvn v hr
-                        have hn₁ : n₁ = t.headSize := validate_static_len t hs _ _ hvn
-                        subst hn₁
-                        have ho' : 32 ∣ off + t.headSize :=
-                          aligned_add ho (dvd_headSize_static t hs)
-                        obtain ⟨hhead', htail', hfront'⟩ :=
-                          ih wsl.length (off + t.headSize) E ho' hval rfl hd'
-                        have hsplit : (wsl.length + 1) * t.headSize =
-                            t.headSize + wsl.length * t.headSize := by
-                          rw [Nat.add_mul, Nat.one_mul]
-                          omega
-                        refine ⟨?_, ?_, ?_⟩
-                        · rw [hsplit, List.take_add, List.drop_drop,
-                            htake₁, hhead', List.map_cons, partOf_static t v hs]
-                          rfl
-                        · rw [List.map_cons, partOf_static t v hs]
-                          exact htail'
-                        · rw [hfront', List.map_cons]
-                          simp only [tailSizes, tailSize_partOf_static t v hs, Nat.zero_add]
-                  · have hsf : t.IsStatic = false := by simp at hs; exact hs
-                    rw [validateElem_dynamic t _ _ _ hsf] at he
-                    cases hn : natAt buf (off / 32) with
-                    | none => simp only [hn] at he; contradiction
-                    | some o =>
-                        simp only [hn] at he
-                        by_cases hoE : o = E
-                        · rw [if_pos hoE] at he
-                          cases hvn : validate t (buf.drop o) with
-                          | none => simp only [hvn] at he; contradiction
-                          | some n₁ =>
-                              simp only [hvn] at he
-                              have hE₁ : E₁ = o + n₁ := (Option.some.inj he).symm
-                              subst o
-                              subst hE₁
-                              rw [readElem_dynamic t _ _ hsf] at hr
-                              simp only [hn] at hr
-                              obtain ⟨htake₁, hlen₁⟩ :=
-                                encode_eq_take_of_validate t hv (buf.drop E) n₁ hvn v hr
-                              have h32 : t.headSize = 32 := headSize_of_dynamic t hsf
-                              have ho' : 32 ∣ off + 32 := aligned_add ho ⟨1, rfl⟩
-                              rw [h32] at hval hd' ⊢
-                              obtain ⟨hhead', htail', hfront'⟩ :=
-                                ih wsl.length (off + 32) (E + n₁) ho' hval rfl hd'
-                              rw [h32] at hhead'
-                              have hsplit : (wsl.length + 1) * 32 =
-                                  32 + wsl.length * 32 := by omega
-                              have hword : (buf.drop off).take 32 = encodeUint E := by
-                                have h1 := take_32_eq_encodeUint_of_natAt buf (off / 32) E hn
-                                rw [Nat.mul_div_cancel' ho] at h1
-                                exact h1
-                              refine ⟨?_, ?_, ?_⟩
-                              · rw [hsplit, List.take_add, List.drop_drop,
-                                  hword, hhead', List.map_cons, partOf_dynamic t v hsf,
-                                  hlen₁]
-                                rfl
-                              · have hE'E : E' - E = n₁ + tailSizes (wsl.map (partOf t)) := by
-                                  omega
-                                have htail'' : (buf.drop (E + n₁)).take
-                                    (tailSizes (wsl.map (partOf t))) =
-                                    encodeTails (wsl.map (partOf t)) := by
-                                  have h1 : E' - (E + n₁) = tailSizes (wsl.map (partOf t)) := by
-                                    omega
-                                  rw [h1] at htail'
-                                  exact htail'
-                                rw [hE'E, List.take_add, List.drop_drop, htake₁, htail'',
-                                  List.map_cons, partOf_dynamic t v hsf]
-                                rfl
-                              · rw [hfront', List.map_cons]
-                                simp only [tailSizes, tailSize_partOf_dynamic t v hsf]
-                                rw [hlen₁]
-                                omega
-                        · rw [if_neg hoE] at he; contradiction
-termination_by 8 * sizeOf t + 1
+                  obtain ⟨hhw, htw, hfw⟩ := segments_of_validateElem t hv buf off E E₁ ho he v hr
+                  obtain ⟨hhead', htail', hfront'⟩ :=
+                    ih wsl.length (off + t.headSize) E₁ (aligned_add ho (dvd_headSize t))
+                      hval rfl hd'
+                  refine ⟨?_, ?_, ?_⟩
+                  · rw [show (wsl.length + 1) * t.headSize = t.headSize + wsl.length * t.headSize by
+                        rw [Nat.succ_mul]; omega,
+                      List.take_add, List.drop_drop, hhead', List.map_cons, hhw]
+                  · rw [List.map_cons, encodeTails_cons_partOf, ← htw, ← htail',
+                      take_split buf E E₁ E' (by omega) (by omega)]
+                  · rw [hfront', List.map_cons]
+                    simp only [tailSizes]
+                    omega
+termination_by 8 * sizeOf t + 2
 
 /-- Segment-wise soundness for tuple walks. -/
 theorem segments_of_validateTuple : (ts : List Ty) → AllValid ts →
@@ -1185,91 +1097,20 @@ theorem segments_of_validateTuple : (ts : List Ty) → AllValid ts →
                   injection hvw with hwe hve
                   subst w
                   subst vs'
-                  by_cases hs : t.IsStatic
-                  · rw [validateElem_static t _ _ _ hs] at he
-                    cases hvn : validate t (buf.drop off) with
-                    | none => simp only [hvn] at he; contradiction
-                    | some n₁ =>
-                        simp only [hvn] at he
-                        have hE₁ : E = E₁ := Option.some.inj he
-                        subst hE₁
-                        rw [readElem_static t _ _ hs] at hr
-                        obtain ⟨htake₁, hlen₁⟩ :=
-                          encode_eq_take_of_validate t hvt (buf.drop off) n₁ hvn v hr
-                        have hn₁ : n₁ = t.headSize := validate_static_len t hs _ _ hvn
-                        subst hn₁
-                        have ho' : 32 ∣ off + t.headSize :=
-                          aligned_add ho (dvd_headSize_static t hs)
-                        obtain ⟨hhead', htail', hfront'⟩ :=
-                          segments_of_validateTuple ts hvs buf (off + t.headSize) E E' ho'
-                            hval vs hd'
-                        refine ⟨?_, ?_, ?_⟩
-                        · simp only [headSizeSum]
-                          rw [List.take_add, List.drop_drop, htake₁, hhead']
-                          simp only [partsOfTuple]
-                          rw [partOf_static t v hs]
-                          rfl
-                        · simp only [partsOfTuple]
-                          rw [partOf_static t v hs]
-                          exact htail'
-                        · rw [hfront']
-                          simp only [partsOfTuple, tailSizes, tailSize_partOf_static t v hs,
-                            Nat.zero_add]
-                  · have hsf : t.IsStatic = false := by simp at hs; exact hs
-                    rw [validateElem_dynamic t _ _ _ hsf] at he
-                    cases hn : natAt buf (off / 32) with
-                    | none => simp only [hn] at he; contradiction
-                    | some o =>
-                        simp only [hn] at he
-                        by_cases hoE : o = E
-                        · rw [if_pos hoE] at he
-                          cases hvn : validate t (buf.drop o) with
-                          | none => simp only [hvn] at he; contradiction
-                          | some n₁ =>
-                              simp only [hvn] at he
-                              have hE₁ : E₁ = o + n₁ := (Option.some.inj he).symm
-                              subst o
-                              subst hE₁
-                              rw [readElem_dynamic t _ _ hsf] at hr
-                              simp only [hn] at hr
-                              obtain ⟨htake₁, hlen₁⟩ :=
-                                encode_eq_take_of_validate t hvt (buf.drop E) n₁ hvn v hr
-                              have h32 : t.headSize = 32 := headSize_of_dynamic t hsf
-                              have ho' : 32 ∣ off + 32 := aligned_add ho ⟨1, rfl⟩
-                              rw [h32] at hval hd'
-                              obtain ⟨hhead', htail', hfront'⟩ :=
-                                segments_of_validateTuple ts hvs buf (off + 32) (E + n₁) E' ho'
-                                  hval vs hd'
-                              have hword : (buf.drop off).take 32 = encodeUint E := by
-                                have h1 := take_32_eq_encodeUint_of_natAt buf (off / 32) E hn
-                                rw [Nat.mul_div_cancel' ho] at h1
-                                exact h1
-                              refine ⟨?_, ?_, ?_⟩
-                              · simp only [headSizeSum, h32]
-                                rw [List.take_add, List.drop_drop, hword, hhead']
-                                simp only [partsOfTuple]
-                                rw [partOf_dynamic t v hsf, hlen₁]
-                                rfl
-                              · have hE'E : E' - E =
-                                    n₁ + tailSizes (partsOfTuple ts vs) := by omega
-                                have htail'' : (buf.drop (E + n₁)).take
-                                    (tailSizes (partsOfTuple ts vs)) =
-                                    encodeTails (partsOfTuple ts vs) := by
-                                  have h1 : E' - (E + n₁) = tailSizes (partsOfTuple ts vs) := by
-                                    omega
-                                  rw [h1] at htail'
-                                  exact htail'
-                                rw [hE'E, List.take_add, List.drop_drop, htake₁, htail'']
-                                simp only [partsOfTuple]
-                                rw [partOf_dynamic t v hsf]
-                                rfl
-                              · rw [hfront']
-                                simp only [partsOfTuple, tailSizes,
-                                  tailSize_partOf_dynamic t v hsf]
-                                rw [hlen₁]
-                                omega
-                        · rw [if_neg hoE] at he; contradiction
-termination_by ts => 8 * sizeOf ts + 2
+                  obtain ⟨hhw, htw, hfw⟩ := segments_of_validateElem t hvt buf off E E₁ ho he v hr
+                  obtain ⟨hhead', htail', hfront'⟩ :=
+                    segments_of_validateTuple ts hvs buf (off + t.headSize) E₁ E'
+                      (aligned_add ho (dvd_headSize t)) hval vs hd'
+                  refine ⟨?_, ?_, ?_⟩
+                  · simp only [headSizeSum, partsOfTuple]
+                    rw [List.take_add, List.drop_drop, hhead', hhw]
+                  · simp only [partsOfTuple]
+                    rw [encodeTails_cons_partOf, ← htw, ← htail',
+                      take_split buf E E₁ E' (by omega) (by omega)]
+                  · rw [hfront']
+                    simp only [partsOfTuple, tailSizes]
+                    omega
+termination_by ts => 8 * sizeOf ts + 3
 end
 
 /-! ## corollaries -/

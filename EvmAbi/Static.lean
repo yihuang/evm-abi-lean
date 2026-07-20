@@ -39,11 +39,6 @@ theorem decodeUint_encodeUint (h : n < 2 ^ 256) :
   unfold decodeUint encodeUint
   rw [e, hn]
 
-/-- **Roundtrip for `uintM`**: the tighter bound `n < 2^M` suffices. -/
-theorem decodeUint_encodeUint_of_lt {M : Nat} (hM : M ≤ 256) (h : n < 2 ^ M) :
-    decodeUint (encodeUint n) = some n :=
-  decodeUint_encodeUint (Nat.lt_of_lt_of_le h (Nat.pow_le_pow_right (n := 2) (by decide) hM))
-
 /-! ## intM -/
 
 /-- Encode a signed integer as two's complement in a 32-byte word. -/
@@ -90,10 +85,6 @@ def decodeBool (buf : List UInt8) : Option Bool :=
   | some 1 => some true
   | _      => none
 
-/-- **Roundtrip** for `bool`. -/
-theorem decodeBool_encodeBool (b : Bool) : decodeBool (encodeBool b) = some b := by
-  cases b <;> native_decide
-
 /-! ## address -/
 
 /-- EVM `address`: a 160-bit value, encoded exactly like `uint160`
@@ -102,11 +93,6 @@ def encodeAddress (a : Nat) : List UInt8 := encodeUint a
 
 /-- Decode an address word. -/
 def decodeAddress (buf : List UInt8) : Option Nat := decodeUint buf
-
-/-- **Roundtrip** for `address`. -/
-theorem decodeAddress_encodeAddress (h : a < 2 ^ 160) :
-    decodeAddress (encodeAddress a) = some a :=
-  decodeUint_encodeUint_of_lt (M := 160) (by decide) h
 
 /-! ## bytesN -/
 
@@ -136,15 +122,5 @@ theorem decodeBytesN_length {n : Nat} {buf bs : List UInt8}
       subst h
       exact hc.1
   · contradiction
-
-/-- **Roundtrip** for `bytesN` (prefix-tolerant decoder). -/
-theorem decodeBytesN_encodeBytesN {n : Nat} (h32 : n ≤ 32) (h : bs.length = n) :
-    decodeBytesN n (encodeBytesN bs) = some bs := by
-  unfold decodeBytesN encodeBytesN
-  have hlen : (bs ++ List.replicate (32 - bs.length) 0).length = 32 := by
-    rw [List.length_append, List.length_replicate]; omega
-  have htk : (bs ++ List.replicate (32 - bs.length) 0).take 32 =
-      bs ++ List.replicate (32 - bs.length) 0 := List.take_of_length_le (by omega)
-  rw [htk, take_append_of_length h, drop_append_of_length h, if_pos ⟨h, by rw [h]⟩]
 
 end EvmAbi

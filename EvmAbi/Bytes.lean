@@ -37,10 +37,6 @@ theorem length_pad32 (bs : List UInt8) :
 theorem dvd_length_pad32 (bs : List UInt8) : 32 ∣ (pad32 bs).length := by
   rw [length_pad32]; omega
 
-/-- Padding only ever appends bytes. -/
-theorem length_le_length_pad32 (bs : List UInt8) : bs.length ≤ (pad32 bs).length := by
-  rw [length_pad32]; omega
-
 /-- The original bytes are the prefix of the padded buffer. -/
 theorem take_length_pad32 (bs : List UInt8) : (pad32 bs).take bs.length = bs := by
   simp [pad32]
@@ -49,11 +45,6 @@ theorem take_length_pad32 (bs : List UInt8) : (pad32 bs).take bs.length = bs := 
 theorem drop_length_pad32 (bs : List UInt8) :
     (pad32 bs).drop bs.length = List.replicate ((32 - bs.length % 32) % 32) 0 := by
   simp [pad32]
-
-/-- Padding an already aligned buffer does nothing. -/
-theorem pad32_eq_of_dvd (h : 32 ∣ bs.length) : pad32 bs = bs := by
-  have hz : (32 - bs.length % 32) % 32 = 0 := by omega
-  simp [pad32, hz]
 
 /-! ## Splitting into fixed-size chunks -/
 
