@@ -60,13 +60,4 @@ theorem natAt_append (buf rest : List UInt8) (w : UInt256) (i : Nat)
     natAt (buf ++ (bytesOfWord w ++ rest)) i = some w.toNat := by
   simp [natAt, wordAt_append buf rest w i h]
 
-/-- Reading past the end of a short buffer fails gracefully. -/
-theorem wordAt_none_of_short (buf : List UInt8) (i : Nat)
-    (h : buf.length < 32 * i + 32) :
-    wordAt buf i = none := by
-  unfold wordAt
-  have hn : ¬ (((buf.drop (32 * i)).take 32).length = 32) := by
-    rw [List.length_take, List.length_drop]; omega
-  rw [if_neg hn]
-
 end EvmAbi

@@ -29,14 +29,6 @@ open Binary
 /-- ABI encoding of dynamic `bytes`: the length word, then zero-padded data. -/
 def encodeBytes (bs : List UInt8) : List UInt8 := encodeUint bs.length ++ pad32 bs
 
-theorem length_encodeBytes (bs : List UInt8) :
-    (encodeBytes bs).length = 32 + (pad32 bs).length := by
-  simp [encodeBytes]
-
-theorem dvd_length_encodeBytes (bs : List UInt8) : 32 ∣ (encodeBytes bs).length := by
-  have hp := dvd_length_pad32 bs
-  rw [length_encodeBytes]; omega
-
 /-- Strict decoder: a length word, exactly `len` data bytes, then zero padding. -/
 def decodeBytes (buf : List UInt8) : Option (List UInt8) :=
   (natAt buf 0).bind fun len =>

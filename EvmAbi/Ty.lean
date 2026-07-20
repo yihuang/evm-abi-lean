@@ -93,14 +93,6 @@ theorem AllValid.forall_mem {ts : List Ty} (h : AllValid ts) : ∀ t ∈ ts, t.V
       | inl he => rw [he]; exact h.1
       | inr hm => exact ih h.2 t hm
 
-/-- Pointwise validity wraps into `AllValid`. -/
-theorem allValid_of_forall {ts : List Ty} (h : ∀ t ∈ ts, t.Valid) : AllValid ts := by
-  induction ts with
-  | nil => exact trivial
-  | cons u us ih =>
-      simp only [AllValid]
-      exact ⟨h u List.mem_cons_self, ih fun t ht => h t (List.mem_cons_of_mem u ht)⟩
-
 /- Decidability of validity, by mutual recursion on the type and the list. -/
 mutual
 /-- Decision procedure for `Valid`. -/
@@ -144,12 +136,6 @@ def allStatic : List Ty → Bool
   | t :: ts => t.IsStatic && allStatic ts
 end
 
-/-- `allStatic` is just `List.all` of `IsStatic`. -/
-theorem allStatic_eq_all (ts : List Ty) : allStatic ts = ts.all IsStatic := by
-  induction ts with
-  | nil => simp only [allStatic, List.all_nil]
-  | cons t ts ih => simp only [allStatic, List.all_cons, ← ih]
-
 /- The number of bytes a type occupies in the head section: for static
 types the full encoding size, for dynamic types the 32 bytes of the offset
 word.  `headSizeSum` is the structural list sibling. -/
@@ -165,13 +151,6 @@ def headSizeSum : List Ty → Nat
   | [] => 0
   | t :: ts => t.headSize + headSizeSum ts
 end
-
-/-- `headSizeSum` is the sum of the mapped `headSize`s. -/
-theorem headSizeSum_eq_sum_map (ts : List Ty) :
-    headSizeSum ts = (ts.map headSize).sum := by
-  induction ts with
-  | nil => simp only [headSizeSum, List.map_nil, List.sum_nil]
-  | cons t ts ih => simp only [headSizeSum, List.map_cons, List.sum_cons, ← ih]
 
 /-! ## The value family -/
 
