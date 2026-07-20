@@ -170,8 +170,8 @@ The proof is organized into five packages (A–E) in `Codec.lean`:
 |---|---|
 | A | Head sizes, static encoding lengths (`encode_length_static`) |
 | B | Alignment and well-formedness (`encode_length_aligned`, `wf_map_partOf`) |
-| C | **Static prefix roundtrip** — `decode_encode_append_static` for every static type, plus `decodeElems_static_append` and `decodeTuple_static_append` |
-| D | **Full prefix roundtrip** — `decode_encode_append`, `decodeElems_append`, `decodeTuple_append` for all types, dynamic elements included |
+| C | **Static prefix roundtrip** — `decode_encode_append_static` for every static type, plus the step `readElem_partOf_append_static` and the walkers `decodeElems_static_append` / `decodeTuple_static_append` |
+| D | **Full prefix roundtrip** — `decode_encode_append`, the step `readElem_partOf_append`, and the walkers `decodeElems_append` / `decodeTuple_append` for all types, dynamic elements included |
 | E | **Top-level roundtrip** — `roundtrip` derived from Package D by supplying `rest := []` |
 
 **Package C (static prefix)** is the first major milestone.  It proves that
@@ -186,6 +186,14 @@ using the Parts theorems `wordAt_offset_append` and
 `drop_tailOffset_append` to locate the data.  The proof is again by
 structural induction, now with the additional hypotheses `LenBound` (dynamic
 payload sizes) and `hb` (total buffer size < `2^256`).
+
+Both packages factor their per-component work into a *step* lemma
+(`readElem_partOf_append`, `readElem_partOf_append_static`) that the element
+and tuple walkers share.  The step owns the static/dynamic case split; the
+walkers only enumerate parts and advance the head offset via
+`headSizes_snoc_partOf`, which holds for static and dynamic components alike.
+`Canonical.lean` follows the same shape in packages C1 and C3
+(`validateElem_encode_append`, `segments_of_validateElem`).
 
 **Package E** instantiates the prefix roundtrip with an empty suffix,
 yielding the user-facing `roundtrip` theorem.
