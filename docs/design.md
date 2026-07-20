@@ -72,6 +72,16 @@ complete type grammar.
    decoding compound types: a component's encoding is embedded inside a
    larger buffer, and the decoder must not be confused by data that follows.
 
+6. **Canonical-layout validation.**  Beyond the lenient decoder, an
+   executable checker `validate` verifies that a buffer uses the strict ABI
+   layout (offsets contiguous, in order, immediately after the head) and
+   returns the number of bytes consumed.  The predicate `IsCanonical`
+   additionally rejects trailing garbage; `decodeCanonical` combines both
+   checks.  The C1–C3 theorem packages (`EvmAbi.Canonical`) prove
+   completeness (every `encode` validates), soundness (validating buffers
+   are precisely the image of `encode`), and a unified roundtrip for the
+   strict decoder.
+
 ## 3. Core Design
 
 ### 3.1 Type Universe (`Ty.lean`)
@@ -262,15 +272,7 @@ smaller values, and the `decreasing_tactic` discharges every goal.
 
 ## 6. Future Work
 
-### 6.1 Canonical Encoding
-
-The current decoder is *lenient*: it accepts encodings that may contain
-non-canonical padding or redundant zero bytes in the tail.  An
-`IsCanonical` predicate could be added to validate that every produced
-encoding is canonical, and that the lenient decoder on canonical input
-is complete (no false rejections).
-
-### 6.2 ByteArray Interface
+### ByteArray Interface
 
 The library works entirely with `List UInt8` for proofs and `ByteArray`
 only at the I/O boundary.  A future layer could lift the roundtrip theorem

@@ -1,6 +1,7 @@
 name = "abi-lean"
 version = "0.1.0"
 defaultTargets = ["EvmAbi"]
+testDriver = "Tests"
 
 [[lean_lib]]
 name = "EvmAbi"

@@ -7,6 +7,7 @@ import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.StaticArray
 import EvmAbi.Parts
+import EvmAbi.Canonical
 
 /-!
 # Tests
@@ -322,5 +323,95 @@ def specGBytes : List UInt8 :=
   encodeUint 5 ++ [0x74, 0x68, 0x72, 0x65, 0x65] ++ List.replicate 27 0
 
 example : encode specGTy specGVal = specGBytes := by native_decide
+
+/-! ## Canonical validation (node 8 strictness): positive vectors -/
+
+-- the spec encodings validate, consuming exactly their length
+example : validate specSamTy specSamBytes = some specSamBytes.length := by native_decide
+example : validate specFTy specFBytes = some specFBytes.length := by native_decide
+example : validate specGTy specGBytes = some specGBytes.length := by native_decide
+
+-- and are strictly decodable (checked via `.isSome` since the dependent
+-- return type has no `DecidableEq` instance)
+example : (decodeCanonical specSamTy specSamBytes).isSome = true := by native_decide
+example : (decodeCanonical specFTy specFBytes).isSome = true := by native_decide
+example : (decodeCanonical specGTy specGBytes).isSome = true := by native_decide
+
+/-- `sam`'s length bound, factored out for the library-theorem tests. -/
+theorem specSamLenBound : LenBound specSamTy specSamVal := by
+  simp only [specSamTy, specSamVal, LenBound]
+  repeat first
+    | rw [Ty.TupleLenBounds.eq_2]
+    | rw [Ty.TupleLenBounds.eq_1]
+    | rw [Ty.AllLenBound.eq_2]
+    | rw [Ty.AllLenBound.eq_1]
+  simp only [Ty.LenBound]
+  repeat first
+    | rw [Ty.AllLenBound.eq_2]
+    | rw [Ty.AllLenBound.eq_1]
+  simp only [Ty.LenBound]
+  decide
+
+-- the same instances via library theorems (no computation)
+
+example : IsCanonical specSamTy (encode specSamTy specSamVal) :=
+  isCanonical_encode specSamTy (by native_decide) specSamVal specSamLenBound (by native_decide)
+
+example : decodeCanonical specSamTy (encode specSamTy specSamVal) = some specSamVal :=
+  decodeCanonical_encode specSamTy (by native_decide) specSamVal specSamLenBound
+    (by native_decide)
+
+/-- **Canonical uniqueness** (computational): re-encoding the decoded value
+gives the original buffer back. -/
+example : encode specFTy specFVal = specFBytes := by native_decide
+
+/-! ## Canonical validation: negative vectors -/
+
+/-- Demo type `(bytes, bytes)`: two dynamic components. -/
+def ncTy : Ty := .tuple [.bytes, .bytes]
+
+/-- Two dynamic components sharing one tail (duplicate offset). -/
+def ncSharedTail : List UInt8 :=
+  encodeUint 0x40 ++ encodeUint 0x40 ++ encodeBytes [1]
+
+/-- Tails swapped relative to the component order. -/
+def ncSwapped : List UInt8 :=
+  encodeUint 0x80 ++ encodeUint 0x40 ++ encodeBytes [2] ++ encodeBytes [1]
+
+/-- A 32-byte gap between the head section and the first tail. -/
+def ncGap : List UInt8 :=
+  encodeUint 0x60 ++ encodeUint 0xA0 ++ encodeUint 0 ++ encodeBytes [1] ++ encodeBytes [2]
+
+/-- An offset pointing back into the head section. -/
+def ncIntoHead : List UInt8 :=
+  encodeUint 0x20 ++ encodeUint 0x40 ++ encodeBytes [1] ++ encodeBytes [2]
+
+/-- A misaligned offset. -/
+def ncMisaligned : List UInt8 :=
+  encodeUint 0x41 ++ encodeUint 0x80 ++ encodeBytes [1] ++ encodeBytes [2]
+
+-- the lenient decoder accepts all of these (the leniency gap)
+example : (decode ncTy ncSharedTail).isSome = true := by native_decide
+example : (decode ncTy ncSwapped).isSome = true := by native_decide
+example : (decode ncTy ncGap).isSome = true := by native_decide
+example : (decode ncTy ncIntoHead).isSome = true := by native_decide
+
+-- the canonical validator and the strict decoder reject all of them
+example : validate ncTy ncSharedTail = none := by native_decide
+example : validate ncTy ncSwapped = none := by native_decide
+example : validate ncTy ncGap = none := by native_decide
+example : validate ncTy ncIntoHead = none := by native_decide
+example : validate ncTy ncMisaligned = none := by native_decide
+example : (decodeCanonical ncTy ncSharedTail).isNone = true := by native_decide
+example : (decodeCanonical ncTy ncSwapped).isNone = true := by native_decide
+example : (decodeCanonical ncTy ncGap).isNone = true := by native_decide
+example : (decodeCanonical ncTy ncIntoHead).isNone = true := by native_decide
+example : (decodeCanonical ncTy ncMisaligned).isNone = true := by native_decide
+
+-- trailing garbage: the prefix validator accepts (reporting the canonical
+-- prefix length), but the strict decoder rejects it
+example : validate specSamTy (specSamBytes ++ [0]) = some specSamBytes.length := by
+  native_decide
+example : (decodeCanonical specSamTy (specSamBytes ++ [0])).isNone = true := by native_decide
 
 end EvmAbi
