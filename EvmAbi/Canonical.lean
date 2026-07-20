@@ -297,37 +297,11 @@ theorem validateTuple_static_E : (ts : List Ty) → allStatic ts = true →
 theorem validate_static_len (t : Ty) (hs : t.IsStatic = true) (buf : List UInt8) (n : Nat)
     (h : validate t buf = some n) : n = t.headSize := by
   cases t with
-  | uint m =>
-      simp [headSize] at *
-      simp [validate] at h
-      cases hdu : decodeUint buf with
-      | none => simp [hdu] at h
-      | some x => simp [hdu] at h; simp [h]
-  | int m =>
-      simp [headSize] at *
-      simp [validate] at h
-      cases hdi : decodeInt buf with
-      | none => simp [hdi] at h
-      | some i => simp [hdi] at h; omega
-  | bool =>
-      simp [headSize] at *
-      simp [validate] at h
-      split at h <;> simp at h <;> omega
-  | address =>
-      simp [headSize] at *
-      simp [validate] at h
-      cases hda : decodeAddress buf with
-      | none => simp [hda] at h
-      | some x => simp [hda] at h; omega
-  | bytesN m =>
-      simp [headSize] at *
-      simp [validate] at h
-      cases hdb : decodeBytesN m buf with
-      | none => simp [hdb] at h
-      | some bs => simp [hdb] at h; omega
-  | bytes => simp [IsStatic] at hs
-  | string => simp [IsStatic] at hs
-  | array t => simp [IsStatic] at hs
+  | uint _ | int _ | bool | address | bytesN _ =>
+      rw [validate] at h
+      rcases Option.map_eq_some_iff.mp h with ⟨_, _, hn⟩
+      simp [headSize, hn]
+  | bytes | string | array _ => simp [IsStatic] at hs
   | fixedArray t n' =>
       have hst : t.IsStatic = true := by simpa [IsStatic] using hs
       simp only [validate] at h
