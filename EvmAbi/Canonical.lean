@@ -155,36 +155,21 @@ mutual
 /-- Canonical-layout validator (type-indexed, prefix form): the front of
 `buf` is checked to be a canonical encoding of some value of type `t`;
 on success the number of bytes consumed is returned. -/
-def validate : (t : Ty) → List UInt8 → Option Nat
-  | .uint m, buf => match decodeUint buf with
-    | some n => if n < 2 ^ m then some 32 else none
-    | none => none
-  | .int m, buf => match decodeInt buf with
-    | some i => if -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int) then
-        some 32
-      else none
-    | none => none
-  | .bool, buf => match decodeBool buf with
-    | some _ => some 32
-    | none => none
-  | .address, buf => match decodeAddress buf with
-    | some n => if n < 2 ^ 160 then some 32 else none
-    | none => none
-  | .bytesN m, buf => match decodeBytesN m buf with
-    | some _ => some 32
-    | none => none
-  | .bytes, buf => (decodeBytesPrefix buf).map Prod.snd
-  | .string, buf => match decodeBytesPrefix buf with
+def validate (t : Ty) (buf : List UInt8) : Option Nat :=
+  match t with
+  | .uint _ | .int _ | .bool | .address | .bytesN _ => (decode t buf).map fun _ => 32
+  | .bytes => (decodeBytesPrefix buf).map Prod.snd
+  | .string => match decodeBytesPrefix buf with
     | some (bs, n) => match String.fromUTF8? bs.toByteArray with
       | some _ => some n
       | none => none
     | none => none
-  | .array t, buf => match natAt buf 0 with
+  | .array t => match natAt buf 0 with
     | none => none
     | some k => (validateElems t k (buf.drop 32) 0 (k * t.headSize)).map (32 + ·)
-  | .fixedArray t n, buf => validateElems t n buf 0 (n * t.headSize)
-  | .tuple ts, buf => validateTuple ts buf 0 (headSizeSum ts)
-termination_by t => (sizeOf t, 0)
+  | .fixedArray t n => validateElems t n buf 0 (n * t.headSize)
+  | .tuple ts => validateTuple ts buf 0 (headSizeSum ts)
+termination_by (sizeOf t, 0)
 
 /-- Validate one component at head offset `off`.  A dynamic component's
 offset word must equal `expectedTail` exactly — the canonical-layout check.
