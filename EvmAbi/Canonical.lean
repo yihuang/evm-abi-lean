@@ -171,7 +171,7 @@ def validate : (t : Ty) → List UInt8 → Option Nat
     | some n => if n < 2 ^ 160 then some 32 else none
     | none => none
   | .bytesN m, buf => match decodeBytesN m buf with
-    | some bs => if bs.length = m then some 32 else none
+    | some _ => some 32
     | none => none
   | .bytes, buf => (decodeBytesPrefix buf).map Prod.snd
   | .string, buf => match decodeBytesPrefix buf with
@@ -412,7 +412,7 @@ theorem validate_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBoun
       obtain ⟨bs, hbs⟩ := v
       have hdec : decodeBytesN m (encodeBytesN bs ++ rest) = some bs :=
         decodeBytesN_append hv.2 hbs rest
-      simp only [validate, encode, hdec, if_pos hbs]
+      simp only [validate, encode, hdec]
       rw [length_encodeBytesN (by rw [hbs]; exact hv.2)]
   | bytes =>
       have hlb : v.length < 2 ^ 256 := by simpa [LenBound] using hl
@@ -698,11 +698,8 @@ theorem validate_decode (t : Ty) (buf : List UInt8) (n : Nat)
       cases hdb : decodeBytesN m buf with
       | none => simp only [hdb] at h; contradiction
       | some bs =>
-          simp only [hdb] at h
-          by_cases hbs : bs.length = m
-          · rw [if_pos hbs] at h
-            exact ⟨⟨bs, hbs⟩, by simp only [decode]; rw [hdb]; exact dif_pos hbs⟩
-          · rw [if_neg hbs] at h; contradiction
+          have hbs : bs.length = m := decodeBytesN_length hdb
+          exact ⟨⟨bs, hbs⟩, by simp only [decode]; rw [hdb]; exact dif_pos hbs⟩
   | bytes =>
       simp only [validate] at h
       cases hp : decodeBytesPrefix buf with
@@ -974,29 +971,27 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
       | none => simp only [hdb] at hval; contradiction
       | some bs =>
           simp only [hdb] at hval
-          by_cases hbs : bs.length = m
-          · rw [if_pos hbs] at hval
-            have hn : n = 32 := (Option.some.inj hval).symm
-            simp only [decode] at hd
-            simp only [hdb] at hd
-            rw [dif_pos hbs] at hd
-            have hv' : v = ⟨bs, hbs⟩ := (Option.some.inj hd).symm
-            subst hv'
-            subst hn
-            simp only [decodeBytesN] at hdb
-            by_cases hc : ((buf.take 32).take m).length = m ∧
-                (buf.take 32).drop m = List.replicate (32 - m) 0
-            · rw [if_pos hc] at hdb
-              have hbs' : bs = (buf.take 32).take m := (Option.some.inj hdb).symm
-              constructor
-              · simp only [encode]
-                show buf.take 32 = bs ++ List.replicate (32 - bs.length) 0
-                rw [hbs, hbs', ← hc.2, List.take_append_drop]
-              · simp only [encode]
-                show 32 = (encodeBytesN bs).length
-                rw [length_encodeBytesN (by rw [hbs]; exact hv.2)]
-            · rw [if_neg hc] at hdb; contradiction
-          · rw [if_neg hbs] at hval; contradiction
+          have hbs : bs.length = m := decodeBytesN_length hdb
+          have hn : n = 32 := (Option.some.inj hval).symm
+          simp only [decode] at hd
+          simp only [hdb] at hd
+          rw [dif_pos hbs] at hd
+          have hv' : v = ⟨bs, hbs⟩ := (Option.some.inj hd).symm
+          subst hv'
+          subst hn
+          simp only [decodeBytesN] at hdb
+          by_cases hc : ((buf.take 32).take m).length = m ∧
+              (buf.take 32).drop m = List.replicate (32 - m) 0
+          · rw [if_pos hc] at hdb
+            have hbs' : bs = (buf.take 32).take m := (Option.some.inj hdb).symm
+            constructor
+            · simp only [encode]
+              show buf.take 32 = bs ++ List.replicate (32 - bs.length) 0
+              rw [hbs, hbs', ← hc.2, List.take_append_drop]
+            · simp only [encode]
+              show 32 = (encodeBytesN bs).length
+              rw [length_encodeBytesN (by rw [hbs]; exact hv.2)]
+          · rw [if_neg hc] at hdb; contradiction
   | bytes =>
       simp only [validate] at hval
       cases hp : decodeBytesPrefix buf with
