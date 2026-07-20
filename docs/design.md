@@ -82,12 +82,20 @@ complete type grammar.
    are precisely the image of `encode`), and a unified roundtrip for the
    strict decoder.
 
+7. **Packed ABI encoding.**  `EvmAbi.Packed` implements `abi.encodePacked`
+   for all-static types: elements are concatenated without padding, length
+   prefixes, or offset words.  A type-indexed codec (`encodePacked` /
+   `decodePacked`) with prefix-tolerant decoders and a static roundtrip
+   theorem proves correctness.  Dynamic types are excluded because packed
+   encoding carries no length information, making element boundaries
+   ambiguous.
+
 ## 3. Core Design
 
 ### 3.1 Type Universe (`Ty.lean`)
 
-The type grammar is an inductive `Ty` with ten constructors.  Three
-auxiliary predicates are defined alongside it:
+The type grammar is an inductive `Ty` with ten constructors.  Four
+auxiliary predicates/functions are defined alongside it:
 
 - **`Valid`** — size-parameter constraints (e.g., `uintM` requires `8∣M`,
   `8≤M≤256`).  Defined as a `Prop` with a `Decidable` instance.
@@ -99,10 +107,14 @@ auxiliary predicates are defined alongside it:
 - **`headSize`** — bytes occupied in the head section.  Static types take
   their full encoding size; dynamic types take 32 (the offset word).
 
-All three are defined via **mutual recursion** with their `List`-indexed
-siblings (`AllValid`, `allStatic`, `headSizeSum`).  This avoids well-founded
-recursion (`Acc.rec`), which would make the predicates opaque to the
-elaborator and break `@[reducible]` on `Val`.
+- **`packedSize`** — bytes occupied in packed encoding.  For static types
+  this is the exact encoding size (e.g. `uint8` → 1, `address` → 20);
+  for dynamic types it is 0 (packed size is not statically known).
+
+All are defined via **mutual recursion** with their `List`-indexed
+siblings (`AllValid`, `allStatic`, `headSizeSum`, `packedSizeSum`).  This
+avoids well-founded recursion (`Acc.rec`), which would make the predicates
+opaque to the elaborator and break `@[reducible]` on `Val`.
 
 ### 3.2 Value Family
 
@@ -162,7 +174,29 @@ measure.
 The ABI codec uses `Parts` only for compound types; base types have their
 own standalone encoding for efficiency and simplicity.
 
-### 3.5 Roundtrip Proof Structure
+### 3.5 Packed ABI (`Packed.lean`)
+
+`abi.encodePacked` concatenates the raw bytes of each element without
+padding, length prefixes, or offset words.  The module provides:
+
+- **Primitive packed codecs** — `encodeUintPacked` / `decodeUintPacked`,
+  etc., operating at the element's natural byte width (`m/8` for `uintM`,
+  1 for `bool`, 20 for `address`, `n` for `bytesN`).
+
+- **Type-indexed packed codec** — `encodePacked : (t : Ty) → t.Val →
+  List UInt8` and `decodePacked : (t : Ty) → List UInt8 → Option t.Val`
+  for all-static types.  The encoder concatenates; the decoder consumes
+  `packedSize t` bytes from the front (prefix-tolerant).
+
+- **Static roundtrip** — `roundtrip_packed_static`: every static value
+  decodes from its own packed encoding.  The proof follows the same
+  mutual-induction structure as the standard codec (Package C), but
+  without offset arithmetic or head/tail separation.
+
+The packed codec is deliberately limited to **all-static types** because
+packed encoding provides no mechanism to delimit variable-length elements.
+
+### 3.6 Roundtrip Proof Structure
 
 The proof is organized into five packages (A–E) in `Codec.lean`:
 
@@ -258,24 +292,22 @@ smaller values, and the `decreasing_tactic` discharges every goal.
 ## 5. Architecture Diagram
 
 ```
-┌──────────────────────────────────────────────┐
-│                  Codec.lean                   │
-│  encode / decode (mutual)                     │
-│  readElem / decodeElems / decodeTuple (mutual)│
-│  Packages A–E (roundtrip proofs)              │
-└──────────┬──────────────┬────────────────────┘
-           │              │
-    ┌──────▼──────┐  ┌───▼──────────┐
-    │ Static.lean  │  │ Parts.lean    │
-    │ Dynamic.lean │  │ (head/tail)   │
-    │ (primitives) │  │               │
-    └──────┬───────┘  └───┬───────────┘
-           │              │
-    ┌──────▼──────┐  ┌───▼──────────┐
-    │   Ty.lean    │  │  Word.lean    │
-    │  (universe)  │  │  Align.lean   │
-    │              │  │  Bytes.lean   │
-    └─────────────┘  └───────────────┘
+┌──────────────────────┐  ┌──────────────────────────────────────┐
+│    Packed.lean        │  │             Codec.lean                │
+│  encodePacked /       │  │  encode / decode (mutual)             │
+│  decodePacked (mutual)│  │  readElem / decodeElems / decodeTuple │
+│  static roundtrip     │  │  Packages A–E (roundtrip proofs)      │
+└──────────┬───────────┘  └──────────┬──────────────┬─────────────┘
+           │                          │              │
+    ┌──────▼───────┐           ┌──────▼──────┐  ┌───▼──────────┐
+    │ Static.lean   │           │ Static.lean  │  │ Parts.lean    │
+    │ (primitives)  │           │ Dynamic.lean │  │ (head/tail)   │
+    └──────┬────────┘           └──────┬───────┘  └───┬───────────┘
+           │                            │              │
+    ┌──────▼────────────────────────┐  ┌───▼──────────┐
+    │   Ty.lean    │  │  Word.lean    │  │  Align.lean   │
+    │  (universe)  │  │  Bytes.lean   │  │               │
+    └─────────────┘  └───────────────┘  └───────────────┘
 ```
 
 ## 6. Future Work

@@ -152,6 +152,46 @@ def headSizeSum : List Ty → Nat
   | t :: ts => t.headSize + headSizeSum ts
 end
 
+/-- `headSizeSum` is the sum of the mapped `headSize`s. -/
+theorem headSizeSum_eq_sum_map (ts : List Ty) :
+    headSizeSum ts = (ts.map headSize).sum := by
+  induction ts with
+  | nil => simp only [headSizeSum, List.map_nil, List.sum_nil]
+  | cons t ts ih => simp only [headSizeSum, List.map_cons, List.sum_cons, ← ih]
+
+/-! ## Packed sizes -/
+
+/- The packed encoding size of a static type (the number of bytes its
+encoding occupies in `abi.encodePacked`).  For dynamic types the size is
+not statically known and the function returns 0.  `packedSizeSum` is the
+structural list sibling. -/
+mutual
+/-- Packed size of a type. -/
+def packedSize : Ty → Nat
+  | uint m | int m => m / 8
+  | bool => 1
+  | address => 20
+  | bytesN m => m
+  | bytes | string | array _ => 0
+  | fixedArray t n => n * t.packedSize
+  | tuple ts => packedSizeSum ts
+
+/-- Sum of the packed sizes of a list of types. -/
+def packedSizeSum : List Ty → Nat
+  | [] => 0
+  | t :: ts => t.packedSize + packedSizeSum ts
+end
+
+/-- `packedSizeSum` is the sum of the mapped `packedSize`s. -/
+theorem packedSizeSum_eq_sum_map (ts : List Ty) :
+    packedSizeSum ts = (ts.map packedSize).sum := by
+  induction ts with
+  | nil => simp only [packedSizeSum, List.map_nil, List.sum_nil]
+  | cons t ts ih => simp only [packedSizeSum, List.map_cons, List.sum_cons, ← ih]
+
+/- For an all-static type, the packed size is the total bytes the encoding
+occupies.  For a packed-decodable but non-static type (e.g. a static prefix
+plus a tail dynamic element) the size varies at runtime. -/
 /-! ## The value family -/
 
 /- Values indexed by their ABI type, refined so that every inhabitant is

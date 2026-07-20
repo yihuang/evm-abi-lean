@@ -73,6 +73,27 @@ The negative test suite in `Tests.lean` shows that the lenient decoder accepts
 non-canonical inputs (swapped tails, gaps, duplicate offsets, misaligned offsets)
 while the strict decoder rejects them all.
 
+### Packed ABI
+
+Packed encoding (`abi.encodePacked`) concatenates elements without padding,
+length prefixes, or offset words.  The module `EvmAbi.Packed` provides a
+formally verified packed codec for **all-static types** — the case where
+every element's byte size is statically known, making unambiguous decoding
+possible.
+
+```lean4
+theorem roundtrip_packed_static (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid)
+    (v : t.Val) : decodePacked t (encodePacked t v) = some v
+```
+
+Covered types: `uintM`, `intM`, `bool`, `address`, `bytesN`, `T[k]` (static
+elements), and all-static tuples `(T₁,…,Tₙ)`, arbitrarily nested.  Packed
+sizes are computed by `packedSize : Ty → Nat` (e.g. `uint8` → 1 byte,
+`address` → 20 bytes, `(uint8, bool)` → 2 bytes).
+
+Dynamic types (`bytes`, `string`, `T[]`) are excluded because packed
+encoding carries no length information, making their boundaries ambiguous.
+
 ## Proof Structure
 
 The proof is built in incremental layers, each reusable independently:
@@ -89,7 +110,8 @@ The proof is built in incremental layers, each reusable independently:
 | **8. Head/tail combinator** | `Parts` | The core ABI layout abstraction (`Part`, `encodeParts`, offset-correctness theorems); type-independent |
 | **9. Full codec** | `Codec` | `Ty`-indexed `encode`/`decode` over the full universe; static roundtrip (Package A-C), dynamic roundtrip (Package D), unified `roundtrip` |
 | **10. Canonical validation** | `Canonical` | `validate`/`IsCanonical`/`decodeCanonical`; completeness (C1), lenient completeness on canonical input (C2), soundness (C3), corollaries |
-| **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests |
+| **11. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
+| **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks |
 
 The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:
 the combinatorial heart of the ABI offset arithmetic is proved once on `List Part`,

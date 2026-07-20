@@ -7,6 +7,7 @@ import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.StaticArray
 import EvmAbi.Parts
+import EvmAbi.Packed
 import EvmAbi.Canonical
 
 /-!
@@ -413,5 +414,84 @@ example : (decodeCanonical ncTy ncMisaligned).isNone = true := by native_decide
 example : validate specSamTy (specSamBytes ++ [0]) = some specSamBytes.length := by
   native_decide
 example : (decodeCanonical specSamTy (specSamBytes ++ [0])).isNone = true := by native_decide
+
+/-! ## Packed ABI: primitive encodings -/
+
+-- uint8: 1 byte
+#eval encodePacked (.uint 8) ⟨42, by decide⟩            -- [42]
+example : encodePacked (.uint 8) ⟨42, by decide⟩ = [42] := by native_decide
+
+-- uint256: 32 bytes, big-endian
+example : encodePacked (.uint 256) ⟨1, by decide⟩ =
+    List.replicate 31 0 ++ [1] := by native_decide
+
+-- int8: -1 = 0xFF
+example : encodePacked (.int 8) ⟨-1, by decide⟩ = [0xFF] := by native_decide
+
+-- bool: 1 byte
+example : encodePacked .bool true = [1] := by native_decide
+example : encodePacked .bool false = [0] := by native_decide
+
+-- address: 20 bytes
+example : (encodePacked .address ⟨1, by decide⟩).length = 20 := by native_decide
+
+-- bytes4: 4 bytes, no padding
+example : encodePacked (.bytesN 4) ⟨[0xDE, 0xAD, 0xBE, 0xEF], by decide⟩ =
+    [0xDE, 0xAD, 0xBE, 0xEF] := by native_decide
+
+/-! ## Packed ABI: compound encodings -/
+
+-- static tuple (uint8, bool): 1 + 1 = 2 bytes
+example : encodePacked (.tuple [.uint 8, .bool]) (⟨42, by decide⟩, (true, ())) =
+    [42, 1] := by native_decide
+
+-- static tuple (address, uint8): 20 + 1 = 21 bytes
+example : (encodePacked (.tuple [.address, .uint 8])
+    (⟨0, by decide⟩, (⟨255, by decide⟩, ()))).length = 21 := by native_decide
+
+-- static fixed array uint8[3]: 3 bytes
+example : encodePacked (.fixedArray (.uint 8) 3)
+    ⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩ =
+    [1, 2, 3] := by native_decide
+
+-- nested tuple ((uint8, bool), bytes2): (1 + 1) + 2 = 4 bytes
+example : encodePacked (.tuple [.tuple [.uint 8, .bool], .bytesN 2])
+    ((⟨42, by decide⟩, (true, ())), (⟨[0xAB, 0xCD], by decide⟩, ())) =
+    [42, 1, 0xAB, 0xCD] := by native_decide
+
+/-! ## Packed ABI: roundtrips -/
+
+-- primitive roundtrips
+example : decodePacked (.uint 8) (encodePacked (.uint 8) ⟨42, by decide⟩) =
+    some ⟨42, by decide⟩ := by native_decide
+
+example : decodePacked (.int 8) (encodePacked (.int 8) ⟨-1, by decide⟩) =
+    some ⟨-1, by decide⟩ := by native_decide
+
+example : decodePacked .bool (encodePacked .bool true) = some true := by native_decide
+
+example : decodePacked .address (encodePacked .address ⟨0xABCDEF, by decide⟩) =
+    some ⟨0xABCDEF, by decide⟩ := by native_decide
+
+example : decodePacked (.bytesN 4)
+    (encodePacked (.bytesN 4) ⟨[0xDE, 0xAD, 0xBE, 0xEF], by decide⟩) =
+    some ⟨[0xDE, 0xAD, 0xBE, 0xEF], by decide⟩ := by native_decide
+
+-- tuple roundtrip
+example : decodePacked (.tuple [.uint 8, .bool])
+    (encodePacked (.tuple [.uint 8, .bool]) (⟨42, by decide⟩, (true, ()))) =
+    some (⟨42, by decide⟩, (true, ())) := by native_decide
+
+-- fixed array roundtrip
+example : decodePacked (.fixedArray (.uint 8) 3)
+    (encodePacked (.fixedArray (.uint 8) 3)
+      ⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩) =
+    some ⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩ := by native_decide
+
+-- nested tuple roundtrip
+example : decodePacked (.tuple [.tuple [.uint 8, .bool], .bytesN 2])
+    (encodePacked (.tuple [.tuple [.uint 8, .bool], .bytesN 2])
+      ((⟨42, by decide⟩, (true, ())), (⟨[0xAB, 0xCD], by decide⟩, ()))) =
+    some ((⟨42, by decide⟩, (true, ())), (⟨[0xAB, 0xCD], by decide⟩, ())) := by native_decide
 
 end EvmAbi
