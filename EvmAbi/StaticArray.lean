@@ -29,9 +29,6 @@ theorem encodeWordArray_cons (w : UInt256) (ws : List UInt256) :
   | cons w ws ih =>
       simp [encodeWordArray_cons, List.length_append, length_bytesOfWord, ih]; omega
 
-theorem dvd_length_encodeWordArray (ws : List UInt256) : 32 ∣ (encodeWordArray ws).length :=
-  ⟨ws.length, by simp⟩
-
 /-- Decode `k` consecutive words from the front of a buffer. -/
 def decodeWordArray : Nat → List UInt8 → Option (List UInt256)
   | 0,     _   => some []

@@ -143,9 +143,6 @@ theorem encodeTails_append (xs ys : List Part) :
 /-- Well-formed parts: every static head and every tail is 32-byte aligned. -/
 def WF (ps : List Part) : Prop := ∀ p ∈ ps, 32 ∣ p.head.length ∧ 32 ∣ p.tail.length
 
-theorem wf_take (hwf : WF ps) (i : Nat) : WF (ps.take i) :=
-  fun q hq => hwf q (List.mem_of_mem_take hq)
-
 theorem dvd_headSizes (hwf : WF ps) : 32 ∣ headSizes ps := by
   induction ps with
   | nil => exact ⟨0, rfl⟩
@@ -165,9 +162,6 @@ theorem dvd_tailSizes (hwf : WF ps) : 32 ∣ tailSizes ps := by
       obtain ⟨head, tail, isDyn⟩ := p
       have hp2 : 32 ∣ tail.length := hp.2
       cases isDyn <;> simp [tailSizes, Part.tailSize] <;> omega
-
-theorem dvd_headOffset (hwf : WF ps) (i : Nat) : 32 ∣ headOffset ps i :=
-  dvd_headSizes (wf_take hwf i)
 
 theorem dvd_length_encodeParts (hwf : WF ps) : 32 ∣ (encodeParts ps).length := by
   rw [length_encodeParts]
