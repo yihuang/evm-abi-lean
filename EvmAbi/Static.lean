@@ -126,6 +126,17 @@ def decodeBytesN (n : Nat) (buf : List UInt8) : Option (List UInt8) :=
     some ((buf.take 32).take n)
   else none
 
+/-- A successful `decodeBytesN` yields exactly `n` bytes. -/
+theorem decodeBytesN_length {n : Nat} {buf bs : List UInt8}
+    (h : decodeBytesN n buf = some bs) : bs.length = n := by
+  unfold decodeBytesN at h
+  split at h
+  · next hc =>
+      rw [Option.some.injEq] at h
+      subst h
+      exact hc.1
+  · contradiction
+
 /-- **Roundtrip** for `bytesN` (prefix-tolerant decoder). -/
 theorem decodeBytesN_encodeBytesN {n : Nat} (h32 : n ≤ 32) (h : bs.length = n) :
     decodeBytesN n (encodeBytesN bs) = some bs := by
