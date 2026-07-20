@@ -349,29 +349,30 @@ theorem validate_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBoun
       have hdec : decodeUint (encodeUint n ++ rest) = some n :=
         decodeUint_append n rest
           (Nat.lt_of_lt_of_le hn (Nat.pow_le_pow_right (n := 2) (by decide) hv.2.1))
-      simp only [validate, encode, hdec, if_pos hn, length_encodeUint]
+      simp only [validate, encode, decode, hdec, dif_pos hn, Option.map_some,
+        length_encodeUint]
   | int m =>
       obtain ⟨i, hi⟩ := v
       have h0 : 0 < m := by have h8 := hv.1; omega
       have hdec : decodeInt (encodeInt i ++ rest) = some i :=
         decodeInt_append h0 hv.2.1 hi.1 hi.2 rest
-      simp only [validate, encode, hdec, if_pos hi]
+      simp only [validate, encode, decode, hdec, dif_pos hi, Option.map_some]
       simp [encodeInt, length_encodeUint]
   | bool =>
       have hdec := decodeBool_append v rest
-      simp only [validate, encode, hdec]
+      simp only [validate, encode, decode, hdec, Option.map_some]
       simp [encodeBool, length_encodeUint]
   | address =>
       obtain ⟨n, hn⟩ := v
       have hdec : decodeAddress (encodeAddress n ++ rest) = some n :=
         decodeAddress_append n rest hn
-      simp only [validate, encode, hdec, if_pos hn]
+      simp only [validate, encode, decode, hdec, dif_pos hn, Option.map_some]
       simp [encodeAddress, length_encodeUint]
   | bytesN m =>
       obtain ⟨bs, hbs⟩ := v
       have hdec : decodeBytesN m (encodeBytesN bs ++ rest) = some bs :=
         decodeBytesN_append hv.2 hbs rest
-      simp only [validate, encode, hdec]
+      simp only [validate, encode, decode, hdec, dif_pos hbs, Option.map_some]
       rw [length_encodeBytesN (by rw [hbs]; exact hv.2)]
   | bytes =>
       have hlb : v.length < 2 ^ 256 := by simpa [LenBound] using hl
@@ -617,48 +618,10 @@ lenient-decodes. -/
 theorem validate_decode (t : Ty) (buf : List UInt8) (n : Nat)
     (h : validate t buf = some n) : ∃ v, decode t buf = some v := by
   cases t with
-  | uint m =>
-      simp only [validate] at h
-      cases hdu : decodeUint buf with
-      | none => simp only [hdu] at h; contradiction
-      | some x =>
-          simp only [hdu] at h
-          by_cases hx : x < 2 ^ m
-          · rw [if_pos hx] at h
-            exact ⟨⟨x, hx⟩, by simp only [decode]; rw [hdu]; exact dif_pos hx⟩
-          · rw [if_neg hx] at h; contradiction
-  | int m =>
-      simp only [validate] at h
-      cases hdi : decodeInt buf with
-      | none => simp only [hdi] at h; contradiction
-      | some i =>
-          simp only [hdi] at h
-          by_cases hi : -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int)
-          · rw [if_pos hi] at h
-            exact ⟨⟨i, hi⟩, by simp only [decode]; rw [hdi]; exact dif_pos hi⟩
-          · rw [if_neg hi] at h; contradiction
-  | bool =>
-      simp only [validate] at h
-      cases hdb : decodeBool buf with
-      | none => simp only [hdb] at h; contradiction
-      | some b => exact ⟨b, by simp only [decode]; exact hdb⟩
-  | address =>
-      simp only [validate] at h
-      cases hda : decodeAddress buf with
-      | none => simp only [hda] at h; contradiction
-      | some x =>
-          simp only [hda] at h
-          by_cases hx : x < 2 ^ 160
-          · rw [if_pos hx] at h
-            exact ⟨⟨x, hx⟩, by simp only [decode]; rw [hda]; exact dif_pos hx⟩
-          · rw [if_neg hx] at h; contradiction
-  | bytesN m =>
-      simp only [validate] at h
-      cases hdb : decodeBytesN m buf with
-      | none => simp only [hdb] at h; contradiction
-      | some bs =>
-          have hbs : bs.length = m := decodeBytesN_length hdb
-          exact ⟨⟨bs, hbs⟩, by simp only [decode]; rw [hdb]; exact dif_pos hbs⟩
+  | uint _ | int _ | bool | address | bytesN _ =>
+      rw [validate] at h
+      obtain ⟨v, hv, _⟩ := Option.map_eq_some_iff.mp h
+      exact ⟨v, hv⟩
   | bytes =>
       simp only [validate] at h
       cases hp : decodeBytesPrefix buf with
@@ -837,37 +800,32 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
     buf.take n = encode t v ∧ n = (encode t v).length := by
   cases t with
   | uint m =>
-      simp only [validate] at hval
+      simp only [validate, hd, Option.map_some, Option.some.injEq] at hval
+      subst hval
+      simp only [decode] at hd
       cases hdu : decodeUint buf with
-      | none => simp only [hdu] at hval; contradiction
+      | none => simp only [hdu] at hd; contradiction
       | some x =>
-          simp only [hdu] at hval
+          simp only [hdu] at hd
           by_cases hx : x < 2 ^ m
-          · rw [if_pos hx] at hval
-            have hn : n = 32 := (Option.some.inj hval).symm
-            simp only [decode] at hd
-            simp only [hdu] at hd
-            rw [dif_pos hx] at hd
+          · rw [dif_pos hx] at hd
             have hv' : v = ⟨x, hx⟩ := (Option.some.inj hd).symm
-            subst hv'; subst hn
+            subst hv'
             have htake := buf_take_32_eq_encodeUint_of_decodeUint buf x hdu
             simp [encode, length_encodeUint, htake]
-          · rw [if_neg hx] at hval; contradiction
+          · rw [dif_neg hx] at hd; contradiction
   | int m =>
-      simp only [validate] at hval
+      simp only [validate, hd, Option.map_some, Option.some.injEq] at hval
+      subst hval
+      simp only [decode] at hd
       cases hdi : decodeInt buf with
-      | none => simp only [hdi] at hval; contradiction
+      | none => simp only [hdi] at hd; contradiction
       | some i =>
-          simp only [hdi] at hval
+          simp only [hdi] at hd
           by_cases hi : -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int)
-          · rw [if_pos hi] at hval
-            have hn : n = 32 := (Option.some.inj hval).symm
-            simp only [decode] at hd
-            simp only [hdi] at hd
-            rw [dif_pos hi] at hd
+          · rw [dif_pos hi] at hd
             have hv' : v = ⟨i, hi⟩ := (Option.some.inj hd).symm
             subst hv'
-            subst hn
             simp only [decodeInt] at hdi
             cases hdu : decodeUint buf with
             | none => simp only [hdu, Option.map_none] at hdi; contradiction
@@ -891,53 +849,42 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
                   rw [henc]
                   exact htake
                 · simp only [encode, encodeInt, length_encodeUint]
-          · rw [if_neg hi] at hval; contradiction
+          · rw [dif_neg hi] at hd; contradiction
   | bool =>
-      simp only [validate] at hval
-      cases hdb : decodeBool buf with
-      | none => simp only [hdb] at hval; contradiction
-      | some b =>
-          simp only [hdb] at hval
-          have hn : n = 32 := (Option.some.inj hval).symm
-          have hdu : decodeUint buf = some (if b then 1 else 0) :=
-            (decodeBool_eq_some_iff buf b).mp hdb
-          have htake := buf_take_32_eq_encodeUint_of_decodeUint buf (if b then 1 else 0) hdu
-          simp only [decode] at hd
-          rw [hdb] at hd
-          have hbv : b = v := Option.some.inj hd
-          subst hbv; subst hn
-          simp [encode, encodeBool, length_encodeUint, htake]
+      simp only [validate, hd, Option.map_some, Option.some.injEq] at hval
+      subst hval
+      simp only [decode] at hd
+      have hdu : decodeUint buf = some (if v then 1 else 0) :=
+        (decodeBool_eq_some_iff buf v).mp hd
+      have htake := buf_take_32_eq_encodeUint_of_decodeUint buf (if v then 1 else 0) hdu
+      simp [encode, encodeBool, length_encodeUint, htake]
   | address =>
-      simp only [validate] at hval
+      simp only [validate, hd, Option.map_some, Option.some.injEq] at hval
+      subst hval
+      simp only [decode] at hd
       cases hda : decodeAddress buf with
-      | none => simp only [hda] at hval; contradiction
+      | none => simp only [hda] at hd; contradiction
       | some x =>
-          simp only [hda] at hval
+          simp only [hda] at hd
           by_cases hx : x < 2 ^ 160
-          · rw [if_pos hx] at hval
-            have hn : n = 32 := (Option.some.inj hval).symm
-            simp only [decode] at hd
-            simp only [hda] at hd
-            rw [dif_pos hx] at hd
+          · rw [dif_pos hx] at hd
             have hv' : v = ⟨x, hx⟩ := (Option.some.inj hd).symm
-            subst hv'; subst hn
+            subst hv'
             have htake := buf_take_32_eq_encodeUint_of_decodeUint buf x hda
             simp [encode, encodeAddress, length_encodeUint, htake]
-          · rw [if_neg hx] at hval; contradiction
+          · rw [dif_neg hx] at hd; contradiction
   | bytesN m =>
-      simp only [validate] at hval
+      simp only [validate, hd, Option.map_some, Option.some.injEq] at hval
+      subst hval
+      simp only [decode] at hd
       cases hdb : decodeBytesN m buf with
-      | none => simp only [hdb] at hval; contradiction
+      | none => simp only [hdb] at hd; contradiction
       | some bs =>
-          simp only [hdb] at hval
-          have hbs : bs.length = m := decodeBytesN_length hdb
-          have hn : n = 32 := (Option.some.inj hval).symm
-          simp only [decode] at hd
           simp only [hdb] at hd
+          have hbs : bs.length = m := decodeBytesN_length hdb
           rw [dif_pos hbs] at hd
           have hv' : v = ⟨bs, hbs⟩ := (Option.some.inj hd).symm
           subst hv'
-          subst hn
           simp only [decodeBytesN] at hdb
           by_cases hc : ((buf.take 32).take m).length = m ∧
               (buf.take 32).drop m = List.replicate (32 - m) 0
