@@ -21,7 +21,7 @@ prefixes of their parent's buffer); the top-level predicate `IsCanonical`
 additionally requires exact consumption (no trailing garbage), and
 `decodeCanonical` is the strict decoder built on top.
 
-Theorems (packages C1–C3):
+Theorems (packages C1–C4):
 
 * **C1 completeness** — `validate_encode_append` family: every encoding
   validates, consuming exactly its length.  The checker is not too strict.
@@ -29,12 +29,15 @@ Theorems (packages C1–C3):
   family: whatever validates also lenient-decodes.
 * **C3 soundness** — `encode_eq_take_of_validate` family: a buffer that
   validates and decodes to `v` has `encode t v` as its consumed prefix.
-  The checker is not too lenient: canonical buffers are exactly the image
-  of `encode`.
+* **C4 bounds are intrinsic** — `LenBound_of_decode` family: whatever the
+  lenient decoder returns satisfies the length bounds, because every length
+  was read back from a 32-byte word.
 
-Corollaries: `decodeCanonical_encode` (strict roundtrip) and
+Corollaries: `decodeCanonical_encode` (strict roundtrip),
 `encode_of_decodeCanonical` (canonical uniqueness: a strictly decodable
-buffer *is* the encoding of its decoded value).
+buffer *is* the encoding of its decoded value), and the C4 capstones
+`isCanonical_iff` / `decodeCanonical_eq_some_iff` — the promise "canonical
+buffers are exactly the image of `encode`" as literal iffs.
 -/
 
 namespace EvmAbi
@@ -752,14 +755,8 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
             | none => simp only [hdu, Option.map_none] at hdi; contradiction
             | some x =>
                 simp only [hdu, Option.map_some] at hdi
-                have hx256 : x < 2 ^ 256 := by
-                  simp only [decodeUint, natAt] at hdu
-                  cases hw : wordAt buf 0 with
-                  | none => simp only [hw, Option.map_none] at hdu; contradiction
-                  | some w =>
-                      simp only [hw, Option.map_some, Option.some.injEq] at hdu
-                      rw [← hdu]
-                      exact UInt256.toNat_lt w
+                have hx256 : x < 2 ^ 256 :=
+                  natAt_lt (show natAt buf 0 = some x from hdu)
                 have hxi : (if x < 2 ^ 255 then (x : Int) else (x : Int) - 2 ^ 256) = i :=
                   Option.some.inj hdi
                 have henc := encodeInt_eq_encodeUint_of_decodeInt x hx256 i hxi
@@ -1113,6 +1110,148 @@ theorem segments_of_validateTuple : (ts : List Ty) → AllValid ts →
 termination_by ts => 8 * sizeOf ts + 3
 end
 
+/-! ## Package C4: bounds are intrinsic -/
+
+/- Every length the decoder accepts was read back from a 32-byte word, so a
+decoded value satisfies `LenBound` automatically: the bound C1 and the
+roundtrip take as a hypothesis is not a side condition on inputs but a
+property of everything `decode` can produce.  This is what lets the image
+characterization below (`isCanonical_iff`) state its `∃ v` with no bound
+conjunct. -/
+
+/-- A prefix-decoded `bytes` payload is bounded by its own length word. -/
+theorem length_lt_of_decodeBytesPrefix {buf bs : List UInt8} {n : Nat}
+    (h : decodeBytesPrefix buf = some (bs, n)) : bs.length < 2 ^ 256 := by
+  simp only [decodeBytesPrefix] at h
+  cases hlen : natAt buf 0 with
+  | none => simp only [hlen, Option.bind_none] at h; contradiction
+  | some len =>
+      simp only [hlen, Option.bind_some] at h
+      by_cases hc : ((buf.drop 32).take len).length = len ∧
+          ((buf.drop 32).drop len).take ((32 - len % 32) % 32) =
+            List.replicate ((32 - len % 32) % 32) 0
+      · rw [if_pos hc] at h
+        have hbs : (buf.drop 32).take len = bs := congrArg Prod.fst (Option.some.inj h)
+        rw [← hbs, hc.1]
+        exact natAt_lt hlen
+      · rw [if_neg hc] at h; contradiction
+
+mutual
+/-- **Bounds are intrinsic**: whatever the lenient decoder returns satisfies
+the length bounds. -/
+theorem LenBound_of_decode (t : Ty) (buf : List UInt8) (v : t.Val)
+    (h : decode t buf = some v) : LenBound t v := by
+  cases t with
+  | uint _ | int _ | bool | address | bytesN _ => simp only [LenBound]
+  | bytes =>
+      simp only [decode] at h
+      cases hp : decodeBytesPrefix buf with
+      | none => simp only [hp, Option.map_none] at h; contradiction
+      | some p =>
+          obtain ⟨bs, m⟩ := p
+          simp only [hp, Option.map_some, Option.some.injEq] at h
+          subst h
+          simp only [LenBound]
+          exact length_lt_of_decodeBytesPrefix hp
+  | string =>
+      simp only [decode] at h
+      cases hp : decodeBytesPrefix buf with
+      | none => simp only [hp, Option.bind_none] at h; contradiction
+      | some p =>
+          obtain ⟨bs, m⟩ := p
+          simp only [hp, Option.bind_some] at h
+          have hutf : v.toUTF8 = bs.toByteArray := toUTF8_of_fromUTF8? h
+          simp only [LenBound]
+          rw [Binary.ByteArray.size_eq_toList_length, hutf]
+          simpa [List.data_toByteArray] using length_lt_of_decodeBytesPrefix hp
+  | array t =>
+      simp only [decode] at h
+      cases hk : natAt buf 0 with
+      | none => simp only [hk] at h; contradiction
+      | some k =>
+          simp only [hk] at h
+          obtain ⟨vs, hde, hveq⟩ := Option.map_eq_some_iff.mp h
+          subst hveq
+          simp only [LenBound]
+          exact ⟨by rw [vs.property]; exact natAt_lt hk,
+            AllLenBound_of_decodeElems t k (buf.drop 32) 0 vs.val vs.property hde⟩
+  | fixedArray t n =>
+      simp only [decode] at h
+      obtain ⟨vs, hvs⟩ := v
+      simp only [LenBound]
+      exact AllLenBound_of_decodeElems t n buf 0 vs hvs h
+  | tuple ts =>
+      simp only [decode] at h
+      simp only [LenBound]
+      exact TupleLenBounds_of_decodeTuple ts buf 0 v h
+termination_by 8 * sizeOf t
+
+/-- Per-component step: whatever `readElem` returns is bounded. -/
+theorem LenBound_of_readElem (t : Ty) (buf : List UInt8) (off : Nat) (v : t.Val)
+    (h : readElem t buf off = some v) : LenBound t v := by
+  cases hs : t.IsStatic
+  · rw [readElem_dynamic t _ _ hs] at h
+    cases hn : natAt buf (off / 32) with
+    | none => simp only [hn] at h; contradiction
+    | some o =>
+        simp only [hn] at h
+        exact LenBound_of_decode t (buf.drop o) v h
+  · rw [readElem_static t _ _ hs] at h
+    exact LenBound_of_decode t (buf.drop off) v h
+termination_by 8 * sizeOf t + 1
+
+/-- Element runs: every decoded element is bounded. -/
+theorem AllLenBound_of_decodeElems (t : Ty) (k : Nat) (buf : List UInt8) (off : Nat)
+    (vs : List t.Val) (hvs : vs.length = k)
+    (h : decodeElems t k buf off = some ⟨vs, hvs⟩) : AllLenBound t vs := by
+  induction vs generalizing k off with
+  | nil => simp only [AllLenBound]
+  | cons w ws ih =>
+      have hk : k = ws.length + 1 := by rw [← hvs, List.length_cons]
+      subst hk
+      simp only [decodeElems] at h
+      cases hr : readElem t buf off with
+      | none => simp only [hr] at h; contradiction
+      | some u =>
+          simp only [hr] at h
+          cases hd' : decodeElems t ws.length buf (off + t.headSize) with
+          | none => simp only [hd'] at h; contradiction
+          | some ws' =>
+              obtain ⟨wsl, hsl⟩ := ws'
+              simp only [hd'] at h
+              have hvw : u :: wsl = w :: ws := Subtype.ext_iff.mp (Option.some.inj h)
+              obtain ⟨hueq, hwseq⟩ := List.cons.inj hvw
+              subst hueq
+              subst hwseq
+              simp only [AllLenBound]
+              exact ⟨LenBound_of_readElem t buf off u hr,
+                ih wsl.length (off + t.headSize) hsl hd'⟩
+termination_by 8 * sizeOf t + 2
+
+/-- Tuple walks: every decoded component is bounded. -/
+theorem TupleLenBounds_of_decodeTuple : (ts : List Ty) → (buf : List UInt8) →
+    (off : Nat) → (vs : TupleVal ts) → decodeTuple ts buf off = some vs →
+    TupleLenBounds ts vs
+  | [], _, _, _, _ => by simp only [TupleLenBounds]
+  | t :: ts, buf, off, (v, vs), h => by
+      simp only [decodeTuple] at h
+      cases hr : readElem t buf off with
+      | none => simp only [hr] at h; contradiction
+      | some w =>
+          simp only [hr] at h
+          cases hd' : decodeTuple ts buf (off + t.headSize) with
+          | none => simp only [hd'] at h; contradiction
+          | some vs' =>
+              simp only [hd', Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+              obtain ⟨hwe, hve⟩ := h
+              subst hwe
+              subst hve
+              simp only [TupleLenBounds]
+              exact ⟨LenBound_of_readElem t buf off w hr,
+                TupleLenBounds_of_decodeTuple ts buf (off + t.headSize) vs' hd'⟩
+termination_by ts => 8 * sizeOf ts + 3
+end
+
 /-! ## corollaries -/
 
 /-- **Canonical completeness**: encodings validate, consuming exactly their
@@ -1152,5 +1291,50 @@ theorem encode_of_decodeCanonical (t : Ty) (hv : t.Valid) (buf : List UInt8) (v 
         rw [hn, List.take_length] at hC3
         exact hC3.symm
       · rw [if_neg hn] at h; contradiction
+
+/-- The strict decoder is a refinement of the lenient one. -/
+theorem decode_of_decodeCanonical (t : Ty) (buf : List UInt8) (v : t.Val)
+    (h : decodeCanonical t buf = some v) : decode t buf = some v := by
+  simp only [decodeCanonical] at h
+  cases hv' : validate t buf with
+  | none => simp only [hv'] at h; contradiction
+  | some n =>
+      simp only [hv'] at h
+      by_cases hn : n = buf.length
+      · rwa [if_pos hn] at h
+      · rw [if_neg hn] at h; contradiction
+
+/-- **Image characterization** (C4 capstone): under the buffer bound, the
+canonical buffers of a valid type are exactly the encodings of its values —
+with no bound on the value side, since bounds are intrinsic to decoding. -/
+theorem isCanonical_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
+    (hb : buf.length < 2 ^ 256) :
+    IsCanonical t buf ↔ ∃ v, decode t buf = some v ∧ encode t v = buf := by
+  constructor
+  · intro h
+    obtain ⟨v, hd⟩ := validate_decode t buf buf.length h
+    have hC3 := (encode_eq_take_of_validate t hv buf buf.length h v hd).1
+    rw [List.take_length] at hC3
+    exact ⟨v, hd, hC3.symm⟩
+  · rintro ⟨v, hd, he⟩
+    show validate t buf = some buf.length
+    rw [← he]
+    exact validate_encode t hv v (LenBound_of_decode t buf v hd)
+      (by rw [he]; exact hb)
+
+/-- **Strict-decoder characterization** (C4 capstone): `decodeCanonical`
+succeeds on exactly the encodings of bounded values.  The bound appears on
+the value side only because an unbounded value still *encodes* (its length
+word wraps); everything the decoder returns is bounded by C4. -/
+theorem decodeCanonical_eq_some_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
+    (v : t.Val) (hb : buf.length < 2 ^ 256) :
+    decodeCanonical t buf = some v ↔ encode t v = buf ∧ LenBound t v := by
+  constructor
+  · intro h
+    exact ⟨encode_of_decodeCanonical t hv buf v h,
+      LenBound_of_decode t buf v (decode_of_decodeCanonical t buf v h)⟩
+  · rintro ⟨he, hl⟩
+    rw [← he]
+    exact decodeCanonical_encode t hv v hl (by rw [he]; exact hb)
 
 end EvmAbi

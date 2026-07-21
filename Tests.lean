@@ -365,6 +365,26 @@ example : decodeCanonical specSamTy (encode specSamTy specSamVal) = some specSam
 gives the original buffer back. -/
 example : encode specFTy specFVal = specFBytes := by native_decide
 
+/-! ## C4: bounds are intrinsic, image characterization -/
+
+-- forward: a canonical buffer IS an encoding — no bound on the value side
+example : ∃ v, decode specSamTy specSamBytes = some v ∧
+    encode specSamTy v = specSamBytes :=
+  (isCanonical_iff specSamTy (by native_decide) specSamBytes (by native_decide)).mp
+    (by unfold IsCanonical; native_decide)
+
+-- backward: canonicity of an encoding through the iff
+example : IsCanonical specSamTy (encode specSamTy specSamVal) :=
+  (isCanonical_iff specSamTy (by native_decide) _ (by native_decide)).mpr
+    ⟨specSamVal,
+      roundtrip specSamTy (by native_decide) specSamVal specSamLenBound (by native_decide),
+      rfl⟩
+
+-- the strict roundtrip through the strict-decoder characterization
+example : decodeCanonical specSamTy (encode specSamTy specSamVal) = some specSamVal :=
+  (decodeCanonical_eq_some_iff specSamTy (by native_decide) _ specSamVal
+    (by native_decide)).mpr ⟨rfl, specSamLenBound⟩
+
 /-! ## Canonical validation: negative vectors -/
 
 /-- Demo type `(bytes, bytes)`: two dynamic components. -/
