@@ -449,12 +449,15 @@ example : encodePacked (.tuple [.uint 8, .bool]) (⟨42, by decide⟩, (true, ()
 example : (encodePacked (.tuple [.address, .uint 8])
     (⟨0, by decide⟩, (⟨255, by decide⟩, ()))).length = 21 := by native_decide
 
--- static fixed array uint8[3]: 3 bytes
+-- static fixed array uint8[3]: elements padded to 32-byte words (Solidity
+-- packed rule 3), 96 bytes total
 example : encodePacked (.fixedArray (.uint 8) 3)
     ⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩ =
-    [1, 2, 3] := by native_decide
+    encodeUint 1 ++ encodeUint 2 ++ encodeUint 3 := by native_decide
 
--- nested tuple ((uint8, bool), bytes2): (1 + 1) + 2 = 4 bytes
+-- nested tuple ((uint8, bool), bytes2) flattens to (1 + 1) + 2 = 4 bytes —
+-- a non-Solidity extension (Solidity rejects structs in packed mode);
+-- pinned here as the total function's documented behavior
 example : encodePacked (.tuple [.tuple [.uint 8, .bool], .bytesN 2])
     ((⟨42, by decide⟩, (true, ())), (⟨[0xAB, 0xCD], by decide⟩, ())) =
     [42, 1, 0xAB, 0xCD] := by native_decide
@@ -493,5 +496,86 @@ example : decodePacked (.tuple [.tuple [.uint 8, .bool], .bytesN 2])
     (encodePacked (.tuple [.tuple [.uint 8, .bool], .bytesN 2])
       ((⟨42, by decide⟩, (true, ())), (⟨[0xAB, 0xCD], by decide⟩, ()))) =
     some ((⟨42, by decide⟩, (true, ())), (⟨[0xAB, 0xCD], by decide⟩, ())) := by native_decide
+
+/-! ## Packed ABI: Solidity Non-standard Packed Mode
+
+Spec rules used here:
+* array elements are padded, still encoded in-place
+* dynamic types (`bytes`, `string`, `T[]`) are encoded in-place without length
+* structs / nested arrays are not supported by Solidity (no reference vector)
+-/
+
+/-- Solidity packed `uint8[3]([1,2,3])`: three left-padded 32-byte words. -/
+def solidityPackedUint8x3 : List UInt8 :=
+  encodeUint 1 ++ encodeUint 2 ++ encodeUint 3
+
+/-- Spec example payload: `string("Hello, world!")` without length prefix. -/
+def solidityPackedHello : List UInt8 :=
+  "Hello, world!".toUTF8.data.toList
+
+-- Control (must stay green): flat multi-arg style product is unpadded.
+-- Solidity: abi.encodePacked(uint8(1), uint8(2), uint8(3)) = 0x010203
+example : encodePacked (.tuple [.uint 8, .uint 8, .uint 8])
+    (⟨1, by decide⟩, (⟨2, by decide⟩, (⟨3, by decide⟩, ()))) =
+    [1, 2, 3] := by native_decide
+
+-- Rule 3 — array elements are padded to 32-byte words: 96 bytes total.
+example : encodePacked (.fixedArray (.uint 8) 3)
+    ⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩ =
+    solidityPackedUint8x3 := by native_decide
+
+example : (encodePacked (.fixedArray (.uint 8) 3)
+    ⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩).length = 96 := by
+  native_decide
+
+example : packedSize (.fixedArray (.uint 8) 3) = 96 := by native_decide
+
+-- Rule 2 — dynamic types are encoded in place, without the length word.
+-- Solidity: abi.encodePacked(string("Hello, world!")) = 0x48656c6c6f2c20776f726c6421
+example : encodePacked .string "Hello, world!" = solidityPackedHello := by native_decide
+
+example : encodePacked .string "Hello, world!" ≠ ([] : List UInt8) := by native_decide
+
+example : encodePacked .bytes [1, 2, 3] = [1, 2, 3] := by native_decide
+
+example : encodePacked .bytes [1, 2, 3] ≠ ([] : List UInt8) := by native_decide
+
+-- Dynamic array: length omitted; each element padded to 32 bytes.
+-- Solidity: abi.encodePacked(uint16[]([3, 4])) = word(3) ++ word(4)
+example : encodePacked (.array (.uint 16))
+    [⟨3, by decide⟩, ⟨4, by decide⟩] =
+    encodeUint 3 ++ encodeUint 4 := by native_decide
+
+-- Invalid widths (m % 8 ≠ 0) are rejected at decode — encodeBEU truncates
+-- them, so accepting them would let a lossy encode "roundtrip".
+example : decodePacked (.uint 12) (encodePacked (.uint 12) ⟨4095, by decide⟩) = none := by
+  native_decide
+
+-- Zero-width types are invalid (`Valid` needs `8 ≤ m`) and their packed
+-- encoding is empty, so decoding must refuse rather than conjure a value
+-- (previously `decodePacked (.int 0)` mapped -1 to `some 0`).
+example : decodePacked (.uint 0) [] = none := by decide
+example : decodePacked (.int 0) (encodePacked (.int 0) ⟨-1, by decide⟩) = none := by decide
+
+-- Rule 4 — the Solidity-conformant fragment: scalars, bytes/string, and
+-- arrays of scalars; structs and nested arrays are outside it.
+example : PackedSupported (.array (.uint 16)) = true := by native_decide
+example : PackedSupported .string = true := by native_decide
+example : PackedSupported (.fixedArray (.fixedArray (.uint 8) 2) 2) = false := by native_decide
+example : PackedSupported (.tuple [.uint 8, .bool]) = false := by native_decide
+
+/-! ## Packed ABI: kernel reducibility
+
+The packed codec is structurally recursive, so plain `decide` (kernel
+reduction, no compiler in the trusted base) evaluates it.  These fail if
+the mutual blocks ever fall back to well-founded recursion (`Acc.rec`
+gets stuck under `decide`).  Array clauses defer to the standard `encode`
+and stay `native_decide`-only. -/
+
+example : encodePacked .bool true = [1] := by decide
+example : encodePacked (.uint 8) ⟨42, by decide⟩ = [42] := by decide
+example : encodePacked (.tuple [.uint 8, .bool]) (⟨42, by decide⟩, (true, ())) =
+    [42, 1] := by decide
+example : decodePacked (.uint 8) [42] = some ⟨42, by decide⟩ := by decide
 
 end EvmAbi
