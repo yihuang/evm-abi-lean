@@ -112,8 +112,8 @@ def encodePacked : (t : Ty) → t.Val → List UInt8
   | .address, ⟨n, _⟩ => encodeAddressPacked n
   | .bytesN _, ⟨bs, _⟩ => encodeBytesNPacked bs
   | .bytes, bs => bs
-  | .string, s => s.toUTF8.data.toList
-  | .array t, vs => (vs.map (encode t)).flatten
+  | .string, s => s.val.toUTF8.data.toList
+  | .array t, vs => (vs.val.map (encode t)).flatten
   | .fixedArray t _, ⟨vs, _⟩ => (vs.map (encode t)).flatten
   | .tuple ts, vs => encodePackedTuple ts vs
 

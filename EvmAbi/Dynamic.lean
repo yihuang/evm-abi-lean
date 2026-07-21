@@ -65,6 +65,18 @@ theorem fromUTF8?_toUTF8 (s : String) : String.fromUTF8? s.toUTF8 = some s := by
   rw [String.toUTF8_eq_toByteArray, dif_pos s.isValidUTF8]
   rfl
 
+/-- `fromUTF8?` inverse direction: a successfully decoded string re-encodes
+to the same bytes. -/
+theorem toUTF8_of_fromUTF8? {b : ByteArray} {s : String} (h : String.fromUTF8? b = some s) :
+    s.toUTF8 = b := by
+  unfold String.fromUTF8? at h
+  split at h
+  · next hv =>
+    rw [Option.some.injEq] at h
+    subst h
+    rfl
+  · contradiction
+
 /-- `ByteArray`/`List UInt8` roundtrip needed by the string layer. -/
 theorem dataToList_toByteArray (ba : ByteArray) : ba.data.toList.toByteArray = ba := by
   apply ByteArray.data_inj
@@ -111,5 +123,31 @@ theorem decodeBytesPrefix_append (h : bs.length < 2 ^ 256) :
     hdata, hpad, if_pos ⟨rfl, rfl⟩]
   congr 1
   simp [length_pad32, length_bytesOfWord] <;> omega
+
+/-- A prefix-decoded `bytes` payload is bounded by its own length word —
+what lets `decode` return refined values whose bound is intrinsic. -/
+theorem length_lt_of_decodeBytesPrefix {buf bs : List UInt8} {n : Nat}
+    (h : decodeBytesPrefix buf = some (bs, n)) : bs.length < 2 ^ 256 := by
+  simp only [decodeBytesPrefix] at h
+  cases hlen : natAt buf 0 with
+  | none => simp only [hlen, Option.bind_none] at h; contradiction
+  | some len =>
+      simp only [hlen, Option.bind_some] at h
+      by_cases hc : ((buf.drop 32).take len).length = len ∧
+          ((buf.drop 32).drop len).take ((32 - len % 32) % 32) =
+            List.replicate ((32 - len % 32) % 32) 0
+      · rw [if_pos hc] at h
+        have hbs : (buf.drop 32).take len = bs := congrArg Prod.fst (Option.some.inj h)
+        rw [← hbs, hc.1]
+        exact natAt_lt hlen
+      · rw [if_neg hc] at h; contradiction
+
+/-- The bound of a prefix-decoded `string` payload, transported through the
+UTF-8 roundtrip onto the decoded string. -/
+theorem size_toUTF8_lt_of_decodeBytesPrefix {buf bs : List UInt8} {n : Nat} {s : String}
+    (hp : decodeBytesPrefix buf = some (bs, n))
+    (hs : String.fromUTF8? bs.toByteArray = some s) : s.toUTF8.size < 2 ^ 256 := by
+  rw [Binary.ByteArray.size_eq_toList_length, toUTF8_of_fromUTF8? hs]
+  simpa [List.data_toByteArray] using length_lt_of_decodeBytesPrefix hp
 
 end EvmAbi

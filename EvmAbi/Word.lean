@@ -60,4 +60,16 @@ theorem natAt_append (buf rest : List UInt8) (w : UInt256) (i : Nat)
     natAt (buf ++ (bytesOfWord w ++ rest)) i = some w.toNat := by
   simp [natAt, wordAt_append buf rest w i h]
 
+/-- Anything `natAt` reads back is below `2 ^ 256`: it came out of a
+32-byte word. -/
+theorem natAt_lt {buf : List UInt8} {i n : Nat} (h : natAt buf i = some n) :
+    n < 2 ^ 256 := by
+  simp only [natAt] at h
+  cases hw : wordAt buf i with
+  | none => simp only [hw, Option.map_none] at h; contradiction
+  | some w =>
+      simp only [hw, Option.map_some, Option.some.injEq] at h
+      rw [← h]
+      exact UInt256.toNat_lt w
+
 end EvmAbi

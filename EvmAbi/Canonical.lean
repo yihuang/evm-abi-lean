@@ -29,12 +29,18 @@ Theorems (packages C1–C3):
   family: whatever validates also lenient-decodes.
 * **C3 soundness** — `encode_eq_take_of_validate` family: a buffer that
   validates and decodes to `v` has `encode t v` as its consumed prefix.
-  The checker is not too lenient: canonical buffers are exactly the image
-  of `encode`.
 
-Corollaries: `decodeCanonical_encode` (strict roundtrip) and
+Package C4 of the roadmap ("bounds are intrinsic") dissolved into the value
+family itself: `Ty.Val` carries every dynamic payload's length bound, and
+`decode` builds the refined values directly from its own length words —
+there is no bound predicate left to prove theorems about.
+
+Corollaries: `decodeCanonical_encode` (strict roundtrip),
 `encode_of_decodeCanonical` (canonical uniqueness: a strictly decodable
-buffer *is* the encoding of its decoded value).
+buffer *is* the encoding of its decoded value), and the capstones
+`isCanonical_iff` / `decodeCanonical_eq_some_iff` — the promise "canonical
+buffers are exactly the image of `encode`" as literal iffs, with no bound
+conjunct on either side.
 -/
 
 namespace EvmAbi
@@ -97,18 +103,6 @@ theorem tailOffset_succ (ps : List Part) (xs : List Part) (p : Part) (ys : List 
   rw [htake, tailSizes_append]
   simp [tailSizes]
   omega
-
-/-- `fromUTF8?` inverse direction: a successfully decoded string re-encodes
-to the same bytes. -/
-theorem toUTF8_of_fromUTF8? {b : ByteArray} {s : String} (h : String.fromUTF8? b = some s) :
-    s.toUTF8 = b := by
-  unfold String.fromUTF8? at h
-  split at h
-  · next hv =>
-    rw [Option.some.injEq] at h
-    subst h
-    rfl
-  · contradiction
 
 /-- `encodeInt` of a two's-complement-decoded word is the word itself. -/
 theorem encodeInt_eq_encodeUint_of_decodeInt (x : Nat) (hx : x < 2 ^ 256) (i : Int)
@@ -339,9 +333,9 @@ is why the walkers need no static/dynamic split of their own. -/
 mutual
 /-- **Canonical completeness, prefix form**: the encoding of every value
 validates, consuming exactly the encoding's length.  `hb` bounds the whole
-buffer (so no offset word wraps); `hl` bounds the dynamic payloads (so no
-length word wraps). -/
-theorem validate_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
+buffer (so no offset word wraps); the dynamic payload bounds are carried by
+the value itself. -/
+theorem validate_encode_append (t : Ty) (hv : t.Valid) (v : t.Val)
     (rest : List UInt8) (hb : (encode t v ++ rest).length < 2 ^ 256) :
     validate t (encode t v ++ rest) = some (encode t v).length := by
   cases t with
@@ -350,52 +344,50 @@ theorem validate_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBoun
         encode_length_static _ rfl hv v]
       rfl
   | bytes =>
-      have hlb : v.length < 2 ^ 256 := by simpa [LenBound] using hl
-      have hr := decodeBytesPrefix_append (bs := v) (rest := rest) hlb
+      obtain ⟨bs, hlb⟩ := v
+      have hr := decodeBytesPrefix_append (bs := bs) (rest := rest) hlb
       simp only [validate, encode, hr, Option.map_some]
   | string =>
-      have hlb : v.toUTF8.size < 2 ^ 256 := by simpa [LenBound] using hl
-      have hb2 : v.toUTF8.data.toList.length < 2 ^ 256 := by
-        rw [← Binary.ByteArray.size_eq_toList_length v.toUTF8]
+      obtain ⟨s, hlb⟩ := v
+      have hb2 : s.toUTF8.data.toList.length < 2 ^ 256 := by
+        rw [← Binary.ByteArray.size_eq_toList_length s.toUTF8]
         exact hlb
-      have hr := decodeBytesPrefix_append (bs := v.toUTF8.data.toList) (rest := rest) hb2
+      have hr := decodeBytesPrefix_append (bs := s.toUTF8.data.toList) (rest := rest) hb2
       simp only [validate, encode, encodeString, hr, dataToList_toByteArray,
         fromUTF8?_toUTF8]
   | array t =>
-      have hla : v.length < 2 ^ 256 ∧ AllLenBound t v := by simpa [LenBound] using hl
-      obtain ⟨hlk, hls⟩ := hla
+      obtain ⟨vs, hlk⟩ := v
       have hvt : t.Valid := hv
-      have hbT : (encodeParts (v.map (partOf t)) ++ rest).length < 2 ^ 256 := by
+      have hbT : (encodeParts (vs.map (partOf t)) ++ rest).length < 2 ^ 256 := by
         have hb' := hb
         simp only [encode, List.length_append, length_encodeUint] at hb'
         rw [List.length_append]
         omega
-      have hwalk := validateElems_encode_append t hvt v v.length rfl hls [] []
-        0 (by simp [headSizes]) (v.length * t.headSize) (by
+      have hwalk := validateElems_encode_append t hvt vs vs.length rfl [] []
+        0 (by simp [headSizes]) (vs.length * t.headSize) (by
           simp only [List.nil_append, List.append_nil, List.length_nil]
           rw [tailOffset, List.take_zero, tailSizes, Nat.add_zero,
-            headSizes_map_partOf_any t hvt v])
-        rest (by simpa using wf_map_partOf t hvt v) (by simpa using hbT)
+            headSizes_map_partOf_any t hvt vs])
+        rest (by simpa using wf_map_partOf t hvt vs) (by simpa using hbT)
       simp only [List.nil_append, List.append_nil] at hwalk
-      have hcnt : natAt (encodeUint v.length ++ (encodeParts (v.map (partOf t)) ++ rest)) 0 =
-          some v.length := by
+      have hcnt : natAt (encodeUint vs.length ++ (encodeParts (vs.map (partOf t)) ++ rest)) 0 =
+          some vs.length := by
         unfold encodeUint
-        have hw := natAt_append ([] : List UInt8) (encodeParts (v.map (partOf t)) ++ rest)
-          (UInt256.ofNat v.length) 0 (by simp)
+        have hw := natAt_append ([] : List UInt8) (encodeParts (vs.map (partOf t)) ++ rest)
+          (UInt256.ofNat vs.length) 0 (by simp)
         rw [List.nil_append] at hw
         rw [hw, UInt256.toNat_ofNat, Nat.mod_eq_of_lt
-          (show v.length < UInt256.size from hlk)]
-      have hdrop : (encodeUint v.length ++ (encodeParts (v.map (partOf t)) ++ rest)).drop 32 =
-          encodeParts (v.map (partOf t)) ++ rest :=
+          (show vs.length < UInt256.size from hlk)]
+      have hdrop : (encodeUint vs.length ++ (encodeParts (vs.map (partOf t)) ++ rest)).drop 32 =
+          encodeParts (vs.map (partOf t)) ++ rest :=
         drop_append_of_length (length_encodeUint _)
       simp only [validate, encode, List.append_assoc, hcnt, hdrop, hwalk, Option.map_some]
       rw [List.length_append, length_encodeUint, length_encodeParts,
-        headSizes_map_partOf_any t hvt v]
+        headSizes_map_partOf_any t hvt vs]
   | fixedArray t n =>
       obtain ⟨vs, hvs⟩ := v
       have hvt : t.Valid := hv
-      have hls : AllLenBound t vs := by simpa [LenBound] using hl
-      have hwalk := validateElems_encode_append t hvt vs n hvs hls [] [] 0 (by simp [headSizes])
+      have hwalk := validateElems_encode_append t hvt vs n hvs [] [] 0 (by simp [headSizes])
         (n * t.headSize) (by
           simp only [List.nil_append, List.append_nil, List.length_nil]
           rw [tailOffset, List.take_zero, tailSizes, Nat.add_zero, ← hvs,
@@ -406,8 +398,7 @@ theorem validate_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBoun
       rw [length_encodeParts, ← hvs, headSizes_map_partOf_any t hvt vs]
   | tuple ts =>
       have hvts : AllValid ts := hv
-      have hls : TupleLenBounds ts v := by simpa [LenBound] using hl
-      have hwalk := validateTuple_encode_append ts hvts v hls [] [] 0 (by simp [headSizes])
+      have hwalk := validateTuple_encode_append ts hvts v [] [] 0 (by simp [headSizes])
         (headSizeSum ts) (by
           simp only [List.nil_append, List.append_nil, List.length_nil]
           rw [tailOffset, List.take_zero, tailSizes, Nat.add_zero,
@@ -422,7 +413,7 @@ termination_by 8 * sizeOf t
 head slot and advances the frontier by exactly its own tail size.  For a
 dynamic component this is where the canonical-layout check bites: its offset
 word holds the frontier value `E`, so the `o = expectedTail` test passes. -/
-theorem validateElem_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
+theorem validateElem_encode_append (t : Ty) (hv : t.Valid) (v : t.Val)
     (xs zs : List Part) (off : Nat) (hoff : off = headSizes xs)
     (E : Nat) (hE : E = tailOffset (xs ++ partOf t v :: zs) xs.length)
     (rest : List UInt8)
@@ -436,12 +427,12 @@ theorem validateElem_encode_append (t : Ty) (hv : t.Valid) (v : t.Val) (hl : Len
       natAt_offset_partOf_dynamic t v hs xs zs rest hwf hb]
     dsimp only
     rw [if_pos hE.symm, heq,
-      validate_encode_append t hv v hl _ (by rw [← heq, List.length_drop]; omega)]
+      validate_encode_append t hv v _ (by rw [← heq, List.length_drop]; omega)]
     dsimp only
     rw [tailSize_partOf_dynamic t v hs, hE]
   · have heq := drop_head_partOf_static t hs v xs zs rest off hoff
     rw [validateElem_static t _ _ _ hs, heq,
-      validate_encode_append t hv v hl _ (by rw [← heq, List.length_drop]; omega)]
+      validate_encode_append t hv v _ (by rw [← heq, List.length_drop]; omega)]
     dsimp only
     rw [tailSize_partOf_static t v hs, Nat.add_zero]
 termination_by 8 * sizeOf t + 1
@@ -449,7 +440,7 @@ termination_by 8 * sizeOf t + 1
 /-- Element lists validate from their own encoding inside a larger
 head/tail layout, the frontier advancing exactly along the tails. -/
 theorem validateElems_encode_append (t : Ty) (hv : t.Valid) (vs : List t.Val) (k : Nat)
-    (hk : vs.length = k) (hls : AllLenBound t vs)
+    (hk : vs.length = k)
     (xs ys : List Part) (off : Nat) (hoff : off = headSizes xs)
     (E : Nat) (hE : E = tailOffset (xs ++ vs.map (partOf t) ++ ys) xs.length)
     (rest : List UInt8)
@@ -464,8 +455,6 @@ theorem validateElems_encode_append (t : Ty) (hv : t.Valid) (vs : List t.Val) (k
   | cons w ws ih =>
       have hk' : k = ws.length + 1 := by rw [← hk, List.length_cons]
       subst hk'
-      have hlc : LenBound t w ∧ AllLenBound t ws := by simpa [AllLenBound] using hls
-      obtain ⟨hlw, hlsw⟩ := hlc
       simp only [List.map_cons, validateElems]
       simp only [List.map_cons] at hwf hb hE
       simp only [List.append_assoc, List.cons_append] at hwf hb hE ⊢
@@ -476,11 +465,11 @@ theorem validateElems_encode_append (t : Ty) (hv : t.Valid) (vs : List t.Val) (k
       have hb' : (encodeParts (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) ++ rest).length <
           2 ^ 256 := by rwa [← hre]
       have hE' := tailOffset_snoc (partOf t w) xs (ws.map (partOf t) ++ ys) E hE
-      rw [validateElem_encode_append t hv w hlw xs (ws.map (partOf t) ++ ys) off hoff E hE
+      rw [validateElem_encode_append t hv w xs (ws.map (partOf t) ++ ys) off hoff E hE
         rest hwf hb]
       dsimp only
       rw [hre] at hE' ⊢
-      rw [ih (ws.length) rfl hlsw (xs ++ [partOf t w]) (off + t.headSize)
+      rw [ih (ws.length) rfl (xs ++ [partOf t w]) (off + t.headSize)
         (headSizes_snoc_partOf t hv w xs off hoff) (E + (partOf t w).tailSize) hE' hwf' hb']
       simp only [tailSizes, Nat.add_assoc]
 termination_by 8 * sizeOf t + 2
@@ -488,18 +477,16 @@ termination_by 8 * sizeOf t + 2
 /-- Tuples validate from their own encoding inside a larger head/tail
 layout, the frontier advancing exactly along the tails. -/
 theorem validateTuple_encode_append : (ts : List Ty) → AllValid ts → (vs : TupleVal ts) →
-    TupleLenBounds ts vs → (xs ys : List Part) → (off : Nat) → off = headSizes xs →
+    (xs ys : List Part) → (off : Nat) → off = headSizes xs →
     (E : Nat) → E = tailOffset (xs ++ partsOfTuple ts vs ++ ys) xs.length →
     (rest : List UInt8) → WF (xs ++ partsOfTuple ts vs ++ ys) →
     (encodeParts (xs ++ partsOfTuple ts vs ++ ys) ++ rest).length < 2 ^ 256 →
     validateTuple ts (encodeParts (xs ++ partsOfTuple ts vs ++ ys) ++ rest) off E =
       some (E + tailSizes (partsOfTuple ts vs))
-  | [], _, _, _, _, _, _, _, _, _, _, _, _ => by
+  | [], _, _, _, _, _, _, _, _, _, _, _ => by
       simp only [partsOfTuple, validateTuple, tailSizes, Nat.add_zero]
-  | t :: ts, hv, (v, vs), hls, xs, ys, off, hoff, E, hE, rest, hwf, hb => by
+  | t :: ts, hv, (v, vs), xs, ys, off, hoff, E, hE, rest, hwf, hb => by
       obtain ⟨hvt, hvs⟩ := hv
-      have hlc : LenBound t v ∧ TupleLenBounds ts vs := by simpa [TupleLenBounds] using hls
-      obtain ⟨hlv, hlvs⟩ := hlc
       simp only [partsOfTuple, validateTuple]
       simp only [partsOfTuple] at hwf hb hE
       simp only [List.append_assoc, List.cons_append] at hwf hb hE ⊢
@@ -510,11 +497,11 @@ theorem validateTuple_encode_append : (ts : List Ty) → AllValid ts → (vs : T
       have hb' : (encodeParts (((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys) ++ rest).length <
           2 ^ 256 := by rwa [← hre]
       have hE' := tailOffset_snoc (partOf t v) xs (partsOfTuple ts vs ++ ys) E hE
-      rw [validateElem_encode_append t hvt v hlv xs (partsOfTuple ts vs ++ ys) off hoff E hE
+      rw [validateElem_encode_append t hvt v xs (partsOfTuple ts vs ++ ys) off hoff E hE
         rest hwf hb]
       dsimp only
       rw [hre] at hE' ⊢
-      rw [validateTuple_encode_append ts hvs vs hlvs (xs ++ [partOf t v]) ys (off + t.headSize)
+      rw [validateTuple_encode_append ts hvs vs (xs ++ [partOf t v]) ys (off + t.headSize)
         (headSizes_snoc_partOf t hvt v xs off hoff) (E + (partOf t v).tailSize) hE' rest hwf' hb']
       simp only [tailSizes, Nat.add_assoc]
 termination_by ts => 8 * sizeOf ts + 3
@@ -538,7 +525,8 @@ theorem validate_decode (t : Ty) (buf : List UInt8) (n : Nat)
   | bytes =>
       rw [validate] at h
       obtain ⟨p, hp, _⟩ := Option.map_eq_some_iff.mp h
-      exact ⟨p.1, by simp only [decode, hp, Option.map_some]⟩
+      obtain ⟨bs, m⟩ := p
+      exact ⟨_, decode_bytes_pos hp⟩
   | string =>
       simp only [validate] at h
       cases hp : decodeBytesPrefix buf with
@@ -549,7 +537,7 @@ theorem validate_decode (t : Ty) (buf : List UInt8) (n : Nat)
           cases hs : String.fromUTF8? bs.toByteArray with
           | none => simp only [hs] at h; contradiction
           | some s =>
-              exact ⟨s, by simp only [decode, hp, Option.bind_some, hs]⟩
+              exact ⟨_, decode_string_pos hp hs⟩
   | array t =>
       simp only [validate] at h
       cases hk : natAt buf 0 with
@@ -560,7 +548,7 @@ theorem validate_decode (t : Ty) (buf : List UInt8) (n : Nat)
           | none => simp only [he] at h; contradiction
           | some E₁ =>
               obtain ⟨vs, hvs⟩ := validateElems_decode t k (buf.drop 32) 0 (k * t.headSize) E₁ he
-              exact ⟨vs.val, by simp only [decode, hk, hvs, Option.map_some]⟩
+              exact ⟨_, by rw [decode_array_pos hk, hvs]; rfl⟩
   | fixedArray t n' =>
       simp only [validate] at h
       obtain ⟨vs, hvs⟩ := validateElems_decode t n' buf 0 (n' * t.headSize) n h
@@ -752,14 +740,8 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
             | none => simp only [hdu, Option.map_none] at hdi; contradiction
             | some x =>
                 simp only [hdu, Option.map_some] at hdi
-                have hx256 : x < 2 ^ 256 := by
-                  simp only [decodeUint, natAt] at hdu
-                  cases hw : wordAt buf 0 with
-                  | none => simp only [hw, Option.map_none] at hdu; contradiction
-                  | some w =>
-                      simp only [hw, Option.map_some, Option.some.injEq] at hdu
-                      rw [← hdu]
-                      exact UInt256.toNat_lt w
+                have hx256 : x < 2 ^ 256 :=
+                  natAt_lt (show natAt buf 0 = some x from hdu)
                 have hxi : (if x < 2 ^ 255 then (x : Int) else (x : Int) - 2 ^ 256) = i :=
                   Option.some.inj hdi
                 have henc := encodeInt_eq_encodeUint_of_decodeInt x hx256 i hxi
@@ -827,9 +809,9 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
           obtain ⟨bs, m'⟩ := p
           simp only [hp, Option.map_some] at hval
           have hn : m' = n := Option.some.inj hval
-          simp only [decode] at hd
-          simp only [hp, Option.map_some] at hd
-          have hv' : bs = v := Option.some.inj hd
+          obtain ⟨bv, hbv⟩ := v
+          rw [decode_bytes_pos hp] at hd
+          have hv' : bs = bv := congrArg Subtype.val (Option.some.inj hd)
           subst hv'
           subst hn
           simp only [encode]
@@ -846,9 +828,9 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
           | some s =>
               simp only [hs] at hval
               have hn : m' = n := Option.some.inj hval
-              simp only [decode] at hd
-              simp only [hp, Option.bind_some, hs] at hd
-              have hv' : s = v := Option.some.inj hd
+              obtain ⟨sv, hsv⟩ := v
+              rw [decode_string_pos hp hs] at hd
+              have hv' : s = sv := congrArg Subtype.val (Option.some.inj hd)
               subst hv'
               subst hn
               obtain ⟨htake, hlen⟩ := take_eq_encodeBytes_of_decodeBytesPrefix buf bs m' hp
@@ -870,13 +852,14 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
           | some E₁ =>
               simp only [he, Option.map_some] at hval
               have hn : n = 32 + E₁ := (Option.some.inj hval).symm
-              simp only [decode] at hd
-              simp only [hk] at hd
+              obtain ⟨vl, hvl⟩ := v
+              rw [decode_array_pos hk] at hd
               cases hde : decodeElems t k (buf.drop 32) 0 with
-              | none => simp only [hde] at hd; contradiction
+              | none => simp only [hde, Option.map_none] at hd; contradiction
               | some vs =>
                   simp only [hde, Option.map_some] at hd
-                  have hv' : v = vs.val := (Option.some.inj hd).symm
+                  have hv' : vl = vs.val :=
+                    (congrArg Subtype.val (Option.some.inj hd)).symm
                   have hvt : t.Valid := hv
                   obtain ⟨hhead, htail, hfront⟩ :=
                     segments_of_validateElems t hvt k (buf.drop 32) 0 (k * t.headSize) E₁
@@ -1117,23 +1100,23 @@ end
 
 /-- **Canonical completeness**: encodings validate, consuming exactly their
 length. -/
-theorem validate_encode (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
+theorem validate_encode (t : Ty) (hv : t.Valid) (v : t.Val)
     (hb : (encode t v).length < 2 ^ 256) :
     validate t (encode t v) = some (encode t v).length := by
-  have h := validate_encode_append t hv v hl [] (by rwa [List.append_nil])
+  have h := validate_encode_append t hv v [] (by rwa [List.append_nil])
   rwa [List.append_nil] at h
 
 /-- The encoder's output is canonical. -/
-theorem isCanonical_encode (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
+theorem isCanonical_encode (t : Ty) (hv : t.Valid) (v : t.Val)
     (hb : (encode t v).length < 2 ^ 256) : IsCanonical t (encode t v) :=
-  validate_encode t hv v hl hb
+  validate_encode t hv v hb
 
 /-- **Canonical roundtrip**: strict decode after encode. -/
-theorem decodeCanonical_encode (t : Ty) (hv : t.Valid) (v : t.Val) (hl : LenBound t v)
+theorem decodeCanonical_encode (t : Ty) (hv : t.Valid) (v : t.Val)
     (hb : (encode t v).length < 2 ^ 256) :
     decodeCanonical t (encode t v) = some v := by
-  simp only [decodeCanonical, validate_encode t hv v hl hb, ite_true]
-  exact roundtrip t hv v hl hb
+  simp only [decodeCanonical, validate_encode t hv v hb, ite_true]
+  exact roundtrip t hv v hb
 
 /-- **Canonical uniqueness**: a strictly decodable buffer IS the encoding of
 its decoded value.  (Injectivity of `encode` itself is a one-liner from
@@ -1152,5 +1135,47 @@ theorem encode_of_decodeCanonical (t : Ty) (hv : t.Valid) (buf : List UInt8) (v 
         rw [hn, List.take_length] at hC3
         exact hC3.symm
       · rw [if_neg hn] at h; contradiction
+
+/-- The strict decoder is a refinement of the lenient one. -/
+theorem decode_of_decodeCanonical (t : Ty) (buf : List UInt8) (v : t.Val)
+    (h : decodeCanonical t buf = some v) : decode t buf = some v := by
+  simp only [decodeCanonical] at h
+  cases hv' : validate t buf with
+  | none => simp only [hv'] at h; contradiction
+  | some n =>
+      simp only [hv'] at h
+      by_cases hn : n = buf.length
+      · rwa [if_pos hn] at h
+      · rw [if_neg hn] at h; contradiction
+
+/-- **Image characterization** (capstone): under the buffer bound, the
+canonical buffers of a valid type are exactly the encodings of its values —
+with no bound conjunct anywhere, since the bounds live in `Val` itself. -/
+theorem isCanonical_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
+    (hb : buf.length < 2 ^ 256) :
+    IsCanonical t buf ↔ ∃ v, decode t buf = some v ∧ encode t v = buf := by
+  constructor
+  · intro h
+    obtain ⟨v, hd⟩ := validate_decode t buf buf.length h
+    have hC3 := (encode_eq_take_of_validate t hv buf buf.length h v hd).1
+    rw [List.take_length] at hC3
+    exact ⟨v, hd, hC3.symm⟩
+  · rintro ⟨v, hd, he⟩
+    show validate t buf = some buf.length
+    rw [← he]
+    exact validate_encode t hv v (by rw [he]; exact hb)
+
+/-- **Strict-decoder characterization** (capstone): `decodeCanonical`
+succeeds on exactly the encodings — no side condition on the value at all,
+since every `t.Val` carries its own bounds. -/
+theorem decodeCanonical_eq_some_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
+    (v : t.Val) (hb : buf.length < 2 ^ 256) :
+    decodeCanonical t buf = some v ↔ encode t v = buf := by
+  constructor
+  · intro h
+    exact encode_of_decodeCanonical t hv buf v h
+  · intro he
+    rw [← he]
+    exact decodeCanonical_encode t hv v (by rw [he]; exact hb)
 
 end EvmAbi
