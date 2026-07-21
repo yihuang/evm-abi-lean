@@ -116,14 +116,12 @@ def encodePacked : (t : Ty) → t.Val → List UInt8
   | .array t, vs => (vs.map (encode t)).flatten
   | .fixedArray t _, ⟨vs, _⟩ => (vs.map (encode t)).flatten
   | .tuple ts, vs => encodePackedTuple ts vs
-termination_by t => (sizeOf t, 0)
 
 /-- Packed encoder for the flat argument list of a multi-argument
 `abi.encodePacked(a, b, …)` call. -/
 def encodePackedTuple : (ts : List Ty) → TupleVal ts → List UInt8
   | [], _ => []
   | t :: ts, (v, vs) => encodePacked t v ++ encodePackedTuple ts vs
-termination_by ts => (sizeOf ts, 1)
 end
 
 /-- Read `n` consecutive packed array elements of type `t` from the front
@@ -164,7 +162,6 @@ def decodePacked : (t : Ty) → List UInt8 → Option t.Val
     | false => none
   | .tuple ts, buf => decodePackedTuple ts buf
   | _, _ => none
-termination_by t => (sizeOf t, 0)
 
 /-- Read a tuple from the front of the buffer, consuming components
 sequentially by their packed sizes. -/
@@ -173,7 +170,6 @@ def decodePackedTuple : (ts : List Ty) → List UInt8 → Option (TupleVal ts)
   | t :: ts, buf => match decodePacked t buf with
     | none => none
     | some v => (decodePackedTuple ts (buf.drop t.packedSize)).map (v, ·)
-termination_by ts => (sizeOf ts, 1)
 end
 
 /-! ## Length lemmas -/
@@ -424,7 +420,7 @@ termination_by t => 4 * sizeOf t
 theorem decodePackedTuple_append : (ts : List Ty) → allStatic ts = true → AllValid ts →
     (vs : TupleVal ts) → (rest : List UInt8) →
     decodePackedTuple ts (encodePackedTuple ts vs ++ rest) = some vs
-  | [], _, _, _, _ => by simp [encodePackedTuple, decodePackedTuple]
+  | [], _, _, _, _ => by simp [decodePackedTuple]
   | t :: ts, hs, hv, (v, vs), rest => by
       simp only [allStatic] at hs
       rw [Bool.and_eq_true] at hs

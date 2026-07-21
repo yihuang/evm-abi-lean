@@ -558,4 +558,18 @@ example : PackedSupported .string = true := by native_decide
 example : PackedSupported (.fixedArray (.fixedArray (.uint 8) 2) 2) = false := by native_decide
 example : PackedSupported (.tuple [.uint 8, .bool]) = false := by native_decide
 
+/-! ## Packed ABI: kernel reducibility
+
+The packed codec is structurally recursive, so plain `decide` (kernel
+reduction, no compiler in the trusted base) evaluates it.  These fail if
+the mutual blocks ever fall back to well-founded recursion (`Acc.rec`
+gets stuck under `decide`).  Array clauses defer to the standard `encode`
+and stay `native_decide`-only. -/
+
+example : encodePacked .bool true = [1] := by decide
+example : encodePacked (.uint 8) ⟨42, by decide⟩ = [42] := by decide
+example : encodePacked (.tuple [.uint 8, .bool]) (⟨42, by decide⟩, (true, ())) =
+    [42, 1] := by decide
+example : decodePacked (.uint 8) [42] = some ⟨42, by decide⟩ := by decide
+
 end EvmAbi
