@@ -17,10 +17,7 @@ The fundamental theorems:
 
 * `drop_headOffset_static` — a static part's head is found at its head offset;
 * `wordAt_offset_append` — a dynamic part's head word *contains* its tail offset;
-* `drop_tailOffset_append` — dropping to that offset lands exactly on the tail;
-* `readTail_append` — following the offset word reads the tail back;
-* `decodeBytesPrefix_tailOffset` — end-to-end: a dynamic `bytes` value
-  roundtrips through the combinator.
+* `drop_tailOffset_append` — dropping to that offset lands exactly on the tail.
 -/
 
 namespace EvmAbi
@@ -58,9 +55,6 @@ def headSizes : List Part → Nat
 def tailSizes : List Part → Nat
   | [] => 0
   | p :: ps => p.tailSize + tailSizes ps
-
-/-- Byte offset of part `i`'s head within the head section. -/
-def headOffset (ps : List Part) (i : Nat) : Nat := headSizes (ps.take i)
 
 /-- Byte offset at which part `i`'s tail starts in the full encoding:
 the whole head section plus the tails of the preceding dynamic parts. -/
@@ -216,33 +210,5 @@ theorem wordAt_offset_append (hwf : WF (xs ++ ⟨head, tail, true⟩ :: ys)) :
   rw [encodeParts, encodeHeads_append, encodeHeads, tailOffset, take_append_of_length rfl]
   simp only [List.append_assoc]
   exact wordAt_append _ _ _ _ hA
-
-/-- **Read-back through the offset word**: following a dynamic part's head
-word lands on its tail and recovers it. -/
-theorem readTail_append (hwf : WF (xs ++ ⟨head, tail, true⟩ :: ys))
-    (hb : (encodeParts (xs ++ ⟨head, tail, true⟩ :: ys)).length < 2 ^ 256) :
-    (wordAt (encodeParts (xs ++ ⟨head, tail, true⟩ :: ys)) (headSizes xs / 32)).map
-      (fun w => ((encodeParts (xs ++ ⟨head, tail, true⟩ :: ys)).drop w.toNat).take
-        tail.length) =
-    some tail := by
-  rw [wordAt_offset_append hwf, Option.map_some]
-  have hle : tailOffset (xs ++ ⟨head, tail, true⟩ :: ys) xs.length ≤
-      (encodeParts (xs ++ ⟨head, tail, true⟩ :: ys)).length := by
-    rw [length_encodeParts, tailOffset, take_append_of_length rfl, tailSizes_append]
-    simp [tailSizes, Part.tailSize]
-  have hto : (UInt256.ofNat (tailOffset (xs ++ ⟨head, tail, true⟩ :: ys) xs.length)).toNat =
-      tailOffset (xs ++ ⟨head, tail, true⟩ :: ys) xs.length := by
-    rw [UInt256.toNat_ofNat]; exact Nat.mod_eq_of_lt (Nat.lt_of_le_of_lt hle hb)
-  rw [hto, drop_tailOffset_append, take_append_of_length rfl]
-
-/-- **End-to-end**: a dynamic `bytes` value stored as a part's tail is
-located via its tail offset and prefix-decoded back to the original value. -/
-theorem decodeBytesPrefix_tailOffset
-    (h : bs.length < 2 ^ 256) :
-    decodeBytesPrefix ((encodeParts (xs ++ ⟨head, encodeBytes bs, true⟩ :: ys)).drop
-      (tailOffset (xs ++ ⟨head, encodeBytes bs, true⟩ :: ys) xs.length)) =
-    some (bs, (encodeBytes bs).length) := by
-  rw [drop_tailOffset_append]
-  exact decodeBytesPrefix_append h
 
 end EvmAbi

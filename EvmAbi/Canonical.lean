@@ -92,32 +92,7 @@ theorem take_32_eq_encodeUint_of_natAt (buf : List UInt8) (i : Nat) (n : Nat)
     rw [UInt256.ofNat_toNat, UInt256.toBEBytes_ofBEBytes hl]
   · contradiction
 
-/-- The tail offset advances by exactly one part's tail. -/
-theorem tailOffset_succ (ps : List Part) (xs : List Part) (p : Part) (ys : List Part)
-    (h : ps = xs ++ p :: ys) :
-    tailOffset ps (xs.length + 1) = tailOffset ps xs.length + p.tailSize := by
-  subst h
-  rw [tailOffset, tailOffset, take_append_of_length rfl]
-  have htake : (xs ++ p :: ys).take (xs.length + 1) = xs ++ [p] := by
-    simp [List.take_append, List.take_of_length_le (Nat.le_succ _)]
-  rw [htake, tailSizes_append]
-  simp [tailSizes]
-  omega
 
-/-- `encodeInt` of a two's-complement-decoded word is the word itself. -/
-theorem encodeInt_eq_encodeUint_of_decodeInt (x : Nat) (hx : x < 2 ^ 256) (i : Int)
-    (h : (if x < 2 ^ 255 then (x : Int) else (x : Int) - 2 ^ 256) = i) :
-    encodeInt i = encodeUint x := by
-  by_cases hx2 : x < 2 ^ 255
-  · rw [if_pos hx2] at h
-    subst h
-    rw [encodeInt, if_pos (by omega)]
-    congr 1
-  · rw [if_neg hx2] at h
-    subst h
-    rw [encodeInt, if_neg (by omega)]
-    congr 1
-    omega
 
 /-! ## the validate family -/
 
@@ -315,7 +290,17 @@ theorem tailOffset_snoc (p : Part) (xs zs : List Part) (E : Nat)
     (hE : E = tailOffset (xs ++ p :: zs) xs.length) :
     E + p.tailSize = tailOffset (xs ++ p :: zs) (xs ++ [p]).length := by
   have hll : (xs ++ [p]).length = xs.length + 1 := by simp [List.length_append]
-  rw [hll, tailOffset_succ _ xs p zs rfl, hE]
+  rw [hll]
+  -- inline tailOffset_succ: tailOffset ps (xs.length + 1) = tailOffset ps xs.length + p.tailSize
+  have h_succ : tailOffset (xs ++ p :: zs) (xs.length + 1) =
+      tailOffset (xs ++ p :: zs) xs.length + p.tailSize := by
+    rw [tailOffset, tailOffset, take_append_of_length rfl]
+    have htake : (xs ++ p :: zs).take (xs.length + 1) = xs ++ [p] := by
+      simp [List.take_append, List.take_of_length_le (Nat.le_succ _)]
+    rw [htake, tailSizes_append]
+    simp [tailSizes]
+    omega
+  rw [h_succ, hE]
 
 /-! ## Package C1: canonical completeness -/
 
@@ -744,7 +729,18 @@ theorem encode_eq_take_of_validate (t : Ty) (hv : t.Valid) (buf : List UInt8) (n
                   natAt_lt (show natAt buf 0 = some x from hdu)
                 have hxi : (if x < 2 ^ 255 then (x : Int) else (x : Int) - 2 ^ 256) = i :=
                   Option.some.inj hdi
-                have henc := encodeInt_eq_encodeUint_of_decodeInt x hx256 i hxi
+                -- inline encodeInt_eq_encodeUint_of_decodeInt
+                have henc : encodeInt i = encodeUint x := by
+                  by_cases hx2 : x < 2 ^ 255
+                  · rw [if_pos hx2] at hxi
+                    subst hxi
+                    rw [encodeInt, if_pos (by omega)]
+                    congr 1
+                  · rw [if_neg hx2] at hxi
+                    subst hxi
+                    rw [encodeInt, if_neg (by omega)]
+                    congr 1
+                    omega
                 have htake := take_32_eq_encodeUint_of_natAt buf 0 x hdu
                 simp only [Nat.mul_zero, List.drop_zero] at htake
                 constructor

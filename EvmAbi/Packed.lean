@@ -326,30 +326,6 @@ theorem decodeBytesNPacked_append (bs : List UInt8) (h : bs.length = n) (rest : 
   unfold decodeBytesNPacked encodeBytesNPacked
   rw [if_pos (by rw [List.length_append]; omega), take_append_of_length h]
 
-/-! ## Exact-buffer primitive roundtrips (corollaries) -/
-
-theorem decodeUintPacked_encodeUintPacked (m : Nat) (n : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
-    (hn : n < 2 ^ m) :
-    decodeUintPacked m (encodeUintPacked m n) = some n := by
-  simpa using decodeUintPacked_append m n hm h8 hn []
-
-theorem decodeIntPacked_encodeIntPacked (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
-    (hl : -((2 ^ (m - 1) : Nat) : Int) ≤ i) (hu : i < ((2 ^ (m - 1) : Nat) : Int)) :
-    decodeIntPacked m (encodeIntPacked m i) = some i := by
-  simpa using decodeIntPacked_append m hm h8 hl hu []
-
-theorem decodeBoolPacked_encodeBoolPacked (b : Bool) :
-    decodeBoolPacked (encodeBoolPacked b) = some b := by
-  simpa using decodeBoolPacked_append b []
-
-theorem decodeAddressPacked_encodeAddressPacked (a : Nat) (h : a < 2 ^ 160) :
-    decodeAddressPacked (encodeAddressPacked a) = some a := by
-  simpa using decodeAddressPacked_append a h []
-
-theorem decodeBytesNPacked_encodeBytesNPacked (bs : List UInt8) (h : bs.length = n) :
-    decodeBytesNPacked n (encodeBytesNPacked bs) = some bs := by
-  simpa using decodeBytesNPacked_append bs h []
-
 /-! ## Static packed roundtrip -/
 
 /-- Element lists decode from their own padded-element encoding followed by

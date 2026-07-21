@@ -48,12 +48,6 @@ theorem wordAt_append (buf rest : List UInt8) (w : UInt256) (i : Nat)
   show some (UInt256.ofBEBytes (UInt256.toBEBytes w)) = some w
   rw [UInt256.ofBEBytes_toBEBytes]
 
-/-- Reading a freshly written word at offset 0. -/
-theorem wordAt_zero (w : UInt256) (rest : List UInt8) :
-    wordAt (bytesOfWord w ++ rest) 0 = some w := by
-  have e := wordAt_append ([] : List UInt8) rest w 0 (by simp)
-  simpa using e
-
 /-- `natAt` variant of the read-back theorem. -/
 theorem natAt_append (buf rest : List UInt8) (w : UInt256) (i : Nat)
     (h : buf.length = 32 * i) :

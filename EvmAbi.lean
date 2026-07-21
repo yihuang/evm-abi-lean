@@ -5,7 +5,6 @@ import EvmAbi.Ty
 import EvmAbi.Static
 import EvmAbi.Dynamic
 import EvmAbi.Codec
-import EvmAbi.StaticArray
 import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.Canonical
@@ -20,7 +19,7 @@ dependency).
 Current contents (the `roadmap node N` tags in module docstrings record
 the historical build order, nodes 1–8):
 
-* `EvmAbi.Bytes`   — byte-list plumbing: `pad32`, `splitEvery`, take/drop lemmas
+* `EvmAbi.Bytes`   — byte-list plumbing: `pad32`, take/drop lemmas
 * `EvmAbi.Align`   — 32-byte alignment arithmetic (`Aligned`)
 * `EvmAbi.Word`    — reading/writing 32-byte words (`UInt256`) at aligned offsets
 * `EvmAbi.Ty`      — the full ABI type universe + type-indexed value family
@@ -28,7 +27,6 @@ the historical build order, nodes 1–8):
                   `bytesN`, with roundtrips
 * `EvmAbi.Dynamic` — dynamic `bytes` / `string` with roundtrips, prefix decoder
 * `EvmAbi.Codec`   — `Ty`-indexed encode/decode for all types + unified roundtrip
-* `EvmAbi.StaticArray` — static arrays `T[k]` over word-sized elements
 * `EvmAbi.Parts`   — head/tail combinator: `Part`, `encodeParts`, offset theorems
 * `EvmAbi.Packed`  — packed ABI (`abi.encodePacked`, Solidity's non-standard
                   packed mode): tight scalars, in-place dynamic payloads,
