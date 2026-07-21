@@ -82,12 +82,21 @@ complete type grammar.
    are precisely the image of `encode`), and a unified roundtrip for the
    strict decoder.
 
+7. **Packed ABI encoding.**  `EvmAbi.Packed` implements Solidity's
+   non-standard packed mode: scalars are concatenated at their tight
+   widths, dynamic types (`bytes`, `string`, `T[]`) are encoded in place
+   without length words, and array *elements* keep their standard padded
+   32-byte-word layout.  Structs and nested arrays are not supported by
+   Solidity; `PackedSupported` marks the conformant fragment.  Packed
+   encoding is ambiguous without lengths, so only the static fragment is
+   decodable — `roundtrip_packed_static` proves its roundtrip.
+
 ## 3. Core Design
 
 ### 3.1 Type Universe (`Ty.lean`)
 
-The type grammar is an inductive `Ty` with ten constructors.  Three
-auxiliary predicates are defined alongside it:
+The type grammar is an inductive `Ty` with ten constructors.  Four
+auxiliary predicates/functions are defined alongside it:
 
 - **`Valid`** — size-parameter constraints (e.g., `uintM` requires `8∣M`,
   `8≤M≤256`).  Defined as a `Prop` with a `Decidable` instance.
@@ -99,10 +108,16 @@ auxiliary predicates are defined alongside it:
 - **`headSize`** — bytes occupied in the head section.  Static types take
   their full encoding size; dynamic types take 32 (the offset word).
 
-All three are defined via **mutual recursion** with their `List`-indexed
-siblings (`AllValid`, `allStatic`, `headSizeSum`).  This avoids well-founded
-recursion (`Acc.rec`), which would make the predicates opaque to the
-elaborator and break `@[reducible]` on `Val`.
+- **`packedSize`** — bytes occupied in packed encoding.  Scalars take
+  their tight width (`uint8` → 1, `address` → 20); fixed arrays take `n`
+  *padded* element slots (`uint8[3]` → 96), since Solidity pads packed
+  array elements; for dynamic types it is 0 (packed size is not
+  statically known, and `decodePacked` rejects them).
+
+All are defined via **mutual recursion** with their `List`-indexed
+siblings (`AllValid`, `allStatic`, `headSizeSum`, `packedSizeSum`).  This
+avoids well-founded recursion (`Acc.rec`), which would make the predicates
+opaque to the elaborator and break `@[reducible]` on `Val`.
 
 ### 3.2 Value Family
 
@@ -162,7 +177,39 @@ measure.
 The ABI codec uses `Parts` only for compound types; base types have their
 own standalone encoding for efficiency and simplicity.
 
-### 3.5 Roundtrip Proof Structure
+### 3.5 Packed ABI (`Packed.lean`)
+
+Solidity's non-standard packed mode obeys four rules: scalars shorter
+than 32 bytes are concatenated without padding; dynamic types are encoded
+in place and without the length; array *elements* are padded (standard
+32-byte-word layout), but still encoded in place; structs as well as
+nested arrays are not supported.  The module provides:
+
+- **Primitive packed codecs** — `encodeUintPacked` / `decodeUintPacked`,
+  etc., operating at the element's natural byte width (`m/8` for `uintM`,
+  1 for `bool`, 20 for `address`, `n` for `bytesN`).  Non-byte-aligned
+  widths are rejected at decode (the encoder would truncate them).
+
+- **Type-indexed packed codec** — `encodePacked : (t : Ty) → t.Val →
+  List UInt8` (total) and `decodePacked : (t : Ty) → List UInt8 →
+  Option t.Val`.  Scalars pack tight; `bytes`/`string` pack as their raw
+  payload; array elements are standard-encoded (`encode`, padded words)
+  and read back with the standard `decode`; tuples concatenate — the
+  `.tuple` arm models the flat argument list of a multi-argument
+  `abi.encodePacked(a, b, …)` call, and on nested tuples is a documented
+  non-Solidity extension.  `PackedSupported` marks the conformant
+  fragment.
+
+- **Static roundtrip** — `roundtrip_packed_static`: every static value
+  decodes from its own packed encoding.  Array elements ride on the
+  standard codec's `decode_encode_append_static`; only the scalar and
+  tuple walks need packed-specific lemmas.
+
+Dynamic types encode but do not decode: packed encoding provides no
+mechanism to delimit variable-length elements, so `decodePacked` returns
+`none` for them rather than guessing.
+
+### 3.6 Roundtrip Proof Structure
 
 The proof is organized into five packages (A–E) in `Codec.lean`:
 
@@ -259,6 +306,13 @@ smaller values, and the `decreasing_tactic` discharges every goal.
 
 ```
 ┌──────────────────────────────────────────────┐
+│                 Packed.lean                   │
+│  encodePacked / decodePacked (mutual)         │
+│  packed static roundtrip; array elements      │
+│  reuse the standard codec                     │
+└──────────────────────┬───────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────┐
 │                  Codec.lean                   │
 │  encode / decode (mutual)                     │
 │  readElem / decodeElems / decodeTuple (mutual)│
