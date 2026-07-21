@@ -551,6 +551,12 @@ example : encodePacked (.array (.uint 16))
 example : decodePacked (.uint 12) (encodePacked (.uint 12) ⟨4095, by decide⟩) = none := by
   native_decide
 
+-- Zero-width types are invalid (`Valid` needs `8 ≤ m`) and their packed
+-- encoding is empty, so decoding must refuse rather than conjure a value
+-- (previously `decodePacked (.int 0)` mapped -1 to `some 0`).
+example : decodePacked (.uint 0) [] = none := by decide
+example : decodePacked (.int 0) (encodePacked (.int 0) ⟨-1, by decide⟩) = none := by decide
+
 -- Rule 4 — the Solidity-conformant fragment: scalars, bytes/string, and
 -- arrays of scalars; structs and nested arrays are outside it.
 example : PackedSupported (.array (.uint 16)) = true := by native_decide

@@ -70,7 +70,7 @@ not byte-aligned are rejected: `encodeBEU (m / 8)` truncates them, so
 accepting them would let a lossy encode "roundtrip" (e.g. `uint12` of
 `4095` through one byte). -/
 def decodeUintPacked (m : Nat) (buf : List UInt8) : Option Nat :=
-  if m % 8 = 0 ∧ buf.length ≥ m / 8 then some (decodeBEU (buf.take (m / 8))) else none
+  if 0 < m ∧ m % 8 = 0 ∧ buf.length ≥ m / 8 then some (decodeBEU (buf.take (m / 8))) else none
 
 def decodeIntPacked (m : Nat) (buf : List UInt8) : Option Int :=
   (decodeUintPacked m buf).map fun n =>
@@ -229,7 +229,7 @@ end
 /-! ## Prefix-tolerant primitive roundtrips -/
 
 /-- `uintM` packed read-back over an appended suffix. -/
-theorem decodeUintPacked_append (m : Nat) (n : Nat) (h8 : 8 ∣ m) (hn : n < 2 ^ m)
+theorem decodeUintPacked_append (m : Nat) (n : Nat) (hm : 0 < m) (h8 : 8 ∣ m) (hn : n < 2 ^ m)
     (rest : List UInt8) :
     decodeUintPacked m (encodeUintPacked m n ++ rest) = some n := by
   unfold decodeUintPacked encodeUintPacked
@@ -238,7 +238,7 @@ theorem decodeUintPacked_append (m : Nat) (n : Nat) (h8 : 8 ∣ m) (hn : n < 2 ^
     rw [List.length_append, hlen]; omega
   have htk : (encodeBEU (m / 8) n ++ rest).take (m / 8) = encodeBEU (m / 8) n :=
     take_append_of_length hlen
-  rw [if_pos ⟨by omega, hge⟩, htk]
+  rw [if_pos ⟨hm, by omega, hge⟩, htk]
   have hpow := pow_eq_256 m h8
   have hn' : n < 256 ^ (m / 8) := by rw [← hpow]; exact hn
   have := decodeBEU_encodeBEU hn'
@@ -256,7 +256,7 @@ theorem decodeIntPacked_append (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
     have h_enc : encodeIntPacked m i = encodeUintPacked m i.toNat := by
       rw [encodeIntPacked, if_pos hi]
     rw [h_enc, decodeIntPacked]
-    have hdec := decodeUintPacked_append m i.toNat h8 hn rest
+    have hdec := decodeUintPacked_append m i.toNat hm h8 hn rest
     rw [hdec]
     dsimp
     apply Option.some.inj
@@ -280,7 +280,7 @@ theorem decodeIntPacked_append (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
     have h_enc : encodeIntPacked m i = encodeUintPacked m (2 ^ m - (-i).toNat) := by
       rw [encodeIntPacked, if_neg hi]
     rw [h_enc, decodeIntPacked]
-    have hdec := decodeUintPacked_append m (2 ^ m - (-i).toNat) h8 hn rest
+    have hdec := decodeUintPacked_append m (2 ^ m - (-i).toNat) hm h8 hn rest
     rw [hdec]
     dsimp
     apply Option.some.inj
@@ -318,7 +318,7 @@ theorem decodeBoolPacked_append (b : Bool) (rest : List UInt8) :
 /-- `address` packed read-back over an appended suffix. -/
 theorem decodeAddressPacked_append (a : Nat) (h : a < 2 ^ 160) (rest : List UInt8) :
     decodeAddressPacked (encodeAddressPacked a ++ rest) = some a :=
-  decodeUintPacked_append 160 a ⟨20, by decide⟩ h rest
+  decodeUintPacked_append 160 a (by decide) ⟨20, by decide⟩ h rest
 
 /-- `bytesN` packed read-back over an appended suffix. -/
 theorem decodeBytesNPacked_append (bs : List UInt8) (h : bs.length = n) (rest : List UInt8) :
@@ -328,9 +328,10 @@ theorem decodeBytesNPacked_append (bs : List UInt8) (h : bs.length = n) (rest : 
 
 /-! ## Exact-buffer primitive roundtrips (corollaries) -/
 
-theorem decodeUintPacked_encodeUintPacked (m : Nat) (n : Nat) (h8 : 8 ∣ m) (hn : n < 2 ^ m) :
+theorem decodeUintPacked_encodeUintPacked (m : Nat) (n : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
+    (hn : n < 2 ^ m) :
     decodeUintPacked m (encodeUintPacked m n) = some n := by
-  simpa using decodeUintPacked_append m n h8 hn []
+  simpa using decodeUintPacked_append m n hm h8 hn []
 
 theorem decodeIntPacked_encodeIntPacked (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
     (hl : -((2 ^ (m - 1) : Nat) : Int) ≤ i) (hu : i < ((2 ^ (m - 1) : Nat) : Int)) :
@@ -375,8 +376,9 @@ of its own packed encoding followed by an arbitrary suffix. -/
 theorem decodePacked_encodePacked_append : (t : Ty) → t.IsStatic = true → t.Valid →
     (v : t.Val) → (rest : List UInt8) → decodePacked t (encodePacked t v ++ rest) = some v
   | .uint m, hs, hv, ⟨n, hn⟩, rest => by
+      have hm : 0 < m := by have h := hv.1; omega
       have h8 : 8 ∣ m := Nat.dvd_of_mod_eq_zero hv.2.2
-      have hdec := decodeUintPacked_append m n h8 hn rest
+      have hdec := decodeUintPacked_append m n hm h8 hn rest
       simp only [encodePacked, decodePacked]
       rw [hdec]
       exact dif_pos hn
