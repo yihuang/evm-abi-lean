@@ -140,105 +140,9 @@ private theorem pow_eq_256 (m : Nat) (h8 : 8 ∣ m) : 2 ^ m = 256 ^ (m / 8) := b
     _ = (2 ^ 8) ^ (m / 8) := by rw [Nat.pow_mul]
     _ = 256 ^ (m / 8) := by rw [show (2 : Nat) ^ 8 = 256 by decide]
 
-/-! ## Roundtrips -/
-
-theorem decodeUintPacked_encodeUintPacked (m : Nat) (n : Nat) (h8 : 8 ∣ m) (hn : n < 2 ^ m) :
-    decodeUintPacked m (encodeUintPacked m n) = some n := by
-  unfold decodeUintPacked encodeUintPacked
-  have hlen : (encodeBEU (m / 8) n).length = m / 8 := length_encodeBEU _ _
-  have hge : (encodeBEU (m / 8) n).length ≥ m / 8 := by omega
-  have htk : (encodeBEU (m / 8) n).take (m / 8) = encodeBEU (m / 8) n :=
-    List.take_of_length_le (by omega)
-  have hpow := pow_eq_256 m h8
-  have hn' : n < 256 ^ (m / 8) := by rw [← hpow]; exact hn
-  have hdec' := decodeBEU_encodeBEU (len := m/8) hn'
-  simp [htk, hdec']
-
-theorem decodeIntPacked_encodeIntPacked (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
-    (hl : -((2 ^ (m - 1) : Nat) : Int) ≤ i) (hu : i < ((2 ^ (m - 1) : Nat) : Int)) :
-    decodeIntPacked m (encodeIntPacked m i) = some i := by
-  by_cases hi : 0 ≤ i
-  · -- i ≥ 0
-    have hn : i.toNat < 2 ^ m := by
-      have hlt_nat : i.toNat < 2 ^ (m - 1) := by
-        have hpos : (i.toNat : Int) = i := Int.toNat_of_nonneg hi
-        have hlt_int : (i.toNat : Int) < ((2 ^ (m - 1) : Nat) : Int) := by rwa [hpos]
-        exact NatCast.lt_iff.mp hlt_int
-      exact Nat.lt_of_lt_of_le hlt_nat (Nat.pow_le_pow_right (by decide) (by omega))
-    have h_enc : encodeIntPacked m i = encodeUintPacked m i.toNat := by
-      rw [encodeIntPacked, if_pos hi]
-    rw [h_enc, decodeIntPacked]
-    have hdec := decodeUintPacked_encodeUintPacked m i.toNat h8 hn
-    rw [hdec]
-    dsimp
-    apply Option.some.inj
-    have hlt_int : (i.toNat : Int) < (2 ^ (m - 1) : Int) := by
-      have hpos : (i.toNat : Int) = i := Int.toNat_of_nonneg hi
-      have hlt_int' : (i.toNat : Int) < ((2 ^ (m - 1) : Nat) : Int) := by rwa [hpos]
-      simpa using hlt_int'
-    by_cases hcond : (i.toNat : Int) < (2 ^ (m - 1) : Int)
-    · rw [if_pos hcond, Int.toNat_of_nonneg hi]
-    · exfalso; exact hcond hlt_int
-  · -- i < 0
-    have hpos_neg : 0 ≤ -i := by omega
-    have heq_toNat : ((-i).toNat : Int) = -i := Int.toNat_of_nonneg hpos_neg
-    have h_abs : (-i).toNat ≤ 2 ^ (m - 1) := by
-      have hle_int : -i ≤ ((2 ^ (m - 1) : Nat) : Int) := by omega
-      rw [← heq_toNat] at hle_int
-      exact NatCast.le_iff.mp hle_int
-    have hpos_abs : 0 < (-i).toNat := by
-      apply Nat.pos_of_ne_zero; intro hz
-      have hle0 : -i ≤ 0 := Int.toNat_eq_zero.mp hz; omega
-    have hpos_pow : 0 < 2 ^ m := by
-      have h := Nat.one_le_pow m 2 (by decide); omega
-    have hn : 2 ^ m - (-i).toNat < 2 ^ m := by
-      apply Nat.sub_lt <;> assumption
-    have h_enc : encodeIntPacked m i = encodeUintPacked m (2 ^ m - (-i).toNat) := by
-      rw [encodeIntPacked, if_neg hi]
-    rw [h_enc, decodeIntPacked]
-    have hdec := decodeUintPacked_encodeUintPacked m (2 ^ m - (-i).toNat) h8 hn
-    rw [hdec]
-    dsimp
-    apply Option.some.inj
-    have h_not_lt : ¬ (2 ^ m - (-i).toNat : Nat) < 2 ^ (m - 1) := by
-      have h_pow_eq : 2 ^ m = 2 ^ (m - 1) + 2 ^ (m - 1) := by
-        calc
-          2 ^ m = 2 ^ ((m - 1) + 1) := by rw [Nat.sub_add_cancel (by omega : 1 ≤ m)]
-          _ = 2 ^ (m - 1) * 2 := by rw [Nat.pow_succ]
-          _ = 2 ^ (m - 1) + 2 ^ (m - 1) := by omega
-      intro hlt
-      have hsum : 2 ^ m < 2 ^ (m - 1) + (-i).toNat := by
-        have htemp := Nat.add_lt_add_right hlt ((-i).toNat)
-        have hle' : (-i).toNat ≤ 2 ^ m :=
-          Nat.le_trans h_abs (Nat.pow_le_pow_right (by decide) (by omega))
-        rw [Nat.sub_add_cancel hle'] at htemp; exact htemp
-      have hsum_le : 2 ^ (m - 1) + (-i).toNat ≤ 2 ^ m := by
-        rw [h_pow_eq]; exact Nat.add_le_add_left h_abs _
-      exact Nat.lt_irrefl _ (Nat.lt_of_lt_of_le hsum hsum_le)
-    have h_not_lt_int : ¬ ((2 ^ m - (-i).toNat : Nat) : Int) < ((2 ^ (m - 1) : Nat) : Int) :=
-      mt NatCast.lt_iff.mp h_not_lt
-    have h_not_lt_int' : ¬ (↑(2 ^ m - (-i).toNat) < (2 ^ (m - 1) : Int)) := by
-      simpa using h_not_lt_int
-    rw [if_neg h_not_lt_int']
-    have hle : (-i).toNat ≤ 2 ^ m :=
-      Nat.le_trans h_abs (Nat.pow_le_pow_right (by decide) (by omega))
-    have hcast := NatCast.sub hle
-    have hgoal : (↑(2 ^ m - (-i).toNat) : Int) - ((2 ^ m : Nat) : Int) = i := by
-      rw [hcast, heq_toNat]; omega
-    simpa using hgoal
-
-theorem decodeBoolPacked_encodeBoolPacked (b : Bool) :
-    decodeBoolPacked (encodeBoolPacked b) = some b := by
-  cases b <;> rfl
-
-theorem decodeAddressPacked_encodeAddressPacked (a : Nat) (h : a < 2 ^ 160) :
-    decodeAddressPacked (encodeAddressPacked a) = some a :=
-  decodeUintPacked_encodeUintPacked 160 a ⟨20, by decide⟩ h
-
-theorem decodeBytesNPacked_encodeBytesNPacked (bs : List UInt8) (h : bs.length = n) :
-    decodeBytesNPacked n (encodeBytesNPacked bs) = some bs := by
-  unfold decodeBytesNPacked encodeBytesNPacked
-  rw [if_pos (by omega), List.take_of_length_le (by omega)]
+/- The exact-buffer primitive roundtrips are derived from the prefix-
+tolerant `_append` forms below with `rest := []`, so each read-back fact
+is proved exactly once. -/
 
 /-! ## Type-indexed packed codec -/
 
@@ -477,6 +381,29 @@ theorem decodeBytesNPacked_append (bs : List UInt8) (h : bs.length = n) (rest : 
     decodeBytesNPacked n (encodeBytesNPacked bs ++ rest) = some bs := by
   unfold decodeBytesNPacked encodeBytesNPacked
   rw [if_pos (by rw [List.length_append]; omega), take_append_of_length h]
+
+/-! ## Exact-buffer primitive roundtrips (corollaries) -/
+
+theorem decodeUintPacked_encodeUintPacked (m : Nat) (n : Nat) (h8 : 8 ∣ m) (hn : n < 2 ^ m) :
+    decodeUintPacked m (encodeUintPacked m n) = some n := by
+  simpa using decodeUintPacked_append m n h8 hn []
+
+theorem decodeIntPacked_encodeIntPacked (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
+    (hl : -((2 ^ (m - 1) : Nat) : Int) ≤ i) (hu : i < ((2 ^ (m - 1) : Nat) : Int)) :
+    decodeIntPacked m (encodeIntPacked m i) = some i := by
+  simpa using decodeIntPacked_append m hm h8 hl hu []
+
+theorem decodeBoolPacked_encodeBoolPacked (b : Bool) :
+    decodeBoolPacked (encodeBoolPacked b) = some b := by
+  simpa using decodeBoolPacked_append b []
+
+theorem decodeAddressPacked_encodeAddressPacked (a : Nat) (h : a < 2 ^ 160) :
+    decodeAddressPacked (encodeAddressPacked a) = some a := by
+  simpa using decodeAddressPacked_append a h []
+
+theorem decodeBytesNPacked_encodeBytesNPacked (bs : List UInt8) (h : bs.length = n) :
+    decodeBytesNPacked n (encodeBytesNPacked bs) = some bs := by
+  simpa using decodeBytesNPacked_append bs h []
 
 /-! ## Static packed roundtrip -/
 
