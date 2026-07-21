@@ -56,9 +56,6 @@ def tailSizes : List Part → Nat
   | [] => 0
   | p :: ps => p.tailSize + tailSizes ps
 
-/-- Byte offset of part `i`'s head within the head section. -/
-def headOffset (ps : List Part) (i : Nat) : Nat := headSizes (ps.take i)
-
 /-- Byte offset at which part `i`'s tail starts in the full encoding:
 the whole head section plus the tails of the preceding dynamic parts. -/
 def tailOffset (ps : List Part) (i : Nat) : Nat := headSizes ps + tailSizes (ps.take i)
