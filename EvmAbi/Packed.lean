@@ -1,6 +1,5 @@
 import EvmAbi.Ty
 import EvmAbi.Bytes
-import EvmAbi.Static
 import EvmAbi.Codec
 import Binary.UInt256
 
@@ -50,56 +49,6 @@ def PackedSupported : Ty → Bool
   | .array t => PackedScalar t
   | .fixedArray t _ => PackedScalar t
   | t => PackedScalar t
-
-/-! `Nat.cast` lemmas for `Nat → Int` that are essential for mixed `Nat`/`Int` reasoning. -/
-
-namespace NatCast
-
-@[simp] theorem add (a b : Nat) : ((a + b : Nat) : Int) = (a : Int) + (b : Int) := by
-  induction a with
-  | zero => simp
-  | succ a ih => simp [Nat.succ_add, ih]; omega
-
-@[simp] theorem one : ((1 : Nat) : Int) = (1 : Int) := rfl
-
-@[simp] theorem succ (a : Nat) : ((Nat.succ a : Nat) : Int) = (a : Int) + (1 : Int) := by
-  rw [Nat.succ_eq_add_one, add, one]
-
-@[simp] theorem mul (a b : Nat) : ((a * b : Nat) : Int) = (a : Int) * (b : Int) := by
-  induction a with
-  | zero => simp
-  | succ a ih =>
-    rw [Nat.succ_mul, add, ih, succ a]
-    calc
-      (a : Int) * (b : Int) + (b : Int) = (b : Int) * (a : Int) + (b : Int) := by rw [Int.mul_comm]
-      _ = (b : Int) * (a : Int) + (b : Int) * 1 := by simp
-      _ = (b : Int) * ((a : Int) + 1) := by rw [Int.mul_add]
-      _ = ((a : Int) + 1) * (b : Int) := by rw [Int.mul_comm]
-
-/-- `Nat.cast` distributes over subtraction when `b ≤ a`. -/
-theorem sub {a b : Nat} (h : b ≤ a) : ((a - b : Nat) : Int) = (a : Int) - (b : Int) := by
-  have hsub := Nat.sub_add_cancel h
-  have hcast : (((a - b) + b : Nat) : Int) = (a : Int) :=
-    congrArg (fun (x : Nat) => (x : Int)) hsub
-  rw [add (a - b) b] at hcast
-  omega
-
-@[simp] theorem pow (a n : Nat) : ((a ^ n : Nat) : Int) = ((a : Int) ^ n) := by
-  induction n with
-  | zero => simp
-  | succ n ih =>
-    rw [Nat.pow_succ, Int.pow_succ, mul, ih]
-
-/-! ## `Nat.cast` of order relations -/
-
-@[simp] theorem lt_iff {a b : Nat} : (a : Int) < (b : Int) ↔ a < b := by
-  constructor <;> intro h <;> omega
-
-@[simp] theorem le_iff {a b : Nat} : (a : Int) ≤ (b : Int) ↔ a ≤ b := by
-  constructor <;> intro h <;> omega
-
-end NatCast
-
 
 /-! ## Primitive packed encoders -/
 
@@ -306,10 +255,7 @@ theorem decodeIntPacked_append (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
     decodeIntPacked m (encodeIntPacked m i ++ rest) = some i := by
   by_cases hi : 0 ≤ i
   · have hn : i.toNat < 2 ^ m := by
-      have hlt_nat : i.toNat < 2 ^ (m - 1) := by
-        have hpos : (i.toNat : Int) = i := Int.toNat_of_nonneg hi
-        have hlt_int : (i.toNat : Int) < ((2 ^ (m - 1) : Nat) : Int) := by rwa [hpos]
-        exact NatCast.lt_iff.mp hlt_int
+      have hlt_nat : i.toNat < 2 ^ (m - 1) := by omega
       exact Nat.lt_of_lt_of_le hlt_nat (Nat.pow_le_pow_right (by decide) (by omega))
     have h_enc : encodeIntPacked m i = encodeUintPacked m i.toNat := by
       rw [encodeIntPacked, if_pos hi]
@@ -319,18 +265,15 @@ theorem decodeIntPacked_append (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
     dsimp
     apply Option.some.inj
     have hlt_int : (i.toNat : Int) < (2 ^ (m - 1) : Int) := by
-      have hpos : (i.toNat : Int) = i := Int.toNat_of_nonneg hi
-      have hlt_int' : (i.toNat : Int) < ((2 ^ (m - 1) : Nat) : Int) := by rwa [hpos]
-      simpa using hlt_int'
+      have hp : ((2 ^ (m - 1) : Nat) : Int) = (2 : Int) ^ (m - 1) := by
+        simp [Int.natCast_pow]
+      omega
     by_cases hcond : (i.toNat : Int) < (2 ^ (m - 1) : Int)
     · rw [if_pos hcond, Int.toNat_of_nonneg hi]
     · exfalso; exact hcond hlt_int
   · have hpos_neg : 0 ≤ -i := by omega
     have heq_toNat : ((-i).toNat : Int) = -i := Int.toNat_of_nonneg hpos_neg
-    have h_abs : (-i).toNat ≤ 2 ^ (m - 1) := by
-      have hle_int : -i ≤ ((2 ^ (m - 1) : Nat) : Int) := by omega
-      rw [← heq_toNat] at hle_int
-      exact NatCast.le_iff.mp hle_int
+    have h_abs : (-i).toNat ≤ 2 ^ (m - 1) := by omega
     have hpos_abs : 0 < (-i).toNat := by
       apply Nat.pos_of_ne_zero; intro hz
       have hle0 : -i ≤ 0 := Int.toNat_eq_zero.mp hz; omega
@@ -361,13 +304,14 @@ theorem decodeIntPacked_append (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
         rw [h_pow_eq]; exact Nat.add_le_add_left h_abs _
       exact Nat.lt_irrefl _ (Nat.lt_of_lt_of_le hsum hsum_le)
     have h_not_lt_int' : ¬ (↑(2 ^ m - (-i).toNat) < (2 ^ (m - 1) : Int)) := by
-      simpa using mt NatCast.lt_iff.mp h_not_lt
+      have hp : ((2 ^ (m - 1) : Nat) : Int) = (2 : Int) ^ (m - 1) := by
+        simp [Int.natCast_pow]
+      omega
     rw [if_neg h_not_lt_int']
     have hle : (-i).toNat ≤ 2 ^ m :=
       Nat.le_trans h_abs (Nat.pow_le_pow_right (by decide) (by omega))
-    have hcast := NatCast.sub hle
     have hgoal : (↑(2 ^ m - (-i).toNat) : Int) - ((2 ^ m : Nat) : Int) = i := by
-      rw [hcast, heq_toNat]; omega
+      omega
     simpa using hgoal
 
 /-- `bool` packed read-back over an appended suffix. -/
