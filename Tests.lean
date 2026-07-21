@@ -546,6 +546,11 @@ example : encodePacked (.array (.uint 16))
     [⟨3, by decide⟩, ⟨4, by decide⟩] =
     encodeUint 3 ++ encodeUint 4 := by native_decide
 
+-- Invalid widths (m % 8 ≠ 0) are rejected at decode — encodeBEU truncates
+-- them, so accepting them would let a lossy encode "roundtrip".
+example : decodePacked (.uint 12) (encodePacked (.uint 12) ⟨4095, by decide⟩) = none := by
+  native_decide
+
 -- Rule 4 — the Solidity-conformant fragment: scalars, bytes/string, and
 -- arrays of scalars; structs and nested arrays are outside it.
 example : PackedSupported (.array (.uint 16)) = true := by native_decide

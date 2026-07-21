@@ -116,8 +116,12 @@ def encodeBytesNPacked (bs : List UInt8) : List UInt8 := bs
 
 /-! ## Primitive packed decoders -/
 
+/-- Read a packed `uintM` from the front of the buffer.  Widths that are
+not byte-aligned are rejected: `encodeBEU (m / 8)` truncates them, so
+accepting them would let a lossy encode "roundtrip" (e.g. `uint12` of
+`4095` through one byte). -/
 def decodeUintPacked (m : Nat) (buf : List UInt8) : Option Nat :=
-  if buf.length ≥ m / 8 then some (decodeBEU (buf.take (m / 8))) else none
+  if m % 8 = 0 ∧ buf.length ≥ m / 8 then some (decodeBEU (buf.take (m / 8))) else none
 
 def decodeIntPacked (m : Nat) (buf : List UInt8) : Option Int :=
   (decodeUintPacked m buf).map fun n =>
@@ -289,7 +293,7 @@ theorem decodeUintPacked_append (m : Nat) (n : Nat) (h8 : 8 ∣ m) (hn : n < 2 ^
     rw [List.length_append, hlen]; omega
   have htk : (encodeBEU (m / 8) n ++ rest).take (m / 8) = encodeBEU (m / 8) n :=
     take_append_of_length hlen
-  rw [if_pos hge, htk]
+  rw [if_pos ⟨by omega, hge⟩, htk]
   have hpow := pow_eq_256 m h8
   have hn' : n < 256 ^ (m / 8) := by rw [← hpow]; exact hn
   have := decodeBEU_encodeBEU hn'
