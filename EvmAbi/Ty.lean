@@ -23,13 +23,15 @@ Two technical points shape this module:
   `Valid (uint 8)` would no longer be a `Prop` one can inhabit by
   `⟨by decide, by decide⟩`.  All list-quantifying companions therefore come
   as structurally-recursive mutual siblings: `Valid/AllValid`,
-  `Val/TupleVal`, `IsStatic/allStatic`, `headSize/headSizeSum`,
-  `LenBound/AllLenBound/TupleLenBounds`.
+  `Val/TupleVal`, `IsStatic/allStatic`, `headSize/headSizeSum`.
 
 * **`Val` is `@[reducible]`** so the dependent matches in `encode`/`decode`
-  see through the type index.  `LenBound` has a dependent index (`t.Val`)
-  and is necessarily compiled by well-founded recursion; it stays opaque
-  and is only ever rewritten through its equation lemmas (`simp [LenBound]`).
+  see through the type index.  The dynamic-payload length bounds (every
+  length must fit its single 32-byte length word, else decoding reads a
+  wrapped length) are part of `Val` itself: `bytes`/`string`/`array` values
+  are subtypes carrying their own `< 2^256` bound, and containers inherit
+  their components' bounds through the recursion — no separate
+  well-formedness predicate exists.
 -/
 
 namespace EvmAbi
@@ -155,11 +157,18 @@ end
 /-! ## The value family -/
 
 /- Values indexed by their ABI type, refined so that every inhabitant is
-encodable: the roundtrip holds for *every* `v : t.Val` of a valid `t`
-(plus the length bound of `LenBound` for dynamic payloads).  Tuples are
-right-nested products (`TupleVal`).  Marked `@[reducible]` so the dependent
-match in `encode`/`decode` can see through the type index (roadmap design
-decision 1). -/
+encodable *and decodable*: the roundtrip holds for every `v : t.Val` of a
+valid `t`, with no side condition on the value.  Dynamic payloads carry
+their length bound in the subtype — every payload length must fit the
+single 32-byte length word that prefixes it, else the length word wraps
+modulo `2^256` and decoding reads a wrong length.  Containers inherit
+their components' bounds through the recursion, so no separate
+well-formedness predicate is needed.  (The roundtrip still assumes the
+*total* encoding length is below `2^256`, so the offset words do not wrap
+either — an aggregate property no per-value refinement can express.)
+Tuples are right-nested products (`TupleVal`).  Marked `@[reducible]` so
+the dependent match in `encode`/`decode` can see through the type index
+(roadmap design decision 1). -/
 mutual
 /-- The type of values of ABI type `t`. -/
 @[reducible]
@@ -169,9 +178,9 @@ def Val : Ty → Type
   | bool => Bool
   | address => { n : Nat // n < 2 ^ 160 }
   | bytesN m => { bs : List UInt8 // bs.length = m }
-  | bytes => List UInt8
-  | string => String
-  | array t => List t.Val
+  | bytes => { bs : List UInt8 // bs.length < 2 ^ 256 }
+  | string => { s : String // s.toUTF8.size < 2 ^ 256 }
+  | array t => { vs : List t.Val // vs.length < 2 ^ 256 }
   | fixedArray t n => { vs : List t.Val // vs.length = n }
   | tuple ts => TupleVal ts
 
@@ -180,38 +189,6 @@ def Val : Ty → Type
 def TupleVal : List Ty → Type
   | [] => Unit
   | t :: ts => t.Val × TupleVal ts
-end
-
-/-! ## Length bounds -/
-
-/- The condition under which an encoded value is decodable: every dynamic
-payload must fit the single length word that prefixes it.  Without it the
-length word wraps modulo `2^256` and decoding reads a wrong length — the
-unconditional statement would be false, not merely unproven.  (The
-roundtrip additionally assumes the *total* encoding length is below
-`2^256`, so the offset words do not wrap either.)
-
-`LenBound` matches on `t.Val` and is therefore compiled by well-founded
-recursion; it stays opaque and is used only through its equation lemmas. -/
-mutual
-/-- The length bound for values of type `t`. -/
-def LenBound : (t : Ty) → t.Val → Prop
-  | bytes, bs => bs.length < 2 ^ 256
-  | string, s => s.toUTF8.size < 2 ^ 256
-  | array t, vs => vs.length < 2 ^ 256 ∧ AllLenBound t vs
-  | fixedArray t _, ⟨vs, _⟩ => AllLenBound t vs
-  | tuple ts, vs => TupleLenBounds ts vs
-  | _, _ => True
-
-/-- The length bound, pointwise over a list of values of the same type. -/
-def AllLenBound : (t : Ty) → List t.Val → Prop
-  | _, [] => True
-  | t, v :: vs => LenBound t v ∧ AllLenBound t vs
-
-/-- The length bound, pointwise over the components of a tuple. -/
-def TupleLenBounds : (ts : List Ty) → TupleVal ts → Prop
-  | [], _ => True
-  | t :: ts, (v, vs) => LenBound t v ∧ TupleLenBounds ts vs
 end
 
 end Ty

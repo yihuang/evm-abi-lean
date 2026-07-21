@@ -128,11 +128,11 @@ example : decode .bool (encode .bool true) = some true := by native_decide
 example : decode (.bytesN 5) (encode (.bytesN 5) ⟨[1,2,3,4,5], rfl⟩)
     = some ⟨[1,2,3,4,5], rfl⟩ := by native_decide
 
-example : decode .bytes (encode .bytes [0x61, 0x62, 0x63])
-    = some [0x61, 0x62, 0x63] := by native_decide
+example : decode .bytes (encode .bytes ⟨[0x61, 0x62, 0x63], by decide⟩)
+    = some ⟨[0x61, 0x62, 0x63], by decide⟩ := by native_decide
 
-example : decode .string (encode .string "Hello, world!")
-    = some "Hello, world!" := by native_decide
+example : decode .string (encode .string ⟨"Hello, world!", by native_decide⟩)
+    = some ⟨"Hello, world!", by native_decide⟩ := by native_decide
 
 -- The same instances via library theorems (no computation)
 
@@ -145,11 +145,12 @@ example : decode (.int 8) (encode (.int 8) ⟨-5, by decide⟩) = some ⟨-5, by
 example : decode .bool (encode .bool false) = some false :=
   roundtrip_static .bool rfl (by native_decide) _
 
-example : decode .bytes (encode .bytes [1, 2, 3]) = some [1, 2, 3] :=
-  roundtrip_bytes [1, 2, 3] (by decide)
+example : decode .bytes (encode .bytes ⟨[1, 2, 3], by decide⟩) = some ⟨[1, 2, 3], by decide⟩ :=
+  roundtrip_bytes ⟨[1, 2, 3], by decide⟩
 
-example : decode .string (encode .string "hello") = some "hello" :=
-  roundtrip_string "hello" (by native_decide)
+example : decode .string (encode .string ⟨"hello", by native_decide⟩) =
+    some ⟨"hello", by native_decide⟩ :=
+  roundtrip_string ⟨"hello", by native_decide⟩
 
 -- encodeStatic_length
 
@@ -159,7 +160,7 @@ example : (encode (.uint 256) ⟨42, by decide⟩).length = 32 := by
 
 -- encode_length_aligned
 
-example : Aligned (encode .bytes ([1, 2, 3] : List UInt8)).length :=
+example : Aligned (encode .bytes ⟨[1, 2, 3], by decide⟩).length :=
   encode_length_aligned .bytes (by native_decide) _
 
 /-! ## Static arrays (node 6) -/
@@ -235,7 +236,8 @@ def specSamTy : Ty := .tuple [.bytes, .bool, .array (.uint 256)]
 
 /-- `sam("dave", true, [1,2,3])`'s arguments. -/
 def specSamVal : specSamTy.Val :=
-  ([0x64, 0x61, 0x76, 0x65], true, ([⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], ()))
+  (⟨[0x64, 0x61, 0x76, 0x65], by decide⟩, true,
+    (⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩, ()))
 
 /-- The spec encoding of `sam`'s arguments. -/
 def specSamBytes : List UInt8 :=
@@ -246,21 +248,7 @@ def specSamBytes : List UInt8 :=
 example : encode specSamTy specSamVal = specSamBytes := by native_decide
 
 example : decode specSamTy (encode specSamTy specSamVal) = some specSamVal :=
-  roundtrip specSamTy (by native_decide) specSamVal
-    (by
-      simp only [specSamTy, specSamVal, LenBound]
-      repeat first
-        | rw [Ty.TupleLenBounds.eq_2]
-        | rw [Ty.TupleLenBounds.eq_1]
-        | rw [Ty.AllLenBound.eq_2]
-        | rw [Ty.AllLenBound.eq_1]
-      simp only [Ty.LenBound]
-      repeat first
-        | rw [Ty.AllLenBound.eq_2]
-        | rw [Ty.AllLenBound.eq_1]
-      simp only [Ty.LenBound]
-      decide)
-    (by native_decide)
+  roundtrip specSamTy (by native_decide) specSamVal (by native_decide)
 
 /-- `f`'s argument types: `(uint256, uint32[], bytes10, bytes)`. -/
 def specFArgs : List Ty := [.uint 256, .array (.uint 32), .bytesN 10, .bytes]
@@ -270,9 +258,10 @@ def specFTy : Ty := .tuple specFArgs
 
 /-- `f(0x123, [0x456, 0x789], "1234567890", "Hello, world!")`'s arguments. -/
 def specFVal : specFTy.Val :=
-  (⟨0x123, by decide⟩, [⟨0x456, by decide⟩, ⟨0x789, by decide⟩],
+  (⟨0x123, by decide⟩, ⟨[⟨0x456, by decide⟩, ⟨0x789, by decide⟩], by decide⟩,
     ⟨[0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30], rfl⟩,
-    ([0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21], ()))
+    (⟨[0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21],
+      by decide⟩, ()))
 
 /-- The spec encoding of `f`'s arguments. -/
 def specFBytes : List UInt8 :=
@@ -287,29 +276,16 @@ def specFBytes : List UInt8 :=
 example : encode specFTy specFVal = specFBytes := by native_decide
 
 example : decode specFTy (encode specFTy specFVal) = some specFVal :=
-  roundtrip specFTy (by native_decide) specFVal
-    (by
-      simp only [specFTy, specFVal, specFArgs, LenBound]
-      repeat first
-        | rw [Ty.TupleLenBounds.eq_2]
-        | rw [Ty.TupleLenBounds.eq_1]
-        | rw [Ty.AllLenBound.eq_2]
-        | rw [Ty.AllLenBound.eq_1]
-      simp only [Ty.LenBound]
-      repeat first
-        | rw [Ty.AllLenBound.eq_2]
-        | rw [Ty.AllLenBound.eq_1]
-      simp only [Ty.LenBound]
-      decide)
-    (by native_decide)
+  roundtrip specFTy (by native_decide) specFVal (by native_decide)
 
 /-- `g`'s argument tuple: `(uint256[][], string[])`. -/
 def specGTy : Ty := .tuple [.array (.array (.uint 256)), .array .string]
 
 /-- `g([[1, 2], [3]], ["one", "two", "three"])`'s arguments. -/
 def specGVal : specGTy.Val :=
-  ([[⟨1, by decide⟩, ⟨2, by decide⟩], [⟨3, by decide⟩]],
-    (["one", "two", "three"], ()))
+  (⟨[⟨[⟨1, by decide⟩, ⟨2, by decide⟩], by decide⟩, ⟨[⟨3, by decide⟩], by decide⟩], by decide⟩,
+    (⟨[⟨"one", by native_decide⟩, ⟨"two", by native_decide⟩, ⟨"three", by native_decide⟩],
+      by decide⟩, ()))
 
 /-- The spec encoding of `g`'s arguments. -/
 def specGBytes : List UInt8 :=
@@ -337,29 +313,13 @@ example : (decodeCanonical specSamTy specSamBytes).isSome = true := by native_de
 example : (decodeCanonical specFTy specFBytes).isSome = true := by native_decide
 example : (decodeCanonical specGTy specGBytes).isSome = true := by native_decide
 
-/-- `sam`'s length bound, factored out for the library-theorem tests. -/
-theorem specSamLenBound : LenBound specSamTy specSamVal := by
-  simp only [specSamTy, specSamVal, LenBound]
-  repeat first
-    | rw [Ty.TupleLenBounds.eq_2]
-    | rw [Ty.TupleLenBounds.eq_1]
-    | rw [Ty.AllLenBound.eq_2]
-    | rw [Ty.AllLenBound.eq_1]
-  simp only [Ty.LenBound]
-  repeat first
-    | rw [Ty.AllLenBound.eq_2]
-    | rw [Ty.AllLenBound.eq_1]
-  simp only [Ty.LenBound]
-  decide
-
 -- the same instances via library theorems (no computation)
 
 example : IsCanonical specSamTy (encode specSamTy specSamVal) :=
-  isCanonical_encode specSamTy (by native_decide) specSamVal specSamLenBound (by native_decide)
+  isCanonical_encode specSamTy (by native_decide) specSamVal (by native_decide)
 
 example : decodeCanonical specSamTy (encode specSamTy specSamVal) = some specSamVal :=
-  decodeCanonical_encode specSamTy (by native_decide) specSamVal specSamLenBound
-    (by native_decide)
+  decodeCanonical_encode specSamTy (by native_decide) specSamVal (by native_decide)
 
 /-- **Canonical uniqueness** (computational): re-encoding the decoded value
 gives the original buffer back. -/
@@ -377,13 +337,13 @@ example : ∃ v, decode specSamTy specSamBytes = some v ∧
 example : IsCanonical specSamTy (encode specSamTy specSamVal) :=
   (isCanonical_iff specSamTy (by native_decide) _ (by native_decide)).mpr
     ⟨specSamVal,
-      roundtrip specSamTy (by native_decide) specSamVal specSamLenBound (by native_decide),
+      roundtrip specSamTy (by native_decide) specSamVal (by native_decide),
       rfl⟩
 
 -- the strict roundtrip through the strict-decoder characterization
 example : decodeCanonical specSamTy (encode specSamTy specSamVal) = some specSamVal :=
   (decodeCanonical_eq_some_iff specSamTy (by native_decide) _ specSamVal
-    (by native_decide)).mpr ⟨rfl, specSamLenBound⟩
+    (by native_decide)).mpr rfl
 
 /-! ## Canonical validation: negative vectors -/
 
