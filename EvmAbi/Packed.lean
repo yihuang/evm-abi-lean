@@ -1,18 +1,55 @@
 import EvmAbi.Ty
 import EvmAbi.Bytes
 import EvmAbi.Static
+import EvmAbi.Codec
 import Binary.UInt256
 
 /-!
 # EvmAbi.Packed
 
-Packed ABI encoding (`abi.encodePacked`) for all-static types (phase 1).
+Packed ABI encoding (`abi.encodePacked`), following Solidity's non-standard
+packed mode:
+
+1. types shorter than 32 bytes are concatenated without padding;
+2. dynamic types (`bytes`, `string`, `T[]`) are encoded in place, without
+   a length word;
+3. array *elements* are padded to their standard 32-byte-word width, but
+   still encoded in place;
+4. structs and nested arrays are not supported by Solidity —
+   `PackedSupported` marks the conformant fragment.  This library's
+   `.tuple` arm is the flat *argument list* of a multi-argument
+   `abi.encodePacked(a, b, …)` call; applied to nested tuples it is a
+   total-function extension with no Solidity counterpart.
+
+Packed encoding is ambiguous in general (no lengths, no offsets), so only
+the static fragment is decodable: `decodePacked` reads scalars at their
+tight widths and array elements at their padded widths, and rejects
+dynamic types.
 -/
 
 namespace EvmAbi
 
 open Ty
 open Binary
+
+/-! ## The Solidity-conformant fragment -/
+
+/-- Scalar (non-composite) static types — the only element types Solidity
+accepts inside packed arrays. -/
+def PackedScalar : Ty → Bool
+  | .uint _ | .int _ | .bool | .address | .bytesN _ => true
+  | _ => false
+
+/-- The types Solidity's `abi.encodePacked` accepts as a single argument:
+scalars, `bytes`/`string`, and arrays of scalar elements.  Structs
+(tuples) and nested arrays are compile errors in Solidity; on those this
+library's total encoder is a documented extension, not a conformance
+claim. -/
+def PackedSupported : Ty → Bool
+  | .bytes | .string => true
+  | .array t => PackedScalar t
+  | .fixedArray t _ => PackedScalar t
+  | t => PackedScalar t
 
 /-! `Nat.cast` lemmas for `Nat → Int` that are essential for mixed `Nat`/`Int` reasoning. -/
 
@@ -203,34 +240,50 @@ theorem decodeBytesNPacked_encodeBytesNPacked (bs : List UInt8) (h : bs.length =
   unfold decodeBytesNPacked encodeBytesNPacked
   rw [if_pos (by omega), List.take_of_length_le (by omega)]
 
-/-! ## Type-indexed packed codec (static types) -/
+/-! ## Type-indexed packed codec -/
 
-/- The packed encoder for static types: each element's raw bytes,
-concatenated.  Prefix-tolerant decoders read from the front of the
-buffer and leave the rest untouched. -/
+/- The packed encoder: scalars at their tight widths, dynamic payloads in
+place without length words, array elements at their standard padded
+widths (`encode`, 32-byte words), tuples as flat concatenation. -/
 mutual
-/-- Packed encoder for static types. -/
+/-- Packed encoder (`abi.encodePacked`).  Total; the Solidity-conformant
+fragment is `PackedSupported`. -/
 def encodePacked : (t : Ty) → t.Val → List UInt8
   | .uint m, ⟨n, _⟩ => encodeUintPacked m n
   | .int m, ⟨i, _⟩ => encodeIntPacked m i
   | .bool, b => encodeBoolPacked b
   | .address, ⟨n, _⟩ => encodeAddressPacked n
   | .bytesN _, ⟨bs, _⟩ => encodeBytesNPacked bs
-  | .fixedArray t _, ⟨vs, _⟩ => (vs.map (encodePacked t)).flatten
+  | .bytes, bs => bs
+  | .string, s => s.toUTF8.data.toList
+  | .array t, vs => (vs.map (encode t)).flatten
+  | .fixedArray t _, ⟨vs, _⟩ => (vs.map (encode t)).flatten
   | .tuple ts, vs => encodePackedTuple ts vs
-  | _, _ => []
 termination_by t => (sizeOf t, 0)
 
-/-- Packed encoder for tuples. -/
+/-- Packed encoder for the flat argument list of a multi-argument
+`abi.encodePacked(a, b, …)` call. -/
 def encodePackedTuple : (ts : List Ty) → TupleVal ts → List UInt8
   | [], _ => []
   | t :: ts, (v, vs) => encodePacked t v ++ encodePackedTuple ts vs
 termination_by ts => (sizeOf ts, 1)
 end
 
-/- The packed decoder: each clause reads `packedSize t` bytes from the front
-of the buffer and ignores the rest.  For compound types the elements are
-consumed sequentially. -/
+/-- Read `n` consecutive packed array elements of type `t` from the front
+of the buffer.  Packed array elements carry their standard padded layout,
+so each is read by the standard `decode` and occupies `t.headSize` bytes. -/
+def decodePackedElems (t : Ty) : (n : Nat) → List UInt8 →
+    Option { vs : List t.Val // vs.length = n }
+  | 0, _ => some ⟨[], rfl⟩
+  | n + 1, buf => match decode t buf with
+    | none => none
+    | some v => match decodePackedElems t n (buf.drop t.headSize) with
+      | none => none
+      | some ⟨vs, h⟩ => some ⟨v :: vs, by simp [List.length_cons, h]⟩
+
+/- The packed decoder: each clause reads its type's packed extent from the
+front of the buffer and ignores the rest.  Dynamic types are rejected —
+without length words their extent is ambiguous. -/
 mutual
 /-- Packed decoder for static types (prefix-tolerant). -/
 def decodePacked : (t : Ty) → List UInt8 → Option t.Val
@@ -249,23 +302,14 @@ def decodePacked : (t : Ty) → List UInt8 → Option t.Val
   | .bytesN m, buf => match decodeBytesNPacked m buf with
     | some bs => if h : bs.length = m then some ⟨bs, h⟩ else none
     | none => none
-  | .fixedArray t n, buf => decodePackedElems t n buf
+  | .fixedArray t n, buf => match t.IsStatic with
+    | true => decodePackedElems t n buf
+    | false => none
   | .tuple ts, buf => decodePackedTuple ts buf
   | _, _ => none
 termination_by t => (sizeOf t, 0)
 
-/-- Read `n` consecutive packed elements of type `t` from the front of the
-buffer. -/
-def decodePackedElems (t : Ty) : (n : Nat) → List UInt8 → Option { vs : List t.Val // vs.length = n }
-  | 0, _ => some ⟨[], rfl⟩
-  | n + 1, buf => match decodePacked t buf with
-    | none => none
-    | some v => match decodePackedElems t n (buf.drop t.packedSize) with
-      | none => none
-      | some ⟨vs, h⟩ => some ⟨v :: vs, by simp [List.length_cons, h]⟩
-termination_by n => (sizeOf t, n + 2)
-
-/-- Read a tuple from the front of the buffer, consuming elements
+/-- Read a tuple from the front of the buffer, consuming components
 sequentially by their packed sizes. -/
 def decodePackedTuple : (ts : List Ty) → List UInt8 → Option (TupleVal ts)
   | [], _ => some ()
@@ -298,13 +342,13 @@ theorem length_encodePacked : (t : Ty) → t.IsStatic = true → t.Valid → (v 
       have hvt : t.Valid := hv
       simp only [encodePacked, List.length_flatten]
       have hmap : ∀ (vs : List t.Val),
-          ((vs.map (encodePacked t)).map List.length).sum = vs.length * t.packedSize := by
+          ((vs.map (encode t)).map List.length).sum = vs.length * t.headSize := by
         intro vs
         induction vs with
         | nil => simp
         | cons v vs ih =>
           simp only [List.map_cons, List.length_cons, List.sum_cons]
-          rw [length_encodePacked t hst hvt v, ih]
+          rw [encode_length_static t hst hvt v, ih]
           rw [Nat.succ_mul]
           exact Nat.add_comm _ _
       rw [hmap, hvs, packedSize]
@@ -436,6 +480,24 @@ theorem decodeBytesNPacked_append (bs : List UInt8) (h : bs.length = n) (rest : 
 
 /-! ## Static packed roundtrip -/
 
+/-- Element lists decode from their own padded-element encoding followed by
+a suffix — a direct consequence of the standard codec's static prefix
+roundtrip, since packed array elements *are* standard-encoded. -/
+theorem decodePackedElems_append (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid)
+    (vs : List t.Val) (n : Nat) (hn : vs.length = n) (rest : List UInt8) :
+    decodePackedElems t n ((vs.map (encode t)).flatten ++ rest) = some ⟨vs, hn⟩ := by
+  induction vs generalizing n with
+  | nil =>
+      subst hn
+      simp [List.map_nil, List.flatten_nil, decodePackedElems]
+  | cons v vs ih =>
+      have hn' : n = vs.length + 1 := by rw [← hn, List.length_cons]
+      subst hn'
+      simp only [List.map_cons, List.flatten_cons, List.append_assoc, decodePackedElems]
+      rw [decode_encode_append_static t hs hv v _]
+      rw [drop_append_of_length (encode_length_static t hs hv v)]
+      rw [ih _ rfl]
+
 mutual
 /-- **Static packed roundtrip, prefix form**: a static value decodes from the front
 of its own packed encoding followed by an arbitrary suffix. -/
@@ -472,7 +534,7 @@ theorem decodePacked_encodePacked_append : (t : Ty) → t.IsStatic = true → t.
   | .fixedArray t n, hs, hv, ⟨vs, hvs⟩, rest => by
       have hst : t.IsStatic = true := by simp only [IsStatic] at hs; exact hs
       have hvt : t.Valid := hv
-      simp only [encodePacked, decodePacked]
+      simp only [encodePacked, decodePacked, hst]
       have h := decodePackedElems_append t hst hvt vs n hvs rest
       simpa using h
   | .tuple ts, hs, hv, vs, rest => by
@@ -482,25 +544,6 @@ theorem decodePacked_encodePacked_append : (t : Ty) → t.IsStatic = true → t.
       have h := decodePackedTuple_append ts hss hvts vs rest
       simpa using h
 termination_by t => 4 * sizeOf t
-
-/-- Element lists decode from their own packed encoding followed by a suffix. -/
-theorem decodePackedElems_append (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid)
-    (vs : List t.Val) (n : Nat) (hn : vs.length = n) (rest : List UInt8) :
-    decodePackedElems t n ((vs.map (encodePacked t)).flatten ++ rest) = some ⟨vs, hn⟩ := by
-  induction vs generalizing n with
-  | nil =>
-      subst hn
-      simp [List.map_nil, List.flatten_nil, decodePackedElems]
-  | cons v vs ih =>
-      have hn' : n = vs.length + 1 := by rw [← hn, List.length_cons]
-      subst hn'
-      simp only [List.map_cons, List.flatten_cons, List.append_assoc, decodePackedElems]
-      rw [decodePacked_encodePacked_append t hs hv v _]
-      have hlen := length_encodePacked t hs hv v
-      rw [drop_append_of_length hlen]
-      have hih := ih _ rfl
-      rw [hih]
-termination_by 4 * sizeOf t + 1
 
 /-- Tuples decode from their own packed encoding followed by a suffix. -/
 theorem decodePackedTuple_append : (ts : List Ty) → allStatic ts = true → AllValid ts →

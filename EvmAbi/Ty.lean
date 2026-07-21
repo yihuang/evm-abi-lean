@@ -164,7 +164,9 @@ theorem headSizeSum_eq_sum_map (ts : List Ty) :
 /- The packed encoding size of a static type (the number of bytes its
 encoding occupies in `abi.encodePacked`).  For dynamic types the size is
 not statically known and the function returns 0.  `packedSizeSum` is the
-structural list sibling. -/
+structural list sibling.  Note the fixed-array case: Solidity pads packed
+array *elements* to their standard (32-byte-word) width, so a fixed array
+occupies `n` standard element slots, not `n` tight ones. -/
 mutual
 /-- Packed size of a type. -/
 def packedSize : Ty → Nat
@@ -173,7 +175,7 @@ def packedSize : Ty → Nat
   | address => 20
   | bytesN m => m
   | bytes | string | array _ => 0
-  | fixedArray t n => n * t.packedSize
+  | fixedArray t n => n * t.headSize
   | tuple ts => packedSizeSum ts
 
 /-- Sum of the packed sizes of a list of types. -/
@@ -190,8 +192,9 @@ theorem packedSizeSum_eq_sum_map (ts : List Ty) :
   | cons t ts ih => simp only [packedSizeSum, List.map_cons, List.sum_cons, ← ih]
 
 /- For an all-static type, the packed size is the total bytes the encoding
-occupies.  For a packed-decodable but non-static type (e.g. a static prefix
-plus a tail dynamic element) the size varies at runtime. -/
+occupies.  Dynamic types (`bytes`, `string`, `T[]`) have no statically
+known packed size — their encodings are data-dependent and `decodePacked`
+rejects them — so `packedSize` returns 0 for them. -/
 /-! ## The value family -/
 
 /- Values indexed by their ABI type, refined so that every inhabitant is
