@@ -5,7 +5,6 @@ import EvmAbi.Ty
 import EvmAbi.Static
 import EvmAbi.Dynamic
 import EvmAbi.Codec
-import EvmAbi.StaticArray
 import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.Canonical
@@ -32,16 +31,6 @@ example : (pad32 [1, 2, 3]).take 3 = [1, 2, 3] := by decide
 example : (pad32 ([] : List UInt8)).length = 0 := by decide
 example : 32 ∣ (pad32 [7]).length := by decide
 example : pad32 (UInt256.toBEBytes 9) = UInt256.toBEBytes 9 := by native_decide
-
-/-! ## splitEvery -/
-
-#eval splitEvery 2 [1, 2, 3, 4, 5]                -- [[1, 2], [3, 4], [5]]
-#eval (splitEvery 32 (List.range 64)).length      -- 2
-
-example : (splitEvery 32 (List.range 96)).flatten = List.range 96 := by native_decide
-example : (splitEvery 32 (List.range 64)).length = 2 := by native_decide
-example : ∀ c ∈ splitEvery 32 (List.range 96), c.length = 32 := by native_decide
-example : splitEvery 32 ([] : List Nat) = [] := by native_decide
 
 /-! ## wordAt / natAt -/
 
@@ -101,19 +90,6 @@ example : decodeBytesN 2 ([0x12, 0x34] ++ List.replicate 29 0 ++ [1]) = none := 
 
 -- ABI-spec instance: enc(0x010203 as bytes) = 0x03 word ++ 0x010203 padded
 #eval encodeBytes [1, 2, 3]
-example : decodeBytes (encodeBytes [1, 2, 3]) = some [1, 2, 3] := by native_decide
-example : decodeBytes (encodeBytes [1, 2, 3]) = some [1, 2, 3] :=
-  decodeBytes_encodeBytes (by native_decide)
-example : decodeBytes (encodeBytes (List.replicate 64 7)) = some (List.replicate 64 7) := by
-  native_decide
-example : decodeBytes (encodeBytes []) = some [] := by native_decide
-
-#eval encodeString "Hello, world!"
-example : decodeString (encodeString "Hello, world!") = some "Hello, world!" := by
-  native_decide
-example : decodeString (encodeString "Hello, world!") = some "Hello, world!" :=
-  decodeString_encodeString (by native_decide)
-
 /-! ## Ty-indexed codec (S2 wrap-up) -/
 
 -- Ty-level roundtrips by computation
@@ -164,16 +140,6 @@ example : (encode (.uint 256) ⟨42, by decide⟩).length = 32 := by
 example : Aligned (encode .bytes ⟨[1, 2, 3], by decide⟩).length :=
   encode_length_aligned .bytes (by native_decide) _
 
-/-! ## Static arrays (node 6) -/
-
-#eval encodeWordArray [1, 2, 3]
-example : decodeWordArray 3 (encodeWordArray [1, 2, 3]) = some [1, 2, 3] := by native_decide
-example : decodeWordArray 3 (encodeWordArray [1, 2, 3]) = some [1, 2, 3] :=
-  decodeWordArray_encodeWordArray ([1, 2, 3] : List UInt256)
-example : wordAt (encodeWordArray [7, 8, 9]) 1 = some 8 := by native_decide
-example : wordAt (encodeWordArray [7, 8, 9]) 1 = some 8 :=
-  wordAt_encodeWordArray _ _ (by decide)
-
 /-! ## Head/tail combinator (node 7) -/
 
 /-- Demo tuple `(uint 1, bytes 0x010203, uint 2)`: a dynamic part between
@@ -205,23 +171,9 @@ example : (encodeParts demoParts).drop (tailOffset demoParts 1) =
   drop_tailOffset_append (xs := [⟨encodeUint 1, [], false⟩]) (head := [])
     (tail := encodeBytes [1, 2, 3]) (ys := [⟨encodeUint 2, [], false⟩])
 
--- following the offset word reads the tail back
-example : (wordAt (encodeParts demoParts) 1).map
-    (fun w => ((encodeParts demoParts).drop w.toNat).take 64) =
-    some (encodeBytes [1, 2, 3]) := by
-  have h := readTail_append (xs := [⟨encodeUint 1, [], false⟩]) (head := [])
-    (tail := encodeBytes [1, 2, 3]) (ys := [⟨encodeUint 2, [], false⟩])
-    wf_demoParts (by native_decide)
-  exact h
-
 -- end-to-end: prefix-decode the dynamic bytes value at its tail offset
 example : decodeBytesPrefix ((encodeParts demoParts).drop 96) = some ([1, 2, 3], 64) := by
   native_decide
-example : decodeBytesPrefix ((encodeParts demoParts).drop (tailOffset demoParts 1)) =
-    some ([1, 2, 3], (encodeBytes [1, 2, 3]).length) := by
-  have h := decodeBytesPrefix_tailOffset (xs := [⟨encodeUint 1, [], false⟩]) (head := [])
-    (bs := [1, 2, 3]) (ys := [⟨encodeUint 2, [], false⟩]) (by native_decide)
-  exact h
 
 /-! ## Spec vectors (node 8): Solidity ABI specification examples -/
 

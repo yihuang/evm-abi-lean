@@ -107,17 +107,16 @@ The proof is built in incremental layers, each reusable independently:
 
 | Layer | Module | What it proves |
 |---|---|---|
-| **1. Byte plumbing** | `Bytes` | `pad32`, `splitEvery`, `take`/`drop` lemmas over appended buffers |
+| **1. Byte plumbing** | `Bytes` | `pad32`, `take`/`drop` lemmas over appended buffers |
 | **2. 32-byte alignment** | `Align` | `Aligned n := 32 ∣ n`, addition and multiplication lemmas (all `omega`) |
 | **3. Word I/O** | `Word` | Reading/writing `UInt256` at aligned buffer offsets; `wordAt_append` |
 | **4. Type universe** | `Ty` | ABI type grammar `Ty`, indexed value family `Val`, validity/staticness/head-size/length-bound predicates |
 | **5. Static primitives** | `Static` | Standalone codecs for `uintM`, `intM`, `bool`, `address`, `bytesN`; strict bool/bytesN decoders |
 | **6. Dynamic primitives** | `Dynamic` | Standalone codecs for `bytes`, `string`; prefix-tolerant decoder variant |
-| **7. Static arrays** | `StaticArray` | `T[k]` over word-sized elements; `splitEvery`-based decoder |
-| **8. Head/tail combinator** | `Parts` | The core ABI layout abstraction (`Part`, `encodeParts`, offset-correctness theorems); type-independent |
-| **9. Full codec** | `Codec` | `Ty`-indexed `encode`/`decode` over the full universe; static roundtrip (Package A-C), dynamic roundtrip (Package D), unified `roundtrip` |
-| **10. Canonical validation** | `Canonical` | `validate`/`IsCanonical`/`decodeCanonical`; completeness (C1), lenient completeness on canonical input (C2), soundness (C3), corollaries |
-| **11. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
+| **7. Head/tail combinator** | `Parts` | The core ABI layout abstraction (`Part`, `encodeParts`, offset-correctness theorems); type-independent |
+| **8. Full codec** | `Codec` | `Ty`-indexed `encode`/`decode` over the full universe; static roundtrip (Package A-C), dynamic roundtrip (Package D), unified `roundtrip` |
+| **9. Canonical validation** | `Canonical` | `validate`/`IsCanonical`/`decodeCanonical`; completeness (C1), lenient completeness on canonical input (C2), soundness (C3), corollaries |
+| **10. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
 | **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks |
 
 The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:

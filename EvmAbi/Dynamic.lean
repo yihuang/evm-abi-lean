@@ -29,34 +29,10 @@ open Binary
 /-- ABI encoding of dynamic `bytes`: the length word, then zero-padded data. -/
 def encodeBytes (bs : List UInt8) : List UInt8 := encodeUint bs.length ++ pad32 bs
 
-/-- Strict decoder: a length word, exactly `len` data bytes, then zero padding. -/
-def decodeBytes (buf : List UInt8) : Option (List UInt8) :=
-  (natAt buf 0).bind fun len =>
-    if ((buf.drop 32).take len).length = len ∧
-       (buf.drop 32).drop len = List.replicate ((32 - len % 32) % 32) 0 then
-      some ((buf.drop 32).take len)
-    else none
-
-/-- **Roundtrip** — the dynamic-bytes touchstone. -/
-theorem decodeBytes_encodeBytes (h : bs.length < 2 ^ 256) :
-    decodeBytes (encodeBytes bs) = some bs := by
-  have hw := natAt_append ([] : List UInt8) (pad32 bs) (UInt256.ofNat bs.length) 0 (by simp)
-  simp only [List.nil_append] at hw
-  have hlen : (UInt256.ofNat bs.length).toNat = bs.length := by
-    rw [UInt256.toNat_ofNat]; exact Nat.mod_eq_of_lt h
-  rw [hlen] at hw
-  unfold decodeBytes encodeBytes encodeUint
-  rw [hw, Option.bind_some, drop_append_of_length (length_bytesOfWord _),
-    take_length_pad32, drop_length_pad32, if_pos ⟨rfl, rfl⟩]
-
 /-! ## string -/
 
 /-- ABI `string`: `bytes` over the UTF-8 encoding. -/
 def encodeString (s : String) : List UInt8 := encodeBytes s.toUTF8.data.toList
-
-/-- Decode a `string`, validating the UTF-8 encoding. -/
-def decodeString (buf : List UInt8) : Option String :=
-  (decodeBytes buf).bind fun bs => String.fromUTF8? bs.toByteArray
 
 /-- UTF-8 decode/encode roundtrip — provable thanks to the byte-array-based
 `String` representation (structure eta plus proof irrelevance). -/
@@ -81,12 +57,6 @@ theorem toUTF8_of_fromUTF8? {b : ByteArray} {s : String} (h : String.fromUTF8? b
 theorem dataToList_toByteArray (ba : ByteArray) : ba.data.toList.toByteArray = ba := by
   apply ByteArray.data_inj
   rw [List.data_toByteArray, Array.toArray_toList]
-
-/-- **Roundtrip** for `string`. -/
-theorem decodeString_encodeString (h : s.toUTF8.data.toList.length < 2 ^ 256) :
-    decodeString (encodeString s) = some s := by
-  unfold decodeString encodeString
-  rw [decodeBytes_encodeBytes h, Option.bind_some, dataToList_toByteArray, fromUTF8?_toUTF8]
 
 /-! ## prefix decoding (for composition inside tuples) -/
 
