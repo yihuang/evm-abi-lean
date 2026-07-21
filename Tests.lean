@@ -512,18 +512,17 @@ example : packedSize (.fixedArray (.uint 8) 3) = 96 := by native_decide
 
 -- Rule 2 — dynamic types are encoded in place, without the length word.
 -- Solidity: abi.encodePacked(string("Hello, world!")) = 0x48656c6c6f2c20776f726c6421
-example : encodePacked .string "Hello, world!" = solidityPackedHello := by native_decide
+example : encodePacked .string ⟨"Hello, world!", by native_decide⟩ = solidityPackedHello := by native_decide
 
-example : encodePacked .string "Hello, world!" ≠ ([] : List UInt8) := by native_decide
+example : encodePacked .string ⟨"Hello, world!", by native_decide⟩ ≠ ([] : List UInt8) := by native_decide
 
-example : encodePacked .bytes [1, 2, 3] = [1, 2, 3] := by native_decide
-
-example : encodePacked .bytes [1, 2, 3] ≠ ([] : List UInt8) := by native_decide
+example : encodePacked .bytes ⟨[1, 2, 3], by decide⟩ = [1, 2, 3] := by native_decide
+example : encodePacked .bytes ⟨[1, 2, 3], by decide⟩ ≠ ([] : List UInt8) := by native_decide
 
 -- Dynamic array: length omitted; each element padded to 32 bytes.
 -- Solidity: abi.encodePacked(uint16[]([3, 4])) = word(3) ++ word(4)
 example : encodePacked (.array (.uint 16))
-    [⟨3, by decide⟩, ⟨4, by decide⟩] =
+    ⟨[⟨3, by decide⟩, ⟨4, by decide⟩], by decide⟩ =
     encodeUint 3 ++ encodeUint 4 := by native_decide
 
 -- Invalid widths (m % 8 ≠ 0) are rejected at decode — encodeBEU truncates
