@@ -17,7 +17,8 @@ Infrastructure for EVM ABI encoding/decoding, kept as a module tree separate
 from the byte-order core (`Binary.*`, provided by the `lean-binary`
 dependency).
 
-Current contents:
+Current contents (the `roadmap node N` tags in module docstrings record
+the historical build order, nodes 1–8):
 
 * `EvmAbi.Bytes`   — byte-list plumbing: `pad32`, `splitEvery`, take/drop lemmas
 * `EvmAbi.Align`   — 32-byte alignment arithmetic (`Aligned`)
@@ -29,9 +30,9 @@ Current contents:
 * `EvmAbi.Codec`   — `Ty`-indexed encode/decode for all types + unified roundtrip
 * `EvmAbi.StaticArray` — static arrays `T[k]` over word-sized elements
 * `EvmAbi.Parts`   — head/tail combinator: `Part`, `encodeParts`, offset theorems
-* `EvmAbi.Packed`  — packed ABI (`abi.encodePacked`) for all-static types:
-                  primitive packed codecs, type-indexed `encodePacked` /
-                  `decodePacked`, static packed roundtrip
+* `EvmAbi.Packed`  — packed ABI (`abi.encodePacked`, Solidity's non-standard
+                  packed mode): tight scalars, in-place dynamic payloads,
+                  padded array elements; static packed roundtrip
 * `EvmAbi.Canonical` — canonical-layout validation: `validate`, `IsCanonical`,
                   `decodeCanonical`, and the C1–C3 theorems (encodings
                   validate; canonical input lenient-decodes; canonical
