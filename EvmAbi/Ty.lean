@@ -152,13 +152,6 @@ def headSizeSum : List Ty → Nat
   | t :: ts => t.headSize + headSizeSum ts
 end
 
-/-- `headSizeSum` is the sum of the mapped `headSize`s. -/
-theorem headSizeSum_eq_sum_map (ts : List Ty) :
-    headSizeSum ts = (ts.map headSize).sum := by
-  induction ts with
-  | nil => simp only [headSizeSum, List.map_nil, List.sum_nil]
-  | cons t ts ih => simp only [headSizeSum, List.map_cons, List.sum_cons, ← ih]
-
 /-! ## Packed sizes -/
 
 /- The packed encoding size of a static type (the number of bytes its
@@ -183,13 +176,6 @@ def packedSizeSum : List Ty → Nat
   | [] => 0
   | t :: ts => t.packedSize + packedSizeSum ts
 end
-
-/-- `packedSizeSum` is the sum of the mapped `packedSize`s. -/
-theorem packedSizeSum_eq_sum_map (ts : List Ty) :
-    packedSizeSum ts = (ts.map packedSize).sum := by
-  induction ts with
-  | nil => simp only [packedSizeSum, List.map_nil, List.sum_nil]
-  | cons t ts ih => simp only [packedSizeSum, List.map_cons, List.sum_cons, ← ih]
 
 /- For an all-static type, the packed size is the total bytes the encoding
 occupies.  Dynamic types (`bytes`, `string`, `T[]`) have no statically
