@@ -129,22 +129,22 @@ expansion.
 open EvmAbi
 
 -- Parse a type string
-#eval parseTypeFromString "uint256"
+#eval Ty.parse "uint256"
 -- some (Ty.uint 256)
 
-#eval parseTypeFromString "(address, uint256)[]"
+#eval Ty.parse "(address, uint256)[]"
 -- some (Ty.array (Ty.tuple [Ty.address, Ty.uint 256]))
 
 -- Parse a full ABI item
-#eval parseAbiItem "function approve(address spender, uint256 amount) returns (bool)"
+#eval AbiItem.parse "function approve(address spender, uint256 amount) returns (bool)"
 -- some (AbiItem.function "approve" [⟨.address, "spender", false⟩, ⟨.uint 256, "amount", false⟩] ...)
 
-#eval parseAbiItem "event Transfer(address indexed from, address indexed to, uint256 value)"
-#eval parseAbiItem "error Unauthorized(address caller)"
-#eval parseAbiItem "constructor(address owner) payable"
+#eval AbiItem.parse "event Transfer(address indexed from, address indexed to, uint256 value)"
+#eval AbiItem.parse "error Unauthorized(address caller)"
+#eval AbiItem.parse "constructor(address owner) payable"
 
 -- Parse a parameter list
-#eval parseParams "address spender, uint256 amount".toList
+#eval AbiParam.parseList "address spender, uint256 amount"
 ```
 
 ### Compile-time macros
@@ -156,16 +156,16 @@ into `Ty`, `AbiItem`, or `List AbiParam` expressions:
 open EvmAbi.HumanReadable.Meta
 
 -- Type macro: expands to the Ty constructor term
-let t : Ty := humanAbiType! "uint256[]"
+let t : Ty := ty! "uint256[]"
 -- t = Ty.array (Ty.uint 256)
 
 -- ABI item macro: expands to the AbiItem constructor term
-let item := humanAbiItem! "function balanceOf(address) view returns (uint256)"
+let item := item! "function balanceOf(address) view returns (uint256)"
 -- item = AbiItem.function "balanceOf" [⟨.address, none, false⟩] [⟨.uint 256, none, false⟩] .view
 
 -- Parameter list macro: expands to List AbiParam
-let params := humanAbiParams! "address spender, uint256 amount"
--- params = [⟨.address, "spender", false⟩, ⟨.uint 256, "amount", false⟩]
+let p := params! "address spender, uint256 amount"
+-- p = [⟨.address, "spender", false⟩, ⟨.uint 256, "amount", false⟩]
 ```
 
 The macros fail at **compile time** if the string is not a valid
@@ -206,8 +206,8 @@ The proof is built in incremental layers, each reusable independently:
 | **8. Full codec** | `Codec` | `Ty`-indexed `encode`/`decode` over the full universe; static roundtrip, dynamic roundtrip, unified `roundtrip` |
 | **9. Canonical validation** | `Canonical` | `validate`/`IsCanonical`/`decodeCanonical`; completeness (C1), lenient completeness on canonical input (C2), soundness (C3), bijection characterisation |
 | **10. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
-| **11. Human-readable ABI** | `HumanReadable` | Solidity-signature parser into `Ty` / `AbiItem`; `parseTypeFromString`, `parseAbiItem`, `parseParams` |
-| **12. Compile-time macros** | `HumanReadable.Meta` | `humanAbiType!`, `humanAbiItem!`, `humanAbiParams!` — parse string literals at elaboration time |
+| **11. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
+| **12. Compile-time macros** | `HumanReadable.Meta` | `ty!`, `item!`, `params!` — parse string literals at elaboration time |
 | **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, human-readable ABI tests |
 
 The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:
@@ -224,7 +224,7 @@ open EvmAbi.Ty
 open EvmAbi.HumanReadable.Meta
 
 -- construct a type via human-readable ABI
-let t : Ty := humanAbiType! "(uint256, bool)"
+let t : Ty := ty! "(uint256, bool)"
 let v : t.Val := (⟨42, by decide⟩, (true, ()))
 let enc := encode t v
 -- enc = word(42) ++ word(1)

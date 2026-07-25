@@ -11,7 +11,7 @@ open EvmAbi.Ty
 open EvmAbi.AbiItem
 open EvmAbi (skipWS parseTypeFromString parseAbiItem parseParams)
 
-/-! ## Syntax builders (return `Term`, no elaboration) -/
+/-! ## Syntax builders -/
 
 def mkListStx (elemTy : Term) (f : α → TermElabM Term) (xs : List α) : TermElabM Term := do
   match xs with
@@ -75,26 +75,26 @@ partial def mkItemStx : AbiItem → TermElabM Term
 
 /-! ## Elaboration rules -/
 
-elab "humanAbiType! " s:str : term => do
+elab "ty! " s:str : term => do
   let str := s.getString
   match parseTypeFromString str with
   | some ty => elabTerm (← mkTyStx ty) none
-  | none => throwErrorAt s "Failed to parse human-readable ABI type: {str}"
+  | none => throwErrorAt s "Failed to parse ABI type: {str}"
 
-elab "humanAbiItem! " s:str : term => do
+elab "item! " s:str : term => do
   let str := s.getString
   match parseAbiItem str with
   | some item => elabTerm (← mkItemStx item) none
-  | none => throwErrorAt s "Failed to parse human-readable ABI item: {str}"
+  | none => throwErrorAt s "Failed to parse ABI item: {str}"
 
-elab "humanAbiParams! " s:str : term => do
+elab "params! " s:str : term => do
   let str := s.getString
   match parseParams (str.toList) with
   | some (params, rest) =>
       if (skipWS rest).isEmpty then
         elabTerm (← mkListStx (← `(EvmAbi.AbiParam)) mkParamStx params) none
       else
-        throwErrorAt s "Trailing characters after human-readable ABI params: {rest}"
-  | none => throwErrorAt s "Failed to parse human-readable ABI params: {str}"
+        throwErrorAt s "Trailing characters after ABI params: {rest}"
+  | none => throwErrorAt s "Failed to parse ABI params: {str}"
 
 end EvmAbi.HumanReadable.Meta

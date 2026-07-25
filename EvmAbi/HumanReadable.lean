@@ -491,4 +491,18 @@ partial def parseAbi (s : String) : Option (List AbiItem) :=
 
 end AbiItemParser
 
+/-! ## Short idiomatic names -/
+
+/-- Parse a human-readable type string into a `Ty`.  Alias for `parseTypeFromString`. -/
+def Ty.parse (s : String) : Option Ty := parseTypeFromString s
+
+/-- Parse a human-readable ABI item signature into an `AbiItem`.  Alias for `parseAbiItem`. -/
+def AbiItem.parse (s : String) : Option AbiItem := parseAbiItem s
+
+/-- Parse a human-readable parameter list into `List AbiParam`.
+Alias for `parseParams` on `String` input. -/
+def AbiParam.parseList (s : String) : Option (List AbiParam) :=
+  parseParams (s.toList) >>= fun (ps, rest) =>
+    if (skipWS rest).isEmpty then some ps else none
+
 end EvmAbi

@@ -511,125 +511,172 @@ example : encodePacked (.tuple [.uint 8, .bool]) (⟨42, by decide⟩, (true, ()
     [42, 1] := by decide
 example : decodePacked (.uint 8) [42] = some ⟨42, by decide⟩ := by decide
 
-/-! ## Human-readable ABI: type parsing -/
+/-!
+## Human-readable ABI
 
--- elementary types (parseTypeFromString is in EvmAbi namespace)
-#eval parseTypeFromString "uint256"          -- some (Ty.uint 256)
-#eval parseTypeFromString "int128"           -- some (Ty.int 128)
-#eval parseTypeFromString "address"          -- some Ty.address
-#eval parseTypeFromString "bool"             -- some Ty.bool
-#eval parseTypeFromString "bytes"             -- some Ty.bytes
-#eval parseTypeFromString "bytes32"           -- some (Ty.bytesN 32)
-#eval parseTypeFromString "string"           -- some Ty.string
+End-to-end tests covering the full user workflow: parse a Solidity signature
+into `Ty` / `AbiItem` at compile time, then `encode` and `decode` through
+the codec.  Smaller pieces (individual type parsers, keyword parsing, edge
+cases) are covered implicitly by the e2e roundtrips below.
+-/
 
--- tuple types
-#eval parseTypeFromString "(uint256, bool)"  -- some (Ty.tuple [Ty.uint 256, Ty.bool])
-#eval parseTypeFromString "(uint256, bool, address)"
-#eval parseTypeFromString "()"               -- some (Ty.tuple [])
+section HumanReadable
 
--- array types
-#eval parseTypeFromString "uint256[]"        -- some (Ty.array (Ty.uint 256))
-#eval parseTypeFromString "uint256[5]"       -- some (Ty.fixedArray (Ty.uint 256) 5)
-#eval parseTypeFromString "uint256[][]"      -- some (Ty.array (Ty.array (Ty.uint 256)))
-#eval parseTypeFromString "uint256[2][3]"    -- nested fixed arrays
+/-! ### Curried parser (runtime) -/
 
--- nested compound types
-#eval parseTypeFromString "(uint256, bytes)[]"
-#eval parseTypeFromString "(address, uint256)[5]"
+-- `Ty.parse` and `AbiItem.parse` are available at runtime via `#eval`.
+-- Invalid inputs return `none`; valid inputs produce `some`.
 
--- invalid types return none
-#eval parseTypeFromString ""                 -- none
-#eval parseTypeFromString "foobar"           -- none
-#eval parseTypeFromString "uint"             -- none (missing bit width)
+example : (Ty.parse "uint256").isSome := by native_decide
+example : (Ty.parse "bytes").isSome := by native_decide
+example : (Ty.parse "uint256[]").isSome := by native_decide
+example : (Ty.parse "(uint256,bool)").isSome := by native_decide
+example : (Ty.parse "").isNone := by native_decide
+example : (AbiItem.parse "function foo() returns (uint256)").isSome := by native_decide
+example : (AbiItem.parse "event Transfer(address indexed from, address indexed to, uint256 value)").isSome := by native_decide
+example : (AbiItem.parse "").isNone := by native_decide
 
--- Basic sanity: parseTypeFromString returns `some` for valid types
-example : (parseTypeFromString "uint256").isSome := by native_decide
-example : (parseTypeFromString "address").isSome := by native_decide
-example : (parseTypeFromString "bytes32").isSome := by native_decide
-example : (parseTypeFromString "uint256[]").isSome := by native_decide
+/-! ### Compile-time macros → encode/decode roundtrip -/
 
-example : (parseTypeFromString "").isNone := by native_decide
-example : (parseTypeFromString "foobar").isNone := by native_decide
+-- Each test defines the type via `ty!`, constructs a value, encodes it, and
+-- verifies the roundtrip.  This exercises the full pipeline: macro expansion
+-- → Ty → encode → decode → recover original value.
 
-/-! ## Human-readable ABI: ABI item parsing -/
+-- scalar roundtrips
 
--- function signatures
-#eval parseAbiItem "function approve(address spender, uint256 amount) returns (bool)"
-#eval parseAbiItem "function balanceOf(address) view returns (uint256)"
-#eval parseAbiItem "function transfer(address, uint256) returns (bool)"
-#eval parseAbiItem "function foo() pure returns (uint256, bool)"
-#eval parseAbiItem "function bar() payable"
-#eval parseAbiItem "function foo()"
-#eval parseAbiItem "function baz()"
+example : decode (ty! "uint256") (encode (ty! "uint256") ⟨42, by decide⟩)
+    = some ⟨42, by decide⟩ :=
+  roundtrip_static (ty! "uint256") rfl (by native_decide) _
 
--- event signatures
-#eval parseAbiItem "event Transfer(address indexed from, address indexed to, uint256 amount)"
-#eval parseAbiItem "event Approval(address indexed owner, address indexed spender, uint256 value)"
-#eval parseAbiItem "event Debug()"
+example : decode (ty! "int16") (encode (ty! "int16") ⟨-1000, by decide⟩)
+    = some ⟨-1000, by decide⟩ :=
+  roundtrip_static (ty! "int16") rfl (by native_decide) _
 
--- error signatures
-#eval parseAbiItem "error Unauthorized(address caller)"
-#eval parseAbiItem "error InsufficientBalance(uint256 available, uint256 required)"
+example : decode (ty! "address") (encode (ty! "address") ⟨0xABCDEF, by decide⟩)
+    = some ⟨0xABCDEF, by decide⟩ :=
+  roundtrip_static (ty! "address") rfl (by native_decide) _
 
--- constructor
-#eval parseAbiItem "constructor(address owner) payable"
-#eval parseAbiItem "constructor()"
+example : decode (ty! "bool") (encode (ty! "bool") true) = some true :=
+  roundtrip_static (ty! "bool") rfl (by native_decide) _
 
--- fallback / receive
-#eval parseAbiItem "fallback() external payable"
-#eval parseAbiItem "receive() external payable"
+example : decode (ty! "bytes4")
+      (encode (ty! "bytes4") ⟨[0xDE, 0xAD, 0xBE, 0xEF], rfl⟩)
+    = some ⟨[0xDE, 0xAD, 0xBE, 0xEF], rfl⟩ :=
+  roundtrip_static (ty! "bytes4") rfl (by native_decide) _
 
--- invalid items
-#eval parseAbiItem ""                        -- none
-#eval parseAbiItem "foobar"                  -- none
+example : decode (ty! "bytes")
+      (encode (ty! "bytes") ⟨[0x61, 0x62, 0x63], by decide⟩)
+    = some ⟨[0x61, 0x62, 0x63], by decide⟩ :=
+  roundtrip_bytes _
 
-example : (parseAbiItem "function foo() returns (uint256)").isSome := by
-  native_decide
+example : decode (ty! "string")
+      (encode (ty! "string") ⟨"Hello, world!", by native_decide⟩)
+    = some ⟨"Hello, world!", by native_decide⟩ :=
+  roundtrip_string _
 
-example : (parseAbiItem "event Transfer(address indexed from, address indexed to, uint256 value)").isSome := by
-  native_decide
+-- static tuple
 
-example : (parseAbiItem "").isNone := by
-  native_decide
+def myTuple : Ty := ty! "(uint256, bool)"
 
-/-! ## Human-readable ABI: parameter list parsing -/
+example : decode myTuple (encode myTuple (⟨42, by decide⟩, (true, ())))
+    = some (⟨42, by decide⟩, (true, ())) :=
+  roundtrip_static myTuple rfl (by native_decide) _
 
-#eval parseParams "address spender, uint256 amount".toList
-#eval parseParams "".toList
-#eval parseParams "uint256".toList
+-- fixed array
 
-/-! ## Human-readable ABI: compile-time macros -/
+def fixedArr : Ty := ty! "uint256[3]"
 
--- humanAbiType! expands a human-readable type string into a Ty at compile time
--- The following demonstrates usage (visual verification via #eval)
+example : decode fixedArr
+      (encode fixedArr ⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], rfl⟩)
+    = some ⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], rfl⟩ :=
+  roundtrip_static fixedArr rfl (by native_decide) _
 
-#eval humanAbiType! "uint256"
-#eval humanAbiType! "address"
-#eval humanAbiType! "bool"
-#eval humanAbiType! "bytes"
-#eval humanAbiType! "bytes32"
-#eval humanAbiType! "string"
-#eval humanAbiType! "int128"
-#eval humanAbiType! "uint256[]"
-#eval humanAbiType! "uint256[5]"
-#eval humanAbiType! "(uint256, bool)"
-#eval humanAbiType! "uint256[][]"
-#eval humanAbiType! "uint256[][]"
-#eval humanAbiType! "(uint24[], uint48[1], (uint72, uint96, uint120), int24, int36, int48, int72, int96, int120)"
+-- dynamic array
 
--- humanAbiItem! expands a full ABI item signature at compile time
-#eval humanAbiItem! "function foo()"
-#eval humanAbiItem! "function approve(address spender, uint256 amount) returns (bool)"
-#eval humanAbiItem! "function balanceOf(address) view returns (uint256)"
-#eval humanAbiItem! "event Transfer(address indexed from, address indexed to, uint256 amount)"
-#eval humanAbiItem! "error Unauthorized(address caller)"
-#eval humanAbiItem! "constructor(address owner) payable"
-#eval humanAbiItem! "fallback() external payable"
-#eval humanAbiItem! "receive() external payable"
+def dynArr : Ty := ty! "uint256[]"
 
--- humanAbiParams! expands a parameter list
-#eval humanAbiParams! "address spender, uint256 amount"
-#eval humanAbiParams! "uint256"
-#eval humanAbiParams! ""
+example : decode dynArr
+      (encode dynArr ⟨[⟨1, by decide⟩, ⟨2, by decide⟩], by decide⟩)
+    = some ⟨[⟨1, by decide⟩, ⟨2, by decide⟩], by decide⟩ :=
+  roundtrip dynArr (by native_decide) _ (by native_decide)
+
+-- mixed static + dynamic tuple: exercises both head and tail sections
+
+def mixedTy : Ty := ty! "(uint256, bytes, bool)"
+
+def mixedVal : mixedTy.Val :=
+  (⟨42, by decide⟩, (⟨[0xAA, 0xBB, 0xCC], by decide⟩, (true, ())))
+
+example : decode mixedTy (encode mixedTy mixedVal) = some mixedVal :=
+  roundtrip mixedTy (by native_decide) _ (by native_decide)
+
+-- canonical validation: the encoding passes both validate and strict-decode
+
+example : IsCanonical (ty! "address")
+      (encode (ty! "address") ⟨0xABCDEF, by decide⟩) :=
+  isCanonical_encode (ty! "address") (by native_decide) _ (by native_decide)
+
+/-! ### Function ABI items → call-data encoding -/
+
+-- Parse a function signature at compile time, extract its input type via
+-- `inputsTy`, and encode arguments to produce ABI-compliant call data.
+
+-- ERC-20 `transfer(address,uint256)` — two-argument function
+
+def transferItem := item! "function transfer(address to, uint256 amount) returns (bool)"
+
+#eval encode transferItem.inputsTy
+    ((⟨0xABCDEF, by decide⟩, (⟨1000, by decide⟩, ())) : (ty! "(address,uint256)").Val)
+
+example : decode transferItem.inputsTy
+      (encode transferItem.inputsTy (⟨0xABCDEF, by decide⟩, (⟨1000, by decide⟩, ())))
+    = some (⟨0xABCDEF, by decide⟩, (⟨1000, by decide⟩, ())) :=
+  roundtrip transferItem.inputsTy (by native_decide) _ (by native_decide)
+
+-- ERC-20 `balanceOf(address)` — single-argument function with view modifier
+
+def balanceOfItem := item! "function balanceOf(address account) view returns (uint256)"
+
+-- `balanceOf` takes a single `address` — its input type is just `address`
+#eval encode (ty! "address") ⟨0xABCDEF, by decide⟩
+
+-- full ERC-20 Transfer event
+
+def transferEvent := item!
+  "event Transfer(address indexed from, address indexed to, uint256 value)"
+
+#eval transferEvent.inputsTy
+
+-- custom error
+
+def unauthorizedErr := item! "error Unauthorized(address caller)"
+
+#eval unauthorizedErr.inputsTy
+
+/-! ### `params!` — parameter list to `List AbiParam` -/
+
+def p := params! "address spender, uint256 amount"
+
+example : p.length = 2 := by native_decide
+example : (params! "").isEmpty := by native_decide
+
+/-! ### Spec-vector `sam`: `(bytes, bool, uint256[])` -/
+
+-- The canonical Solidity ABI spec example, type given via `ty!`.
+-- Encodes `sam("dave", true, [1,2,3])` and checks the roundtrip.
+
+def samTy : Ty := ty! "(bytes, bool, uint256[])"
+
+/-- `sam("dave", true, [1,2,3])`'s arguments. -/
+def samVal : samTy.Val :=
+  (⟨[0x64, 0x61, 0x76, 0x65], by decide⟩, (true,
+    (⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩, ())))
+
+#eval encode samTy samVal
+
+example : decode samTy (encode samTy samVal) = some samVal :=
+  roundtrip samTy (by native_decide) _ (by native_decide)
+
+end HumanReadable
 
 end EvmAbi
