@@ -8,6 +8,8 @@ import EvmAbi.Codec
 import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.Canonical
+import EvmAbi.HumanReadable
+import EvmAbi.HumanReadable.Meta
 
 /-!
 # EvmAbi
@@ -35,4 +37,6 @@ the historical build order, nodes 1–8):
                   `decodeCanonical`, and the C1–C3 theorems (encodings
                   validate; canonical input lenient-decodes; canonical
                   buffers are exactly the image of `encode`)
+* `EvmAbi.HumanReadable` — parser for Solidity-style human-readable ABI
+                  signatures into `Ty` and `AbiItem` representations
 -/

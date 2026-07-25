@@ -8,6 +8,8 @@ import EvmAbi.Codec
 import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.Canonical
+import EvmAbi.HumanReadable
+import EvmAbi.HumanReadable.Meta
 
 /-!
 # Tests
@@ -508,5 +510,126 @@ example : encodePacked (.uint 8) ⟨42, by decide⟩ = [42] := by decide
 example : encodePacked (.tuple [.uint 8, .bool]) (⟨42, by decide⟩, (true, ())) =
     [42, 1] := by decide
 example : decodePacked (.uint 8) [42] = some ⟨42, by decide⟩ := by decide
+
+/-! ## Human-readable ABI: type parsing -/
+
+-- elementary types (parseTypeFromString is in EvmAbi namespace)
+#eval parseTypeFromString "uint256"          -- some (Ty.uint 256)
+#eval parseTypeFromString "int128"           -- some (Ty.int 128)
+#eval parseTypeFromString "address"          -- some Ty.address
+#eval parseTypeFromString "bool"             -- some Ty.bool
+#eval parseTypeFromString "bytes"             -- some Ty.bytes
+#eval parseTypeFromString "bytes32"           -- some (Ty.bytesN 32)
+#eval parseTypeFromString "string"           -- some Ty.string
+
+-- tuple types
+#eval parseTypeFromString "(uint256, bool)"  -- some (Ty.tuple [Ty.uint 256, Ty.bool])
+#eval parseTypeFromString "(uint256, bool, address)"
+#eval parseTypeFromString "()"               -- some (Ty.tuple [])
+
+-- array types
+#eval parseTypeFromString "uint256[]"        -- some (Ty.array (Ty.uint 256))
+#eval parseTypeFromString "uint256[5]"       -- some (Ty.fixedArray (Ty.uint 256) 5)
+#eval parseTypeFromString "uint256[][]"      -- some (Ty.array (Ty.array (Ty.uint 256)))
+#eval parseTypeFromString "uint256[2][3]"    -- nested fixed arrays
+
+-- nested compound types
+#eval parseTypeFromString "(uint256, bytes)[]"
+#eval parseTypeFromString "(address, uint256)[5]"
+
+-- invalid types return none
+#eval parseTypeFromString ""                 -- none
+#eval parseTypeFromString "foobar"           -- none
+#eval parseTypeFromString "uint"             -- none (missing bit width)
+
+-- Basic sanity: parseTypeFromString returns `some` for valid types
+example : (parseTypeFromString "uint256").isSome := by native_decide
+example : (parseTypeFromString "address").isSome := by native_decide
+example : (parseTypeFromString "bytes32").isSome := by native_decide
+example : (parseTypeFromString "uint256[]").isSome := by native_decide
+
+example : (parseTypeFromString "").isNone := by native_decide
+example : (parseTypeFromString "foobar").isNone := by native_decide
+
+/-! ## Human-readable ABI: ABI item parsing -/
+
+-- function signatures
+#eval parseAbiItem "function approve(address spender, uint256 amount) returns (bool)"
+#eval parseAbiItem "function balanceOf(address) view returns (uint256)"
+#eval parseAbiItem "function transfer(address, uint256) returns (bool)"
+#eval parseAbiItem "function foo() pure returns (uint256, bool)"
+#eval parseAbiItem "function bar() payable"
+#eval parseAbiItem "function foo()"
+#eval parseAbiItem "function baz()"
+
+-- event signatures
+#eval parseAbiItem "event Transfer(address indexed from, address indexed to, uint256 amount)"
+#eval parseAbiItem "event Approval(address indexed owner, address indexed spender, uint256 value)"
+#eval parseAbiItem "event Debug()"
+
+-- error signatures
+#eval parseAbiItem "error Unauthorized(address caller)"
+#eval parseAbiItem "error InsufficientBalance(uint256 available, uint256 required)"
+
+-- constructor
+#eval parseAbiItem "constructor(address owner) payable"
+#eval parseAbiItem "constructor()"
+
+-- fallback / receive
+#eval parseAbiItem "fallback() external payable"
+#eval parseAbiItem "receive() external payable"
+
+-- invalid items
+#eval parseAbiItem ""                        -- none
+#eval parseAbiItem "foobar"                  -- none
+
+example : (parseAbiItem "function foo() returns (uint256)").isSome := by
+  native_decide
+
+example : (parseAbiItem "event Transfer(address indexed from, address indexed to, uint256 value)").isSome := by
+  native_decide
+
+example : (parseAbiItem "").isNone := by
+  native_decide
+
+/-! ## Human-readable ABI: parameter list parsing -/
+
+#eval parseParams "address spender, uint256 amount".toList
+#eval parseParams "".toList
+#eval parseParams "uint256".toList
+
+/-! ## Human-readable ABI: compile-time macros -/
+
+-- humanAbiType! expands a human-readable type string into a Ty at compile time
+-- The following demonstrates usage (visual verification via #eval)
+
+#eval humanAbiType! "uint256"
+#eval humanAbiType! "address"
+#eval humanAbiType! "bool"
+#eval humanAbiType! "bytes"
+#eval humanAbiType! "bytes32"
+#eval humanAbiType! "string"
+#eval humanAbiType! "int128"
+#eval humanAbiType! "uint256[]"
+#eval humanAbiType! "uint256[5]"
+#eval humanAbiType! "(uint256, bool)"
+#eval humanAbiType! "uint256[][]"
+#eval humanAbiType! "uint256[][]"
+#eval humanAbiType! "(uint24[], uint48[1], (uint72, uint96, uint120), int24, int36, int48, int72, int96, int120)"
+
+-- humanAbiItem! expands a full ABI item signature at compile time
+#eval humanAbiItem! "function foo()"
+#eval humanAbiItem! "function approve(address spender, uint256 amount) returns (bool)"
+#eval humanAbiItem! "function balanceOf(address) view returns (uint256)"
+#eval humanAbiItem! "event Transfer(address indexed from, address indexed to, uint256 amount)"
+#eval humanAbiItem! "error Unauthorized(address caller)"
+#eval humanAbiItem! "constructor(address owner) payable"
+#eval humanAbiItem! "fallback() external payable"
+#eval humanAbiItem! "receive() external payable"
+
+-- humanAbiParams! expands a parameter list
+#eval humanAbiParams! "address spender, uint256 amount"
+#eval humanAbiParams! "uint256"
+#eval humanAbiParams! ""
 
 end EvmAbi
