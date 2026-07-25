@@ -58,7 +58,7 @@ inductive Ty where
   | fixedArray (t : Ty) (n : Nat)
   /-- `(T₁, ..., Tₙ)`: tuple of types. -/
   | tuple (ts : List Ty)
-  deriving Repr
+  deriving Repr, Inhabited
 
 namespace Ty
 
