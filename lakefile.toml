@@ -5,6 +5,10 @@ testDriver = "Tests"
 
 [[lean_lib]]
 name = "EvmAbi"
+# `EvmAbi.HumanReadable.Meta` is deliberately not imported by the `EvmAbi` root
+# module (it pulls in the Lean frontend), so build the whole tree by glob rather
+# than through the root's import surface.
+globs = ["EvmAbi", "EvmAbi.+"]
 
 [[lean_lib]]
 name = "Tests"

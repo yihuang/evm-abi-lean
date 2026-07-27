@@ -9,7 +9,6 @@ import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.Canonical
 import EvmAbi.HumanReadable
-import EvmAbi.HumanReadable.Meta
 
 /-!
 # EvmAbi
@@ -39,4 +38,8 @@ the historical build order, nodes 1–8):
                   buffers are exactly the image of `encode`)
 * `EvmAbi.HumanReadable` — parser for Solidity-style human-readable ABI
                   signatures into `Ty` and `AbiItem` representations
+
+`EvmAbi.HumanReadable.Meta` — the `ty!` / `item!` / `params!` macros — is
+deliberately *not* re-exported here: it needs `import Lean`, and this library is
+otherwise free of the Lean frontend.  Import it explicitly to use the macros.
 -/

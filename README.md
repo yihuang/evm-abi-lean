@@ -152,7 +152,12 @@ open EvmAbi
 Three macros expand at elaboration time, converting string literals directly
 into `Ty`, `AbiItem`, or `List AbiParam` expressions:
 
+The macros live in `EvmAbi.HumanReadable.Meta`, which is not re-exported by the
+`EvmAbi` root module: it needs `import Lean`, and the rest of the library stays
+free of the Lean frontend.  Import it explicitly.
+
 ```lean4
+import EvmAbi.HumanReadable.Meta
 open EvmAbi.HumanReadable.Meta
 
 -- Type macro: expands to the Ty constructor term
@@ -230,6 +235,7 @@ then every type case in Codec reduces to it.
 
 ```lean4
 import EvmAbi
+import EvmAbi.HumanReadable.Meta
 
 open EvmAbi
 open EvmAbi.Ty
