@@ -9,13 +9,13 @@ expansion into `Ty` / `AbiItem` expressions.
 
 ## Supported signatures
 
-```
-Ty strings:
-  uint256 | int128 | address | bool | bytes | bytes32 | string
-  (T1, T2, ...)            — tuple
-  T[]                       — dynamic array
-  T[N]                      — fixed-size array
+Types are the grammar of the mapping table below.  Array suffixes apply to
+tuples too, so `(address,uint256)[]` is the human-readable form of a Solidity
+`struct[]`.  Widths outside the range the specification allows (`uint7`,
+`bytes33`, ...) are rejected, so a successful parse always yields a `Ty.Valid`
+type.
 
+```
 ABI items:
   function name(params) modifiers? returns (outputs)?
   event name(params)
@@ -24,14 +24,20 @@ ABI items:
   fallback() modifiers?
   receive() modifiers?
 
+Modifiers:
+  view | pure | payable | nonpayable            — at most one, recorded as the mutability
+  external | public | internal | private        — accepted and dropped
+  virtual | override                            — accepted and dropped
+
 Params:
-  type indexed? name?     — name and indexed are optional
+  type (indexed | calldata | memory | storage)* name?
   type, type, ...         — unnamed params
 ```
 
-Whitespace is required between tokens per the canonical human-readable spec
-(`abitype.dev`): `'function name() returns (string)'` is valid, but
-`'function name()returns(string)'` is not.
+Whitespace between tokens is skipped but never required, so
+`'function name()returns(string)'` parses the same as its spaced form.  Two
+adjacent word tokens still need a separator: `'uint256 a'` names a parameter,
+whereas `'uint256a'` is a single (invalid) identifier.
 
 ## Mapping to EvmAbi.Ty
 
@@ -39,7 +45,9 @@ Whitespace is required between tokens per the canonical human-readable spec
 |-------------------|-------------------|
 | `uint<N>`         | `.uint N`         |
 | `int<N>`          | `.int N`          |
+| `uint` / `int`    | `.uint 256` / `.int 256` |
 | `address`         | `.address`        |
+| `address payable` | `.address`        |
 | `bool`            | `.bool`           |
 | `bytes`           | `.bytes`          |
 | `bytes<N>`        | `.bytesN N`       |
@@ -65,7 +73,7 @@ structure AbiParam where
   ty : Ty
   name : Option String
   indexed : Bool
-  deriving Repr, Inhabited
+  deriving Repr
 
 /-- A parsed ABI item. -/
 inductive AbiItem where
@@ -80,25 +88,21 @@ inductive AbiItem where
 
 namespace AbiItem
 
-/-- Extract the input types as a tuple `Ty` (or a single type if only one input).
-Useful for encoding function call data. -/
+/-- Extract the input types as a tuple `Ty`: exactly the argument block of the
+call data.  The tuple is never collapsed, not even for a single argument —
+`f(bytes)` encodes as `offset ‖ length ‖ payload`, whereas the bare `bytes`
+encoding would drop the offset word. -/
 def inputsTy (item : AbiItem) : Ty :=
   match item with
   | function _ inputs _ _ | event _ inputs | error _ inputs | constructor inputs _ =>
-      match inputs.map (·.ty) with
-      | [] => .tuple []
-      | [t] => t
-      | ts => .tuple ts
+      .tuple (inputs.map (·.ty))
   | fallback _ | receive => .tuple []
 
-/-- Extract the output types as a tuple `Ty`. -/
+/-- Extract the output types as a tuple `Ty`, with the same no-collapse rule as
+`inputsTy`.  `none` for items that have no return values at all. -/
 def outputsTy (item : AbiItem) : Option Ty :=
   match item with
-  | function _ _ outputs _ =>
-      match outputs.map (·.ty) with
-      | [] => some (.tuple [])
-      | [t] => some t
-      | ts => some (.tuple ts)
+  | function _ _ outputs _ => some (.tuple (outputs.map (·.ty)))
   | _ => none
 
 end AbiItem
@@ -172,20 +176,45 @@ end CharParsing
 
 section TypeParser
 
-/-- Helper: if `name` starts with `pref`, extract the numeric suffix and parse it as a Nat.
-Return the constructed type or `none`. -/
-def tryPrefix (name : String) (pref : String) (mkTy : Nat → Ty) (rest : List Char) : Option (Ty × List Char) :=
-  if name.startsWith pref then
-    let numStr := (name.drop pref.length).toString
-    if numStr.isEmpty then
-      match parseNat rest with
-      | some (n, rest') => some (mkTy n, rest')
-      | none => none
-    else
-      match parseNat (numStr.toList) with
-      | some (n, []) => some (mkTy n, rest)
-      | _ => none
-  else none
+/-- Helper: read `name` as `pref` followed by a width, e.g. `"uint256"`.  Widths
+outside the range the specification allows are rejected (`Ty.Valid`), so `uint7`,
+`uint999`, `bytes0` and `bytes33` fail to parse rather than producing a type no
+codec theorem applies to. -/
+def tryPrefix (name : String) (pref : String) (mkTy : Nat → Ty) (rest : List Char) :
+    Option (Ty × List Char) := do
+  let ty := mkTy (← (← name.dropPrefix? pref).toNat?)
+  if ty.Valid then some (ty, rest) else none
+
+/-- Base types named outright, including the bare `uint`/`int` aliases for the
+256-bit widths. -/
+def baseTypeOf : String → Option Ty
+  | "address" => some .address
+  | "bool"    => some .bool
+  | "string"  => some .string
+  | "bytes"   => some .bytes
+  | "uint"    => some (.uint 256)
+  | "int"     => some (.int 256)
+  | _         => none
+
+/-- `address payable` is a Solidity type; the ABI knows only `address`, so the
+`payable` is consumed and dropped.  Taking it here rather than at the parameter
+layer is what makes `(address payable, uint256)` and `address payable[]` work. -/
+def dropPayable (cs : List Char) : List Char :=
+  match parseIdent cs with
+  | some ("payable", rest) => rest
+  | _ => cs
+
+/-- One or more `p`s separated by commas.  Every comma must be followed by
+another `p`, so a trailing comma is a parse error. -/
+partial def sepBy1 {α : Type} (p : List Char → Option (α × List Char)) (cs : List Char) :
+    Option (List α × List Char) := do
+  let (x, rest) ← p cs
+  let rest' := skipWS rest
+  match rest' with
+  | ',' :: rest2 => do
+    let (xs, rest3) ← sepBy1 p rest2
+    some (x :: xs, rest3)
+  | _ => some ([x], rest')
 
 mutual
 /-- Parse a single ABI type (e.g. `uint256`, `address`, `bytes32`, `(uint,bool)`,
@@ -203,50 +232,29 @@ partial def parseElementaryType (cs : List Char) : Option (Ty × List Char) := d
 
 /-- Parse the base type identifier: `uint<N>`, `int<N>`, `address`, `bool`,
 `bytes<N?>`, `string`.  Since `parseIdent` also consumes digits, the
-identifier may embed the bit width (e.g., `"uint256"`).  We extract
-any numeric suffix from the identifier itself. -/
-partial def parseBaseType (cs : List Char) : Option (Ty × List Char) :=
-  match parseIdent cs with
-  | none => none
-  | some (name, rest) =>
-      if name = "address" then some (.address, rest)
-      else if name = "bool" then some (.bool, rest)
-      else if name = "string" then some (.string, rest)
-      else if name = "bytes" then some (.bytes, rest)
-      else match tryPrefix name "uint" Ty.uint rest with
-        | some res => some res
-        | none =>
-          match tryPrefix name "int" Ty.int rest with
-          | some res => some res
-          | none =>
-            match tryPrefix name "bytes" Ty.bytesN rest with
-            | some res => some res
-            | none => none
+identifier may embed the bit width (e.g., `"uint256"`), so the named types are
+tried first and the width-bearing ones as prefixes. -/
+partial def parseBaseType (cs : List Char) : Option (Ty × List Char) := do
+  let (name, rest) ← parseIdent cs
+  match baseTypeOf name with
+  | some .address => some (.address, dropPayable rest)
+  | some ty => some (ty, rest)
+  | none =>
+    tryPrefix name "uint" Ty.uint rest
+      <|> tryPrefix name "int" Ty.int rest
+      <|> tryPrefix name "bytes" Ty.bytesN rest
 
-/-- Parse tuple type `(T1, T2, ..., Tn)`. -/
+/-- Parse tuple type `(T1, T2, ..., Tn)`, with an optional array suffix:
+`(address,uint256)[]` and `(address,uint256)[2]` are tuple arrays. -/
 partial def parseTupleType (cs : List Char) : Option (Ty × List Char) := do
   let rest ← parseChar '(' cs
+  match skipWS rest with
   -- empty tuple ()
-  let rest' := skipWS rest
-  match rest' with
-  | ')' :: rest'' =>
-    some (.tuple [], rest'')
-  | _ => do
-    let (firstTy, rest1) ← parseType rest'
-    let (tys, rest2) ← parseTupleRest rest1
-    let rest3 ← parseChar ')' rest2
-    some (.tuple (firstTy :: tys), rest3)
-
-/-- Parse the rest of a tuple: `, T2, ..., Tn`. -/
-partial def parseTupleRest (cs : List Char) : Option (List Ty × List Char) :=
-  let cs' := skipWS cs
-  match cs' with
-  | ',' :: _ => do
-    let (ty, rest1) ← parseType (cs'.drop 1)
-    let (tys, rest2) ← parseTupleRest rest1
-    some (ty :: tys, rest2)
-  | _ =>
-    some ([], cs')
+  | ')' :: rest' => parseArraySuffix (.tuple []) rest'
+  | rest' => do
+    let (tys, rest1) ← sepBy1 parseType rest'
+    let rest2 ← parseChar ')' rest1
+    parseArraySuffix (.tuple tys) rest2
 
 /-- Parse optional array suffix: `[]` (dynamic) or `[N]` (fixed), or none. -/
 partial def parseArraySuffix (ty : Ty) (cs : List Char) : Option (Ty × List Char) :=
@@ -278,38 +286,74 @@ def parseTypeFromString (s : String) : Option Ty :=
 end TypeParser
 
 
+/-! ## Solidity keywords
+
+The three places that have to recognise a keyword — the modifier run after a
+signature, the keyword run after a parameter type, and the guard that stops a
+modifier being taken for a parameter name — all read from these tables. -/
+
+section Keywords
+
+/-- The state-mutability keywords, the only modifiers the ABI records. -/
+def mutabilityOf : String → Option StateMutability
+  | "view"       => some .view
+  | "pure"       => some .pure
+  | "payable"    => some .payable
+  | "nonpayable" => some .nonpayable
+  | _            => none
+
+/-- Visibility and inheritance keywords: Solidity source syntax with no ABI
+counterpart, accepted and dropped. -/
+def isVisibility (kw : String) : Bool :=
+  kw == "external" || kw == "public" || kw == "internal" || kw == "private" ||
+    kw == "virtual" || kw == "override"
+
+/-- Data-location keywords, likewise accepted and dropped. -/
+def isDataLocation (kw : String) : Bool :=
+  kw == "calldata" || kw == "memory" || kw == "storage"
+
+/-- Consume a run of keywords, folding each into an accumulator.  `step` returns
+`none` for the first keyword it does not recognise, and the input is handed back
+positioned at that keyword. -/
+partial def eatKeywords {α : Type} [Inhabited α] (step : String → α → Option α) (a : α)
+    (cs : List Char) : α × List Char :=
+  let cs' := skipWS cs
+  match parseIdent cs' with
+  | some (kw, rest) =>
+      match step kw a with
+      | some a' => eatKeywords step a' rest
+      | none => (a, cs')
+  | none => (a, cs')
+
+end Keywords
+
+
 /-! ## Parameter parser -/
 
 section ParamParser
 
-/-- Parse a single ABI parameter: `type indexed? name?`. -/
+/-- Consume the keywords between a parameter's type and its name, returning the
+`indexed` flag.  Data locations are dropped: only `indexed` reaches the ABI. -/
+partial def parseParamKeywords (cs : List Char) : Bool × List Char :=
+  eatKeywords (fun kw indexed =>
+    if kw = "indexed" then some true
+    else if isDataLocation kw then some indexed
+    else none) false cs
+
+/-- Parse a single ABI parameter: `type (indexed | location)* name?`. -/
 partial def parseParam (cs : List Char) : Option (AbiParam × List Char) := do
-  let cs' := skipWS cs
-  let (baseTy, rest0) ← parseType cs'
-  -- check for `indexed` keyword
-  let rest0' := skipWS rest0
-  let (indexed, rest1) ←
-    match parseIdent rest0' with
-    | some (kw, rest) => if kw = "indexed" then pure (true, rest) else pure (false, rest0')
-    | none => pure (false, rest0')
+  let (baseTy, rest0) ← parseType cs
+  let (indexed, rest1) := parseParamKeywords rest0
   -- check for parameter name (identifier that isn't a keyword)
-  let rest1' := skipWS rest1
-  let (name, rest2) ←
-    match rest1' with
-    | ',' :: _ => pure (none, rest1')
-    | ')' :: _ => pure (none, rest1')
-    | [] => pure (none, rest1')
-    | _ =>
-      match parseIdent rest1' with
-      | some (ident, r) =>
-        -- make sure it's not a reserved word
-        if ident = "indexed" || ident = "returns" || ident = "view" ||
-           ident = "pure" || ident = "payable" || ident = "nonpayable" ||
-           ident = "external" || ident = "internal" then
-          pure (none, rest1')
-        else
-          pure (some ident, r)
-      | none => pure (none, rest1')
+  let (name, rest2) :=
+    match parseIdent rest1 with
+    | some (ident, r) =>
+      -- a modifier or `returns` here belongs to the enclosing signature
+      if ident = "returns" || (mutabilityOf ident).isSome || isVisibility ident then
+        (none, rest1)
+      else
+        (some ident, r)
+    | none => (none, rest1)
   pure ({ ty := baseTy, name := name, indexed := indexed }, rest2)
 
 /-- Parse a comma-separated list of parameters, optionally empty. -/
@@ -318,15 +362,7 @@ partial def parseParams (cs : List Char) : Option (List AbiParam × List Char) :
   match cs' with
   | [] => some ([], cs')
   | ')' :: _ => some ([], cs')  -- empty param list (already inside parens)
-  | _ => do
-    let (first, rest1) ← parseParam cs'
-    let rest1' := skipWS rest1
-    match rest1' with
-    | ',' :: rest2 => do
-      let (more, rest3) ← parseParams rest2
-      some (first :: more, rest3)
-    | _ =>
-      some ([first], rest1')
+  | _ => sepBy1 parseParam cs'
 
 end ParamParser
 
@@ -335,24 +371,17 @@ end ParamParser
 
 section AbiItemParser
 
-/-- Parse state-mutability keywords: `view`, `pure`, `payable`, `nonpayable`. -/
-def parseMutability (cs : List Char) : Option (StateMutability × List Char) :=
-  -- Try to parse an identifier
-  match parseIdent cs with
-  | some (kw, rest) =>
-      if kw = "view" then some (.view, rest)
-      else if kw = "pure" then some (.pure, rest)
-      else if kw = "payable" then some (.payable, rest)
-      else if kw = "nonpayable" then some (.nonpayable, rest)
-      else none
-  | none => none
-
-/-- Parse the keyword "external" (optional modifier for fallback/receive). -/
-def parseExternal (cs : List Char) : Option (List Char) :=
-  let cs' := skipWS cs
-  match parseIdent cs' with
-  | some ("external", rest) => some rest
-  | _ => some cs  -- external is optional
+/-- Consume a run of modifier keywords in any order, returning the state
+mutability they declare (`nonpayable` if none does).  Visibility is dropped.
+A second mutability keyword — conflicting or merely repeated — is left
+unconsumed, which the caller's trailing-input check turns into a parse error.
+Stops at anything else, `returns` in particular. -/
+partial def parseModifiers (cs : List Char) : StateMutability × List Char :=
+  let (sm?, rest) := eatKeywords (fun kw sm? =>
+    match mutabilityOf kw with
+    | some m => if sm?.isSome then none else some (some m)
+    | none => if isVisibility kw then some sm? else none) none cs
+  (sm?.getD .nonpayable, rest)
 
 /-- Parse `returns (T1, T2, ...)` clause of a function signature. -/
 partial def parseReturns (cs : List Char) : Option (List AbiParam × List Char) := do
@@ -371,11 +400,7 @@ partial def parseFunction (cs : List Char) : Option (AbiItem × List Char) := do
   let (inputs, rest3) ← parseParams rest2
   let rest4 ← parseChar ')' rest3
   -- optional modifiers
-  let rest4' := skipWS rest4
-  let (mutability, rest5) ←
-    match parseMutability rest4' with
-    | some (m, r) => pure (m, r)
-    | none => pure (.nonpayable, rest4')
+  let (mutability, rest5) := parseModifiers rest4
   -- try `returns`
   let rest5' := skipWS rest5
   match parseIdent rest5' with
@@ -412,11 +437,7 @@ partial def parseConstructor (cs : List Char) : Option (AbiItem × List Char) :=
   let rest1 ← parseChar '(' rest0
   let (inputs, rest2) ← parseParams rest1
   let rest3 ← parseChar ')' rest2
-  let rest3' := skipWS rest3
-  let (mutability, rest4) ←
-    match parseMutability rest3' with
-    | some (m, r) => pure (m, r)
-    | none => pure (.nonpayable, rest3')
+  let (mutability, rest4) := parseModifiers rest3
   pure (.constructor inputs mutability, rest4)
 
 /-- Parse a fallback signature:
@@ -425,12 +446,7 @@ partial def parseFallback (cs : List Char) : Option (AbiItem × List Char) := do
   let rest0 ← parseLit "fallback" cs
   let rest1 ← parseChar '(' rest0
   let rest2 ← parseChar ')' rest1
-  let rest2' ← parseExternal rest2
-  let rest2'' := skipWS rest2'
-  let (mutability, rest3) ←
-    match parseMutability rest2'' with
-    | some (m, r) => pure (m, r)
-    | none => pure (.nonpayable, rest2'')
+  let (mutability, rest3) := parseModifiers rest2
   pure (.fallback mutability, rest3)
 
 /-- Parse a receive signature:
@@ -439,15 +455,9 @@ partial def parseReceive (cs : List Char) : Option (AbiItem × List Char) := do
   let rest0 ← parseLit "receive" cs
   let rest1 ← parseChar '(' rest0
   let rest2 ← parseChar ')' rest1
-  let rest2' ← parseExternal rest2
-  let rest2'' := skipWS rest2'
-  -- consume optional payable modifier
-  let rest3 := skipWS rest2''
-  let rest4 ←
-    match parseIdent rest3 with
-    | some ("payable", r) => some r
-    | _ => some rest3
-  pure (.receive, rest4)
+  -- `receive` is always payable, so its modifiers carry no information
+  let (_, rest3) := parseModifiers rest2
+  pure (.receive, rest3)
 
 /-- Parse a single ABI item from the beginning of the input.
 Dispatches based on the keyword. -/
@@ -473,8 +483,9 @@ partial def parseAbiItem (s : String) : Option AbiItem := do
   let rest' := skipWS rest
   if rest' = [] then some item else none
 
-/-- Parse a list of ABI items from a multi-line string (one per line, or
-semicolon-separated — but the canonical format omits semicolons). -/
+/-- Parse a list of ABI items from a multi-line string: one item per line,
+blank lines skipped.  Any other separator (a semicolon, say) is part of the
+line and makes it fail to parse. -/
 partial def parseAbi (s : String) : Option (List AbiItem) :=
   -- Split on newlines and parse each non-empty line
   let lines := s.splitOn "\n"

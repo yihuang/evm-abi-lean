@@ -179,6 +179,7 @@ They can be used anywhere a term is expected — `def`, `let`, `example`,
 |---|---|
 | `uint<N>` | `.uint N` |
 | `int<N>` | `.int N` |
+| `uint` / `int` | `.uint 256` / `.int 256` |
 | `address` | `.address` |
 | `bool` | `.bool` |
 | `bytes` | `.bytes` |
@@ -188,7 +189,18 @@ They can be used anywhere a term is expected — `def`, `let`, `example`,
 | `T[N]` | `.fixedArray T N` |
 | `(T₁, …, Tₙ)` | `.tuple [T₁, …, Tₙ]` |
 
+Array suffixes apply to tuples as well, so `(address,uint256)[]` — a Solidity
+`struct[]` — is a `.array (.tuple […])`.  Widths outside the range the
+specification allows (`uint7`, `bytes33`, …) are rejected, so every type a
+parse produces satisfies `Ty.Valid` and the codec theorems apply to it.
+
 ABI items: `function`, `event`, `error`, `constructor`, `fallback`, `receive`.
+
+Solidity source syntax with no ABI counterpart is accepted and dropped:
+visibility (`external`, `public`, `internal`, `private`), `virtual`/`override`,
+data locations (`calldata`, `memory`, `storage`) and the `payable` of
+`address payable`.  `view`/`pure`/`payable`/`nonpayable` (at most one) are
+recorded as the item's state mutability, and `indexed` as the parameter's flag.
 
 ## Proof Structure
 
