@@ -23,6 +23,41 @@ namespace EvmAbi
 open Binary
 open Ty
 
+/-! ## pad32 -/
+
+#eval (pad32 [1, 2, 3]).length                    -- 32
+#eval (pad32 ((List.range 40).map UInt8.ofNat)).length  -- 64
+#eval (pad32 ([] : List UInt8)).length            -- 0
+
+example : (pad32 [1, 2, 3]).take 3 = [1, 2, 3] := by decide
+example : (pad32 ([] : List UInt8)).length = 0 := by decide
+example : 32 ∣ (pad32 [7]).length := by decide
+example : pad32 (UInt256.toBEBytes 9) = UInt256.toBEBytes 9 := by native_decide
+
+/-! ## wordAt / natAt -/
+
+-- Two words written consecutively; reading index 1 gives the second word.
+#eval wordAt (UInt256.toBEBytes 7 ++ UInt256.toBEBytes 8) 1    -- some 8
+#eval natAt (UInt256.toBEBytes 7 ++ UInt256.toBEBytes 8) 0     -- some 7
+#eval wordAt (UInt256.toBEBytes 7) 1                           -- none (out of range)
+
+example : wordAt (UInt256.toBEBytes 42) 0 = some (42 : UInt256) := by native_decide
+example : natAt (UInt256.toBEBytes 42) 0 = some 42 := by native_decide
+example : wordAt (UInt256.toBEBytes 1 ++ UInt256.toBEBytes 2 ++ UInt256.toBEBytes 3) 2
+    = some (3 : UInt256) := by native_decide
+
+-- The same instance proved via the library theorem (no computation)
+example : natAt (UInt256.toBEBytes 7 ++ UInt256.toBEBytes 8) 0 = some 7 := by
+  have e := natAt_append ([] : List UInt8) (UInt256.toBEBytes 8) (7 : UInt256) 0 (by simp)
+  have h7 : (7 : UInt256).toNat = 7 := by native_decide
+  simpa [bytesOfWord, h7] using e
+
+/-! ## Aligned -/
+
+example : Aligned (pad32 [1, 2, 3]).length := dvd_length_pad32 _
+example : Aligned ((UInt256.toBEBytes 1) ++ (UInt256.toBEBytes 2)).length :=
+  aligned_length_append ⟨1, by native_decide⟩ ⟨1, by native_decide⟩
+
 /-! ## Static primitives (node 4) -/
 
 -- uintM: a word with the value in the last byte(s)
@@ -57,6 +92,57 @@ example : decodeBytesN 2 ([0x12, 0x34] ++ List.replicate 29 0 ++ [1]) = none := 
 
 -- ABI-spec instance: enc(0x010203 as bytes) = 0x03 word ++ 0x010203 padded
 #eval encodeBytes [1, 2, 3]
+
+/-! ## Ty-indexed codec (S2 wrap-up) -/
+
+-- Ty-level roundtrips by computation
+
+example : decode (.uint 8) (encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ := by
+  native_decide
+
+example : decode (.int 16) (encode (.int 16) ⟨-1000, by decide⟩) = some ⟨-1000, by decide⟩ := by
+  native_decide
+
+example : decode .bool (encode .bool true) = some true := by native_decide
+
+example : decode (.bytesN 5) (encode (.bytesN 5) ⟨[1,2,3,4,5], rfl⟩)
+    = some ⟨[1,2,3,4,5], rfl⟩ := by native_decide
+
+example : decode .bytes (encode .bytes ⟨[0x61, 0x62, 0x63], by decide⟩)
+    = some ⟨[0x61, 0x62, 0x63], by decide⟩ := by native_decide
+
+example : decode .string (encode .string ⟨"Hello, world!", by native_decide⟩)
+    = some ⟨"Hello, world!", by native_decide⟩ := by native_decide
+
+-- The same instances via library theorems (no computation)
+
+example : decode (.uint 8) (encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ :=
+  roundtrip_static (.uint 8) rfl (by native_decide) _
+
+example : decode (.int 8) (encode (.int 8) ⟨-5, by decide⟩) = some ⟨-5, by decide⟩ :=
+  roundtrip_static (.int 8) rfl (by native_decide) _
+
+example : decode .bool (encode .bool false) = some false :=
+  roundtrip_static .bool rfl (by native_decide) _
+
+example : decode .bytes (encode .bytes ⟨[1, 2, 3], by decide⟩) = some ⟨[1, 2, 3], by decide⟩ :=
+  roundtrip_bytes ⟨[1, 2, 3], by decide⟩
+
+example : decode .string (encode .string ⟨"hello", by native_decide⟩) =
+    some ⟨"hello", by native_decide⟩ :=
+  roundtrip_string ⟨"hello", by native_decide⟩
+
+-- encodeStatic_length
+
+example : (encode (.uint 256) ⟨42, by decide⟩).length = 32 := by
+  rw [encode_length_static (.uint 256) rfl (by native_decide) ⟨42, by decide⟩]
+  simp [headSize]
+
+-- encode_length_aligned
+
+example : Aligned (encode .bytes ⟨[1, 2, 3], by decide⟩).length :=
+  encode_length_aligned .bytes (by native_decide) _
+
 /-! ## Head/tail combinator (node 7) -/
 
 /-- Demo tuple `(uint 1, bytes 0x010203, uint 2)`: a dynamic part between
@@ -141,6 +227,25 @@ def specGBytes : List UInt8 :=
   encodeUint 3 ++ [0x74, 0x77, 0x6f] ++ List.replicate 29 0 ++
   encodeUint 5 ++ [0x74, 0x68, 0x72, 0x65, 0x65] ++ List.replicate 27 0
 
+/-! ### Byte-exact spec vectors
+
+The canonical vectors of the Solidity ABI specification, encoded at the `Ty`
+level (without the selector): `sam("dave", true, [1,2,3])`,
+`f(0x123, [0x456, 0x789], "1234567890", "Hello, world!")` and
+`g([[1, 2], [3]], ["one", "two", "three"])`.  Byte-exactness is checked by
+computation; `sam` and `f` are additionally re-proved through the library
+roundtrip theorem (no computation). -/
+
+example : encode specSamTy specSamVal = specSamBytes := by native_decide
+example : encode specFTy specFVal = specFBytes := by native_decide
+example : encode specGTy specGVal = specGBytes := by native_decide
+
+example : decode specSamTy (encode specSamTy specSamVal) = some specSamVal :=
+  roundtrip specSamTy (by native_decide) specSamVal (by native_decide)
+
+example : decode specFTy (encode specFTy specFVal) = some specFVal :=
+  roundtrip specFTy (by native_decide) specFVal (by native_decide)
+
 -- the spec encodings validate, consuming exactly their length
 example : validate specSamTy specSamBytes = some specSamBytes.length := by native_decide
 example : validate specFTy specFBytes = some specFBytes.length := by native_decide
@@ -159,10 +264,6 @@ example : IsCanonical specSamTy (encode specSamTy specSamVal) :=
 
 example : decodeCanonical specSamTy (encode specSamTy specSamVal) = some specSamVal :=
   decodeCanonical_encode specSamTy (by native_decide) specSamVal (by native_decide)
-
-/-- **Canonical uniqueness** (computational): re-encoding the decoded value
-gives the original buffer back. -/
-example : encode specFTy specFVal = specFBytes := by native_decide
 
 /-! ## C4: bounds are intrinsic, image characterization -/
 
@@ -431,10 +532,52 @@ def compositeVal : composite.Val :=
   let da : (ty! "uint256[]").Val := ⟨[⟨1, by decide⟩, ⟨2, by decide⟩], by decide⟩
   (u, (i, (a, (b, (b4, (bs, (s, (fa, (da, ())))))))))
 
-#eval encode composite compositeVal
+/-- Everything `ty!` produces is `Ty.Valid`, so the codec theorems apply to it. -/
+theorem composite_valid : composite.Valid := by decide
+
+-- printed as head words plus a length: the whole 576-byte buffer overflows
+-- the pretty printer's recursion limit and falls back to the raw printer
+#eval (encode composite compositeVal).take 64
+
+example : (encode composite compositeVal).length = 576 := by native_decide
 
 example : decode composite (encode composite compositeVal) = some compositeVal :=
-  roundtrip composite (by native_decide) _ (by native_decide)
+  roundtrip composite composite_valid _ (by native_decide)
+
+/-! ### Widths outside the spec are rejected
+
+A successful parse always yields a `Ty.Valid` type (see `composite_valid`
+above).  `Ty` has no `DecidableEq`, so rejection is checked through
+`Option.isNone`, and `#guard` evaluates it without a `native_decide` proof. -/
+
+#guard (Ty.parse "uint7").isNone
+#guard (Ty.parse "uint999").isNone
+#guard (Ty.parse "int0").isNone
+#guard (Ty.parse "bytes0").isNone
+#guard (Ty.parse "bytes33").isNone
+-- an invalid width anywhere inside a composite type sinks the whole parse
+#guard (Ty.parse "(uint8, bytes33)").isNone
+#guard (Ty.parse "uint7[]").isNone
+#guard (Ty.parse "(uint8, bytes32)[]").isSome
+
+/-! ### Tuple arrays: `(T₁, …, Tₙ)[]` and `(T₁, …, Tₙ)[k]` -/
+
+example : ty! "(address, uint256)[]" = .array (.tuple [.address, .uint 256]) := rfl
+example : ty! "(address, uint256)[2]" = .fixedArray (.tuple [.address, .uint 256]) 2 := rfl
+example : ty! "(bool)[][3]" = .fixedArray (.array (.tuple [.bool])) 3 := rfl
+example : ty! "()[]" = .array (.tuple []) := rfl
+
+/-- A dynamic array of static structs — the shape of a Solidity `struct[]`. -/
+def structArray : Ty := ty! "(address, uint256)[]"
+
+theorem structArray_valid : structArray.Valid := by decide
+
+def structArrayVal : structArray.Val :=
+  ⟨[(⟨0xAAAA, by decide⟩, (⟨1, by decide⟩, ())),
+    (⟨0xBBBB, by decide⟩, (⟨2, by decide⟩, ()))], by decide⟩
+
+example : decode structArray (encode structArray structArrayVal) = some structArrayVal :=
+  roundtrip structArray structArray_valid _ (by native_decide)
 
 /-! ### `item!` — function/event/error signatures → call-data encoding -/
 
@@ -452,13 +595,18 @@ example :
 
 #eval
   let item := item! "function balanceOf(address account) view returns (uint256)"
-  encode item.inputsTy ⟨0xABCDEF, by decide⟩
+  encode item.inputsTy (⟨0xABCDEF, by decide⟩, ())
 
--- ERC-20 Transfer event
+-- A single argument stays wrapped in a tuple: for a dynamic argument the
+-- call-data block leads with the offset word, which the bare `bytes` encoding
+-- would omit.
 
-#eval
-  let ev := item! "event Transfer(address indexed from, address indexed to, uint256 value)"
-  ev.inputsTy
+example : (item! "function f(bytes data)").inputsTy = .tuple [.bytes] := rfl
+
+example :
+  let t := (item! "function f(bytes data)").inputsTy
+  let v : t.Val := (⟨[0x61, 0x62, 0x63], by decide⟩, ())
+  (encode t v).take 32 = encodeUint 0x20 := by native_decide
 
 -- custom error
 
@@ -466,15 +614,66 @@ example :
   let err := item! "error Unauthorized(address caller)"
   err.inputsTy
 
+/-! ### Solidity source noise: aliases, modifiers, data locations -/
+
+example : ty! "uint" = .uint 256 := rfl
+example : ty! "int" = .int 256 := rfl
+example : ty! "(uint, int)[]" = .array (.tuple [.uint 256, .int 256]) := rfl
+
+-- visibility keywords are dropped, the mutability keyword is kept
+example : (item! "function f() public payable") = .function "f" [] [] .payable := rfl
+example : (item! "function f() external view returns (uint256)").outputsTy
+    = some (.tuple [.uint 256]) := rfl
+example : (item! "function f() virtual override returns (bool)").outputsTy
+    = some (.tuple [.bool]) := rfl
+
+-- data locations and `address payable` are dropped
+example : (item! "function f(bytes calldata data) external").inputsTy = .tuple [.bytes] := rfl
+example : (item! "function f(string memory s) public view returns (string memory)").inputsTy
+    = .tuple [.string] := rfl
+example : (item! "function f(address payable to)").inputsTy = .tuple [.address] := rfl
+-- consumed at the type layer, so it composes with tuples, arrays and locations
+example : ty! "(address payable, uint256)" = .tuple [.address, .uint 256] := rfl
+example : (item! "function f(address payable[] calldata to)").inputsTy
+    = .tuple [.array .address] := rfl
+-- but only after `address`: elsewhere `payable` is not part of the type
+#guard (AbiItem.parse "function f(uint256 payable)").isNone
+
+-- `indexed` is the one keyword that survives into the ABI
+example : (item! "event Transfer(address indexed from, address indexed to, uint256 value)")
+    = .event "Transfer" [⟨.address, some "from", true⟩, ⟨.address, some "to", true⟩,
+        ⟨.uint 256, some "value", false⟩] := rfl
+
+example : (item! "fallback() external payable") = .fallback .payable := rfl
+example : (item! "receive() external payable") = .receive := rfl
+example : (item! "constructor(address owner) public payable")
+    = .constructor [⟨.address, some "owner", false⟩] .payable := rfl
+
+-- an unknown modifier is still a parse failure
+#guard (AbiItem.parse "function f() bogus returns (bool)").isNone
+#guard (AbiItem.parse "function f(uint256 a").isNone
+
+-- a second mutability keyword — conflicting or repeated — is a parse failure
+#guard (AbiItem.parse "function f() view payable").isNone
+#guard (AbiItem.parse "function f() payable payable").isNone
+#guard (AbiItem.parse "constructor() payable view").isNone
+-- visibility around a single mutability keyword is still fine
+#guard (AbiItem.parse "function f() external view returns (bool)").isSome
+
 /-! ### `params!` — parameter list to `List AbiParam` -/
 
-example :
-  let p := params! "address spender, uint256 amount"
-  p.length = 2
-:= by
-  intro p; native_decide
+#guard (params! "address spender, uint256 amount").length = 2
 
-example : (params! "").isEmpty := by native_decide
+#guard (params! "").isEmpty
+
+-- `parseAbi` takes one item per line and skips blank lines
+#guard (parseAbi "function a(uint256)\n\nevent B(bool)\n").isSome
+#guard (parseAbi "function a(uint256); event B(bool)").isNone
+
+-- a comma must be followed by a parameter
+#guard (AbiParam.parseList "address spender,").isNone
+#guard (AbiItem.parse "function f(uint256 a, )").isNone
+#guard (AbiItem.parse "function f(, uint256 a)").isNone
 
 /-! ### Spec-vector `sam`: `(bytes, bool, uint256[])` -/
 

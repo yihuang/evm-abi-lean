@@ -9,7 +9,7 @@ namespace EvmAbi.HumanReadable.Meta
 open EvmAbi (Ty AbiItem AbiParam StateMutability)
 open EvmAbi.Ty
 open EvmAbi.AbiItem
-open EvmAbi (skipWS parseTypeFromString parseAbiItem parseParams)
+open EvmAbi (parseTypeFromString parseAbiItem)
 
 /-! ## Syntax builders -/
 
@@ -89,12 +89,8 @@ elab "item! " s:str : term => do
 
 elab "params! " s:str : term => do
   let str := s.getString
-  match parseParams (str.toList) with
-  | some (params, rest) =>
-      if (skipWS rest).isEmpty then
-        elabTerm (← mkListStx (← `(EvmAbi.AbiParam)) mkParamStx params) none
-      else
-        throwErrorAt s "Trailing characters after ABI params: {rest}"
+  match AbiParam.parseList str with
+  | some params => elabTerm (← mkListStx (← `(EvmAbi.AbiParam)) mkParamStx params) none
   | none => throwErrorAt s "Failed to parse ABI params: {str}"
 
 end EvmAbi.HumanReadable.Meta
