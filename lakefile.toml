@@ -13,7 +13,13 @@ globs = ["EvmAbi", "EvmAbi.+"]
 [[lean_lib]]
 name = "Tests"
 
+# Not in `defaultTargets`: the encoder benchmark is built on demand with
+# `lake build bench`, so CI does not pay for it.
+[[lean_exe]]
+name = "bench"
+root = "Bench"
+
 [[require]]
 name = "binary"
-git = "https://github.com/yihuang/lean-binary.git"
-rev = "main"
+git = "https://github.com/mmsqe/lean-endianness.git"
+rev = "16dbbee248f00c969fa40c95d3a257da782457a4"

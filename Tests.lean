@@ -8,6 +8,8 @@ import EvmAbi.Codec
 import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.Canonical
+import EvmAbi.Builder
+import EvmAbi.Encode
 import EvmAbi.HumanReadable
 import EvmAbi.HumanReadable.Meta
 
@@ -495,6 +497,55 @@ example : encodePacked (.uint 8) ⟨42, by decide⟩ = [42] := by decide
 example : encodePacked (.tuple [.uint 8, .bool]) (⟨42, by decide⟩, (true, ())) =
     [42, 1] := by decide
 example : decodePacked (.uint 8) [42] = some ⟨42, by decide⟩ := by decide
+
+/-! ## Builder (node 13)
+
+The builder denotes the byte list it stands for, and `run` produces exactly
+those bytes.  `Builder` is structurally recursive, so `decide` evaluates it. -/
+
+example : (Builder.bytes [1, 2, 3]).toList = [1, 2, 3] := by decide
+example : (Builder.zeros 4).toList = [0, 0, 0, 0] := by decide
+example : (Builder.bytes [1] ++ Builder.empty ++ Builder.zeros 2).toList = [1, 0, 0] := by decide
+
+-- the cached size is the denotation's length, by construction
+example : (Builder.bytes [1, 2, 3] ++ Builder.zeros 29).size = 32 := by decide
+example : ∀ b : Builder, b.size = b.toList.length := Builder.size_eq_length_toList
+
+-- `run` materialises the denotation
+example : (Builder.bytes [1, 2] ++ Builder.zeros 2).run.data.toList = [1, 2, 0, 0] := by
+  native_decide
+example : (Builder.chunk "hi".toUTF8).run.data.toList = [0x68, 0x69] := by native_decide
+
+/-! ## Executable encoder (node 14)
+
+`encodeByteArray` is the `Builder`-based encoder run into a `ByteArray`.  It
+agrees with the specification encoder on the Solidity spec vectors — and by
+`data_toList_encodeByteArray`, on *every* value, with no computation. -/
+
+#eval (encodeByteArray specSamTy specSamVal).size    -- 320
+
+example : (encodeByteArray specSamTy specSamVal).data.toList = specSamBytes := by native_decide
+example : (encodeByteArray specFTy specFVal).data.toList = specFBytes := by native_decide
+example : (encodeByteArray specGTy specGVal).data.toList = specGBytes := by native_decide
+
+example : encodeByteArray specSamTy specSamVal = specSamBytes.toByteArray := by native_decide
+
+-- the same instances via the library theorem (no computation)
+example : (encodeByteArray specSamTy specSamVal).data.toList = encode specSamTy specSamVal :=
+  data_toList_encodeByteArray specSamTy specSamVal
+
+example : encodeByteArray specGTy specGVal = (encode specGTy specGVal).toByteArray :=
+  encodeByteArray_eq specGTy specGVal
+
+-- and the roundtrip transported onto it
+example : decode specSamTy (encodeByteArray specSamTy specSamVal).data.toList = some specSamVal :=
+  decode_encodeByteArray specSamTy (by native_decide) specSamVal (by native_decide)
+
+example : decodeCanonical specFTy (encodeByteArray specFTy specFVal).data.toList = some specFVal :=
+  decodeCanonical_encodeByteArray specFTy (by native_decide) specFVal (by native_decide)
+
+example : (encodeByteArray specGTy specGVal).size = (encode specGTy specGVal).length :=
+  size_encodeByteArray specGTy specGVal
 
 /-!
 ## Human-readable ABI

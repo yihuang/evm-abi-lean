@@ -91,6 +91,13 @@ complete type grammar.
    encoding is ambiguous without lengths, so only the static fragment is
    decodable — `roundtrip_packed_static` proves its roundtrip.
 
+8. **Executable encoder with a proved bridge.**  A `Builder` abstraction
+   (`O(1)` concatenation, cached size, one-pass fill into a pre-sized
+   `ByteArray`) carries a second encoder whose only tie to the verified one
+   is `toList_encodeB : (encodeB t v).toList = encode t v`.  Proofs stay on
+   `List UInt8`; execution never builds one.  2.9× faster on flat values and
+   asymptotically faster on nested ones (§3.7).
+
 ## 3. Core Design
 
 ### 3.1 Type Universe (`Ty.lean`)
@@ -245,6 +252,62 @@ walkers only enumerate parts and advance the head offset via
 **Package E** instantiates the prefix roundtrip with an empty suffix,
 yielding the user-facing `roundtrip` theorem.
 
+### 3.7 Builder and Executable Encoder (`Builder.lean`, `Encode.lean`)
+
+`List UInt8` is the right specification type and the wrong runtime type: a
+cons cell and a boxed `UInt8` per byte, and — worse — `encode` is built from
+`++`, so a value nested `d` levels deep has its bytes re-copied once per
+level, `O(n · d)`.  Rewriting `encode` over `ByteArray` would fix the
+representation but not the concatenation, since `ByteArray` append copies too.
+
+The fix is the builder pattern (Haskell's `Data.Binary.Builder`): make
+concatenation free by not concatenating.
+
+**`Builder.lean`** is ABI-agnostic.  `Chunks` is a tree with three kinds of
+leaf — a literal byte list, a `ByteArray` chunk (so `String.toUTF8` payloads
+are never unpacked), and a run of `n` zero bytes (so padding is never
+materialised) — plus an `append` *constructor*, which is what makes
+concatenation `O(1)`.  `Builder` wraps that tree with its **cached** byte
+count:
+
+```lean
+structure Builder where
+  chunks  : Chunks
+  size    : Nat
+  size_eq : size = chunks.toList.length
+```
+
+The cache is not an optimisation detail.  The head/tail scheme needs the size
+of every tail in order to write the offset words, so a `size` that walked the
+tree would put the `O(n · depth)` cost straight back — an earlier draft did
+exactly that and was *slower* than the specification encoder.  `size_eq` is a
+`Prop`: erased at run time, and no `Builder` can lie about its size.
+`Builder.run` then allocates `size` bytes up front and emits into them with
+`ByteArray.push`, both `@[extern]` primitives — one linear pass, no
+intermediate lists.
+
+**`Encode.lean`** mirrors the encoder clause for clause: `PartB`/
+`encodePartsB` mirror `Part`/`encodeParts` (with `PartB.toPart` as the
+denotation), and `encodeB`/`partOfB`/`partsOfTupleB` mirror
+`encode`/`partOf`/`partsOfTuple` with the same termination measures.  The
+mirror is a *separate* definition rather than a refactor of `encode`, so no
+existing proof changes; one mutual induction ties them together:
+
+```lean
+theorem toList_encodeB (t : Ty) (v : t.Val) : (encodeB t v).toList = encode t v
+```
+
+That is the entire bridge.  `encodeByteArray t v = (encodeB t v).run` then
+satisfies `(encodeByteArray t v).data.toList = encode t v`, so every result
+about `encode` transports by rewriting — `decode_encodeByteArray`,
+`decode_encodeByteArray_static`, `isCanonical_encodeByteArray` and
+`decodeCanonical_encodeByteArray` are three lines each.
+
+Measured by `Bench.lean` (compiled; the win rests on the `@[extern]`
+`ByteArray` primitives, so interpreted runs show the opposite): 2.9× on flat
+`bytes[]` values, and 16×/53× at tuple nesting depth 50/200, where the
+specification encoder is quadratic and the builder linear.
+
 ## 4. Technical Challenges
 
 ### 4.1 Dependent Pattern Matching over `Val`
@@ -305,14 +368,20 @@ smaller values, and the `decreasing_tactic` discharges every goal.
 ## 5. Architecture Diagram
 
 ```
-┌──────────────────────────────────────────────┐
-│                 Packed.lean                   │
-│  encodePacked / decodePacked (mutual)         │
-│  packed static roundtrip; array elements      │
-│  reuse the standard codec                     │
-└──────────────────────┬───────────────────────┘
-                       │
-┌──────────────────────▼───────────────────────┐
+┌──────────────────────────┐    ┌──────────────────────┐
+│       Encode.lean         │───▶│    Builder.lean       │
+│ encodeB / encodeByteArray │    │  Chunks / Builder     │
+│ toList_encodeB — the      │    │  cached size, run     │
+│ bridge to the spec;       │    │  (ABI-agnostic)       │
+│ roundtrip etc. transported│    └──────────────────────┘
+└─────────────┬────────────┘
+              │                 ┌──────────────────────┐
+              │                 │     Packed.lean       │
+              │                 │  encodePacked /       │
+              │                 │  decodePacked (mutual)│
+              │                 └──────────┬───────────┘
+              │                            │
+┌─────────────▼────────────────────────────▼───┐
 │                  Codec.lean                   │
 │  encode / decode (mutual)                     │
 │  readElem / decodeElems / decodeTuple (mutual)│
@@ -334,11 +403,31 @@ smaller values, and the `decreasing_tactic` discharges every goal.
 
 ## 6. Future Work
 
-### ByteArray Interface
+### ByteArray Decoder
 
-The library works entirely with `List UInt8` for proofs and `ByteArray`
-only at the I/O boundary.  A future layer could lift the roundtrip theorem
-to `ByteArray` without reproving, using a list/bytearray isomorphism lemma.
+The encoder now has a verified `ByteArray` path (§3.7); the decoder does
+not.  `decode` consumes a `List UInt8` and `readElem` reaches its component
+with `buf.drop off`, which is `O(off)` — so decoding an `n`-component tuple
+is quadratic, the same shape of problem the builder solved on the encoding
+side.  The natural counterpart is a cursor — a `(ByteArray, offset)` pair
+with `O(1)` positioning — and a bridging theorem in the same style as
+`toList_encodeB`, relating `decodeCursor t ⟨ba, off⟩` to
+`decode t (ba.data.toList.drop off)`, so the roundtrip transports rather
+than being reproved.
+
+### Faster Word Encoding — done, upstream
+
+`encodeUint` goes through `Binary.encodeBEU`, which used to peel one byte at a
+time with `n / 256` and `n % 256`.  Above `2 ^ 63` a `Nat` is a GMP bignum and
+each of those allocates, so one EVM word cost 32 GMP calls — about 4.8 µs,
+against ~30 ns for the list plumbing around it.  Every ABI word paid it.
+
+The fix landed in `lean-binary` as `Binary.Fast`: peel eight bytes at a time
+through a `UInt64`, proved equal to the definition and registered with
+`@[csimp]`, so no definition, no theorem and no caller changed.  Measured on
+`uint256[]` with 1000 full-width words, `encodeByteArray` went 4961 µs → 997 µs
+(5.0×) and the specification encoder 5323 µs → 1307 µs, since the fix sits
+below both.
 
 ## 7. References
 

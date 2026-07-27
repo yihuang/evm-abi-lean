@@ -9,6 +9,8 @@ import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.Canonical
 import EvmAbi.HumanReadable
+import EvmAbi.Builder
+import EvmAbi.Encode
 
 /-!
 # EvmAbi
@@ -38,6 +40,10 @@ the historical build order, nodes 1–8):
                   buffers are exactly the image of `encode`)
 * `EvmAbi.HumanReadable` — parser for Solidity-style human-readable ABI
                   signatures into `Ty` and `AbiItem` representations
+* `EvmAbi.Builder` — byte-string builder: `O(1)` concatenation, `run` fills
+                  a pre-sized `ByteArray` in one pass, `toList` denotation
+* `EvmAbi.Encode`  — the executable encoder: `encodeB` / `encodeByteArray`,
+                  proved to denote `encode`, with the roundtrip transported
 
 `EvmAbi.HumanReadable.Meta` — the `ty!` / `item!` / `params!` macros — is
 deliberately *not* re-exported here: it needs `import Lean`, and this library is

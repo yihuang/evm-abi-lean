@@ -117,6 +117,63 @@ The `.tuple` arm is the flat argument list of a multi-argument
 *nested* tuples or arrays it is a total-function extension with no
 Solidity counterpart, documented and tested as such.
 
+### Executable encoder
+
+`encode` returns a `List UInt8`.  That is the right type for the proofs — `++`
+is associative on the nose and `take`/`drop` have a rich algebra — and the
+wrong one for execution: a cons cell and a boxed byte per byte, and a nest of
+`++`s that re-copies a value's bytes once per level of nesting, so a `d`-deep
+value costs `O(n · d)`.
+
+`EvmAbi.Builder` and `EvmAbi.Encode` add a second encoder that keeps `encode`
+as its specification.  A `Builder` is a tree of byte runs paired with its
+cached byte count: concatenation is an `O(1)` constructor, `String.toUTF8`
+payloads stay `ByteArray` chunks, padding is a `zeros` node, and `run`
+allocates the exact size once and fills it with `ByteArray.push`.
+
+```lean4
+def encodeByteArray (t : Ty) (v : t.Val) : ByteArray := (encodeB t v).run
+
+-- the builder encoder denotes the specification encoder …
+theorem toList_encodeB (t : Ty) (v : t.Val) : (encodeB t v).toList = encode t v
+
+-- … so the bytes it produces are exactly the specified ones
+theorem data_toList_encodeByteArray (t : Ty) (v : t.Val) :
+    (encodeByteArray t v).data.toList = encode t v
+```
+
+That last theorem is the whole bridge: every result already proved about
+`encode` transports without reproving anything, so the roundtrip, the static
+roundtrip, canonicity and the strict roundtrip are one-line corollaries at the
+end of `EvmAbi.Encode`, e.g. `decode_encodeByteArray`.
+
+Measured with `lake build bench && ./.lake/build/bin/bench` (Apple M-series;
+compiled only — the builder rests on the `@[extern]` `ByteArray.push` and
+`ByteArray.emptyWithCapacity`, so interpreted runs do not show the win):
+
+| shape | `encode` + `toByteArray` | `encodeByteArray` | speedup |
+|---|---|---|---|
+| `bytes[]`, 500 × 256 B | 2744 µs | 954 µs | 2.9× |
+| `bytes[]`, 2000 × 256 B | 10928 µs | 3740 µs | 2.9× |
+| `uint256[]`, 1000 full-width words | 1323 µs | 991 µs | 1.3× |
+| nested tuples, depth 50 | 2042 µs | 126 µs | 16× |
+| nested tuples, depth 200 | 26088 µs | 490 µs | 53× |
+
+The flat rows show the constant factor; the nested rows show the asymptotics —
+quadratic against linear, so the gap widens with depth.
+
+Both columns also depend on how fast one 32-byte word is produced, which is
+`lean-binary`'s job: its `Binary.Fast` peels eight bytes at a time through a
+`UInt64` instead of one at a time through bignum division, and registers the
+result with `@[csimp]`, so this library needed no change to benefit.  That is
+worth 4.1× to the specification encoder and 5.0× to `encodeByteArray` on the
+`uint256[]` row — and, because it sits below both, it is why the builder's own
+advantage there is only 1.3×.
+
+The decoder is still `List UInt8`-based and has its own asymptotic problem
+(`readElem` does `buf.drop off` per component); a cursor-based `ByteArray`
+decoder is the natural follow-up and would bridge back the same way.
+
 ## Human-Readable ABI
 
 Solidity-style human-readable ABI signatures can be parsed into `Ty` and
@@ -225,7 +282,10 @@ The proof is built in incremental layers, each reusable independently:
 | **10. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
 | **11. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
 | **12. Compile-time macros** | `HumanReadable.Meta` | `ty!`, `item!`, `params!` — parse string literals at elaboration time |
-| **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, human-readable ABI tests |
+| **13. Byte-string builder** | `Builder` | `Chunks`/`Builder` with cached size, `toList` denotation, `run` into a pre-sized `ByteArray`; ABI-agnostic |
+| **14. Executable encoder** | `Encode` | `encodeB`/`encodeByteArray` mirroring `encode`, the bridge `toList_encodeB`, and the roundtrip/canonical theorems transported |
+| **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, builder and executable-encoder checks, human-readable ABI tests |
+| **Bench** | `Bench` | `lake build bench` — `encode` vs `encodeByteArray` on flat and deeply nested values |
 
 The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:
 the combinatorial heart of the ABI offset arithmetic is proved once on `List Part`,
