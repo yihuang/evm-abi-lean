@@ -8,86 +8,64 @@ Conforms to the [Solidity ABI Specification](https://docs.soliditylang.org/en/la
 
 ### Roundtrip (bijection)
 
-The central result is that `encode`/`decode` form a **bijection** between the
-value space of a valid ABI type and the image of `encode` within the
-`2^256`-byte universe.
-
-On the value side, every bound that matters is baked into the **value family**
-`t.Val` itself (see [`EvmAbi.Ty`](#proof-structure)): a `bytes` value
-carries a proof that its payload length is `< 2^256`, an `array` value
-carries a proof that its element count is `< 2^256`, and containers inherit
-their components' bounds through the recursion.  The only global assumption
-is that the *total* encoding length also stays below `2^256` — an aggregate
-property no single value can control.
+The central result is that `encode` and `decode` form a **bijection** between
+the value space of a valid ABI type and the image of `encode` within the
+`2^256`-byte universe.  The strict roundtrip — decode after encode is the
+identity on a complete buffer — is:
 
 ```lean4
-theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
-    (hb : (encode t v).length < 2 ^ 256) : decode t (encode t v) = some v
+theorem decodeStrict_encode (t : Ty) (hv : t.Valid) (v : t.Val)
+    (hb : (encode t v).length < 2 ^ 256) : decodeStrict t (encode t v) = some v
 ```
 
-Injectivity of `encode` is an immediate corollary: if two values encode to
-the same buffer, decoding that buffer recovers both, so they coincide.
+`decode` is the linear canonical decoder in *prefix form*: it returns the
+value together with the untouched remainder, so nested components are
+prefixes of their parent's buffer (`decode t (encode t v ++ rest) =
+some (v, rest)`).
+
+Injectivity of `encode` is an immediate corollary (`encode_of_decodeStrict`):
+if two values encode to the same buffer, decoding that buffer recovers
+both, so they coincide.
 
 For **static types** (no dynamic offsets) the total-length bound is
 dispensed with entirely:
 
 ```lean4
-theorem roundtrip_static (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid) (v : t.Val) :
-    decode t (encode t v) = some v
+theorem decode_static_append (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid)
+    (v : t.Val) (rest : List UInt8) : decode t (encode t v ++ rest) = some (v, rest)
 ```
 
 No `sorry`.  All types (`uintM`, `intM`, `bool`, `address`, `bytesM`, `bytes`, `string`,
 `T[]`, `T[k]`, `(T₁,…,Tₙ)`) and arbitrarily nested combinations thereof are covered.
 
-### Strictness / canonical validation
+### Strictness
 
-The lenient decoder accepts buffers whose offset words point anywhere decodable.
-A separate **canonical validation** layer checks the stricter ABI requirement:
-dynamic offset words must point to tails laid out *contiguously, in order,
-immediately after the head section*, with no trailing garbage.
-
-Three packages of theorems relate validation, lenient decoding, and encoding:
-
-```lean4
--- C1. Completeness: every encoding validates, consuming exactly its length.
-theorem isCanonical_encode (t : Ty) (hv : t.Valid) (v : t.Val)
-    (hb : (encode t v).length < 2 ^ 256) : IsCanonical t (encode t v)
-
--- C2. Lenient completeness on canonical input: whatever validates also lenient-decodes.
-theorem validate_decode (t : Ty) (buf : List UInt8) (n : Nat)
-    (h : validate t buf = some n) : ∃ v, decode t buf = some v
-
--- C3. Canonical soundness: validation + lenient decoding pins the buffer down to the
---     encoding of the decoded value.  Canonical buffers are exactly the image of encode.
-theorem encode_of_decodeCanonical (t : Ty) (hv : t.Valid) (buf : List UInt8) (v : t.Val)
-    (h : decodeCanonical t buf = some v) : encode t v = buf
-```
-
-Composing C1 and C3 gives the **canonical roundtrip** and **canonical uniqueness**:
-
-```lean4
-theorem decodeCanonical_encode (t : Ty) (hv : t.Valid) (v : t.Val)
-    (hb : (encode t v).length < 2 ^ 256) : decodeCanonical t (encode t v) = some v
-```
+Strictness is intrinsic to the decoder, not a separate layer: `decode` walks
+a buffer with two monotonic cursors (head section, tails) threading an
+*expected tail frontier*, and a dynamic component's offset word must equal
+the frontier exactly — so tails are forced to be laid out *contiguously, in
+order, immediately after the head section*.  `decodeStrict` is `decode`
+plus an exact-consumption check (no trailing garbage), and `IsCanonical`
+the corresponding predicate.
 
 The capstone theorems characterise the bijection in purely extensional terms:
 
 ```lean4
--- Under the buffer bound, canonical buffers ↔ encodings (with no bound on the value side).
+-- Under the buffer bound, canonical buffers are exactly the encodings.
 theorem isCanonical_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
     (hb : buf.length < 2 ^ 256) :
-    IsCanonical t buf ↔ ∃ v, decode t buf = some v ∧ encode t v = buf
+    IsCanonical t buf ↔ ∃ v, encode t v = buf
 
--- Strict-decoder characterisation: succeeds exactly on encodings — no side condition
--- on the value, since every t.Val carries its own bounds.
-theorem decodeCanonical_eq_some_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
+-- The strict decoder succeeds exactly on encodings — no side condition on the
+-- value, since every t.Val carries its own bounds.
+theorem decodeStrict_eq_some_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
     (v : t.Val) (hb : buf.length < 2 ^ 256) :
-    decodeCanonical t buf = some v ↔ encode t v = buf
+    decodeStrict t buf = some v ↔ encode t v = buf
 ```
 
-The negative test suite in `Tests.lean` shows that the lenient decoder accepts
-non-canonical inputs (swapped tails, gaps, duplicate offsets, misaligned offsets)
-while the strict decoder rejects them all.
+The negative test suite in `Tests.lean` shows that non-canonical inputs
+(swapped tails, gaps, duplicate offsets, misaligned offsets, trailing
+garbage) are all rejected by `decodeStrict`.
 
 ### Packed ABI
 
@@ -220,11 +198,10 @@ The proof is built in incremental layers, each reusable independently:
 | **5. Static primitives** | `Static` | Standalone codecs for `uintM`, `intM`, `bool`, `address`, `bytesN`; strict bool/bytesN decoders |
 | **6. Dynamic primitives** | `Dynamic` | Standalone codecs for `bytes`, `string`; prefix-tolerant decoder variant |
 | **7. Head/tail combinator** | `Parts` | The core ABI layout abstraction (`Part`, `encodeParts`, offset-correctness theorems); type-independent |
-| **8. Full codec** | `Codec` | `Ty`-indexed `encode`/`decode` over the full universe; static roundtrip, dynamic roundtrip, unified `roundtrip` |
-| **9. Canonical validation** | `Canonical` | `validate`/`IsCanonical`/`decodeCanonical`; completeness (C1), lenient completeness on canonical input (C2), soundness (C3), bijection characterisation |
-| **10. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
-| **11. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
-| **12. Compile-time macros** | `HumanReadable.Meta` | `ty!`, `item!`, `params!` — parse string literals at elaboration time |
+| **8. Full codec** | `Codec` | `Ty`-indexed `encode` and the linear decoder `decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); roundtrip, soundness and bound-free static-delegation families; strict API `decodeStrict`/`IsCanonical` and the capstones |
+| **9. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
+| **10. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
+| **11. Compile-time macros** | `HumanReadable.Meta` | `ty!`, `item!`, `params!` — parse string literals at elaboration time |
 | **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, human-readable ABI tests |
 
 The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:
@@ -247,9 +224,9 @@ let v : t.Val := (⟨42, by decide⟩, (true, ()))
 let enc := encode t v
 -- enc = word(42) ++ word(1)
 
--- roundtrip
-example : decode t (encode t v) = some v :=
-  roundtrip t (by
+-- strict roundtrip
+example : decodeStrict t (encode t v) = some v :=
+  decodeStrict_encode t (by
     simp [Valid, AllValid])
     v
     (by native_decide)

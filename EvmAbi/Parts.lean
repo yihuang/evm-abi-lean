@@ -3,17 +3,23 @@ import EvmAbi.Dynamic
 /-!
 # EvmAbi.Parts
 
-The head/tail combinator (roadmap node 7) — the heart of the ABI layout.
+The head/tail combinator (roadmap node 7) — the heart of the ABI layout —
+in builder form (roadmap node 9).
 
 A tuple encoding is a list of `Part`s; each part contributes a static
-`head` (for dynamic parts: a 32-byte offset word computed by `encodeParts`)
-and, when dynamic, a `tail`. The full encoding is
+`head` (for dynamic parts: a 32-byte offset word computed by `putParts`)
+and, when dynamic, a `tail`.  Heads and tails are `Builder`s
+(`EvmAbi.Builder`), so the full encoding
 
 ```
-encodeParts ps = encodeHeads (headSizes ps) ps ++ encodeTails ps
+putParts ps = putHeads (headSizes ps) ps ++ putTails ps
 ```
 
-The fundamental theorems:
+is assembled with `O(1)` composition and materialized once at the
+boundary.  The list-level encoders `encodeHeads` / `encodeTails` /
+`encodeParts` are those materializations (`Builder.toList`); all
+specifications and the offset theorems are stated about them, unchanged
+from the list-based formulation:
 
 * `drop_headOffset_static` — a static part's head is found at its head offset;
 * `wordAt_offset_append` — a dynamic part's head word *contains* its tail offset;
@@ -24,25 +30,26 @@ namespace EvmAbi
 
 open Binary
 
-/-- One component of a tuple encoding: a static `head` and a dynamic `tail`.
-For static components (`isDyn = false`) the tail is empty; for dynamic
-components the head is the 32-byte offset word computed by `encodeParts`. -/
+/-- One component of a tuple encoding: a static `head` and a dynamic
+`tail`, both as builders.  For static components (`isDyn = false`) the
+tail is empty; for dynamic components the head is the 32-byte offset word
+computed by `putParts`. -/
 structure Part where
-  head : List UInt8
-  tail : List UInt8
+  head : Builder
+  tail : Builder
   isDyn : Bool
 
 namespace Part
 
 /-- Bytes this part occupies in the head section. -/
 def headSize : Part → Nat
-  | ⟨head, _, false⟩ => head.length
+  | ⟨head, _, false⟩ => head.toList.length
   | ⟨_, _, true⟩ => 32
 
 /-- Bytes this part occupies in the tail section. -/
 def tailSize : Part → Nat
   | ⟨_, _, false⟩ => 0
-  | ⟨_, tail, true⟩ => tail.length
+  | ⟨_, tail, true⟩ => tail.toList.length
 
 end Part
 
@@ -60,45 +67,87 @@ def tailSizes : List Part → Nat
 the whole head section plus the tails of the preceding dynamic parts. -/
 def tailOffset (ps : List Part) (i : Nat) : Nat := headSizes ps + tailSizes (ps.take i)
 
-/-- Encode the head section; `acc` is the byte offset of the current part's
+/-! ## the builder assembly -/
+
+/-- Build the head section; `acc` is the byte offset of the current part's
 tail (total head size plus the sizes of the preceding tails). -/
-def encodeHeads (acc : Nat) : List Part → List UInt8
-  | [] => []
-  | ⟨head, _, false⟩ :: ps => head ++ encodeHeads acc ps
-  | ⟨_, tail, true⟩ :: ps => encodeUint acc ++ encodeHeads (acc + tail.length) ps
+def putHeads (acc : Nat) : List Part → Builder
+  | [] => ∅
+  | ⟨head, _, false⟩ :: ps => head ++ putHeads acc ps
+  | ⟨_, tail, true⟩ :: ps => putUint acc ++ putHeads (acc + tail.toList.length) ps
 
-/-- Encode the tail section: the dynamic tails, in order. -/
-def encodeTails : List Part → List UInt8
-  | [] => []
-  | ⟨_, _, false⟩ :: ps => encodeTails ps
-  | ⟨_, tail, true⟩ :: ps => tail ++ encodeTails ps
+/-- Build the tail section: the dynamic tails, in order. -/
+def putTails : List Part → Builder
+  | [] => ∅
+  | ⟨_, _, false⟩ :: ps => putTails ps
+  | ⟨_, tail, true⟩ :: ps => tail ++ putTails ps
 
-/-- Full tuple encoding: the head section followed by the tails. -/
-def encodeParts (ps : List Part) : List UInt8 :=
-  encodeHeads (headSizes ps) ps ++ encodeTails ps
+/-- Full tuple builder: the head section followed by the tails. -/
+def putParts (ps : List Part) : Builder :=
+  putHeads (headSizes ps) ps ++ putTails ps
+
+/-! ## the list-level materialization -/
+
+/-- Materialized head section. -/
+def encodeHeads (acc : Nat) (ps : List Part) : List UInt8 := (putHeads acc ps).toList
+
+/-- Materialized tail section. -/
+def encodeTails (ps : List Part) : List UInt8 := (putTails ps).toList
+
+/-- Materialized full tuple encoding. -/
+def encodeParts (ps : List Part) : List UInt8 := (putParts ps).toList
+
+/-- `encodeParts` in the classical head/tail-append form. -/
+theorem encodeParts_unfold (ps : List Part) :
+    encodeParts ps = encodeHeads (headSizes ps) ps ++ encodeTails ps := by
+  simp [encodeParts, putParts, encodeHeads, encodeTails]
+
+/-- cons equations for the materialized encoders. -/
+theorem encodeHeads_cons_static (acc : Nat) (head tail : Builder) (ys : List Part) :
+    encodeHeads acc (⟨head, tail, false⟩ :: ys) = head.toList ++ encodeHeads acc ys := by
+  simp [encodeHeads, putHeads]
+
+theorem encodeHeads_cons_dynamic (acc : Nat) (head tail : Builder) (ys : List Part) :
+    encodeHeads acc (⟨head, tail, true⟩ :: ys) =
+      encodeUint acc ++ encodeHeads (acc + tail.toList.length) ys := by
+  simp [encodeHeads, putHeads]
+
+theorem encodeTails_cons_static (head tail : Builder) (ys : List Part) :
+    encodeTails (⟨head, tail, false⟩ :: ys) = encodeTails ys := by
+  simp [encodeTails, putTails]
+
+theorem encodeTails_cons_dynamic (head tail : Builder) (ys : List Part) :
+    encodeTails (⟨head, tail, true⟩ :: ys) = tail.toList ++ encodeTails ys := by
+  simp [encodeTails, putTails]
 
 /-! ## sizes -/
 
-@[simp] theorem length_encodeHeads (acc : Nat) (ps : List Part) :
-    (encodeHeads acc ps).length = headSizes ps := by
+@[simp] theorem length_putHeads (acc : Nat) (ps : List Part) :
+    ((putHeads acc ps).toList).length = headSizes ps := by
   induction ps generalizing acc with
   | nil => rfl
   | cons p ps ih =>
       obtain ⟨head, tail, isDyn⟩ := p
       cases isDyn <;>
-        simp [encodeHeads, headSizes, Part.headSize, ih, length_encodeUint]
+        simp [putHeads, headSizes, Part.headSize, ih]
 
-@[simp] theorem length_encodeTails (ps : List Part) :
-    (encodeTails ps).length = tailSizes ps := by
+@[simp] theorem length_encodeHeads (acc : Nat) (ps : List Part) :
+    (encodeHeads acc ps).length = headSizes ps := length_putHeads acc ps
+
+@[simp] theorem length_putTails (ps : List Part) :
+    ((putTails ps).toList).length = tailSizes ps := by
   induction ps with
   | nil => rfl
   | cons p ps ih =>
       obtain ⟨head, tail, isDyn⟩ := p
-      cases isDyn <;> simp [encodeTails, tailSizes, Part.tailSize, ih]
+      cases isDyn <;> simp [putTails, tailSizes, Part.tailSize, ih]
+
+@[simp] theorem length_encodeTails (ps : List Part) :
+    (encodeTails ps).length = tailSizes ps := length_putTails ps
 
 theorem length_encodeParts (ps : List Part) :
     (encodeParts ps).length = headSizes ps + tailSizes ps := by
-  rw [encodeParts, List.length_append, length_encodeHeads, length_encodeTails]
+  simp [encodeParts, putParts]
 
 theorem headSizes_append (xs ys : List Part) :
     headSizes (xs ++ ys) = headSizes xs + headSizes ys := by
@@ -114,28 +163,37 @@ theorem tailSizes_append (xs ys : List Part) :
 
 /-! ## append lemmas for the encoders -/
 
-theorem encodeHeads_append (acc : Nat) (xs ys : List Part) :
-    encodeHeads acc (xs ++ ys) = encodeHeads acc xs ++ encodeHeads (acc + tailSizes xs) ys := by
+theorem putHeads_append (acc : Nat) (xs ys : List Part) :
+    putHeads acc (xs ++ ys) = putHeads acc xs ++ putHeads (acc + tailSizes xs) ys := by
   induction xs generalizing acc with
-  | nil => simp [encodeHeads, tailSizes]
+  | nil => simp [putHeads, tailSizes, Builder.empty_append]
   | cons x xs ih =>
       obtain ⟨head, tail, isDyn⟩ := x
       cases isDyn <;>
-        simp [List.cons_append, encodeHeads, tailSizes, Part.tailSize, ih,
-          List.append_assoc, Nat.add_assoc]
+        simp [List.cons_append, putHeads, tailSizes, Part.tailSize, ih,
+          Builder.append_assoc, Nat.add_assoc]
+
+theorem encodeHeads_append (acc : Nat) (xs ys : List Part) :
+    encodeHeads acc (xs ++ ys) = encodeHeads acc xs ++ encodeHeads (acc + tailSizes xs) ys := by
+  simp [encodeHeads, putHeads_append]
+
+theorem putTails_append (xs ys : List Part) :
+    putTails (xs ++ ys) = putTails xs ++ putTails ys := by
+  induction xs with
+  | nil => simp [putTails, Builder.empty_append]
+  | cons x xs ih =>
+      obtain ⟨head, tail, isDyn⟩ := x
+      cases isDyn <;> simp [List.cons_append, putTails, ih, Builder.append_assoc]
 
 theorem encodeTails_append (xs ys : List Part) :
     encodeTails (xs ++ ys) = encodeTails xs ++ encodeTails ys := by
-  induction xs with
-  | nil => simp [encodeTails]
-  | cons x xs ih =>
-      obtain ⟨head, tail, isDyn⟩ := x
-      cases isDyn <;> simp [List.cons_append, encodeTails, ih, List.append_assoc]
+  simp [encodeTails, putTails_append]
 
 /-! ## well-formedness -/
 
 /-- Well-formed parts: every static head and every tail is 32-byte aligned. -/
-def WF (ps : List Part) : Prop := ∀ p ∈ ps, 32 ∣ p.head.length ∧ 32 ∣ p.tail.length
+def WF (ps : List Part) : Prop :=
+  ∀ p ∈ ps, 32 ∣ p.head.toList.length ∧ 32 ∣ p.tail.toList.length
 
 theorem dvd_headSizes (hwf : WF ps) : 32 ∣ headSizes ps := by
   induction ps with
@@ -144,7 +202,7 @@ theorem dvd_headSizes (hwf : WF ps) : 32 ∣ headSizes ps := by
       have hp := hwf p List.mem_cons_self
       have hih := ih (fun q hq => hwf q (List.mem_cons_of_mem p hq))
       obtain ⟨head, tail, isDyn⟩ := p
-      have hp1 : 32 ∣ head.length := hp.1
+      have hp1 : 32 ∣ head.toList.length := hp.1
       cases isDyn <;> simp [headSizes, Part.headSize] <;> omega
 
 theorem dvd_tailSizes (hwf : WF ps) : 32 ∣ tailSizes ps := by
@@ -154,7 +212,7 @@ theorem dvd_tailSizes (hwf : WF ps) : 32 ∣ tailSizes ps := by
       have hp := hwf p List.mem_cons_self
       have hih := ih (fun q hq => hwf q (List.mem_cons_of_mem p hq))
       obtain ⟨head, tail, isDyn⟩ := p
-      have hp2 : 32 ∣ tail.length := hp.2
+      have hp2 : 32 ∣ tail.toList.length := hp.2
       cases isDyn <;> simp [tailSizes, Part.tailSize] <;> omega
 
 theorem dvd_length_encodeParts (hwf : WF ps) : 32 ∣ (encodeParts ps).length := by
@@ -166,8 +224,8 @@ theorem dvd_length_encodeParts (hwf : WF ps) : 32 ∣ (encodeParts ps).length :=
 /-- Well-formedness constructors (handy for concrete part lists). -/
 theorem wf_nil : WF [] := fun _q hq => (List.not_mem_nil hq).elim
 
-theorem wf_cons (hp : 32 ∣ p.head.length ∧ 32 ∣ p.tail.length) (hps : WF ps) :
-    WF (p :: ps) := fun q hq => by
+theorem wf_cons (hp : 32 ∣ p.head.toList.length ∧ 32 ∣ p.tail.toList.length)
+    (hps : WF ps) : WF (p :: ps) := fun q hq => by
   simp only [List.mem_cons] at hq
   cases hq with
   | inl h => subst h; exact hp
@@ -178,21 +236,21 @@ theorem wf_cons (hp : 32 ∣ p.head.length ∧ 32 ∣ p.tail.length) (hps : WF p
 /-- **Fundamental theorem, dynamic case**: dropping to a dynamic part's tail
 offset lands exactly on its tail — the offsets written into the head words
 are correct. -/
-theorem drop_tailOffset_append (xs : List Part) (head tail : List UInt8) (ys : List Part) :
+theorem drop_tailOffset_append (xs : List Part) (head tail : Builder) (ys : List Part) :
     (encodeParts (xs ++ ⟨head, tail, true⟩ :: ys)).drop
       (tailOffset (xs ++ ⟨head, tail, true⟩ :: ys) xs.length) =
-    tail ++ encodeTails ys := by
-  rw [encodeParts, tailOffset, take_append_of_length rfl, ← List.drop_drop,
+    tail.toList ++ encodeTails ys := by
+  rw [encodeParts_unfold, tailOffset, take_append_of_length rfl, ← List.drop_drop,
     drop_append_of_length (length_encodeHeads _ _), encodeTails_append,
-    drop_append_of_length (length_encodeTails xs), encodeTails]
+    drop_append_of_length (length_encodeTails xs), encodeTails_cons_dynamic]
 
 /-- **Fundamental theorem, static case**: a static part's head is found at
 its head offset. -/
-theorem drop_headOffset_static (xs : List Part) (head tail : List UInt8) (ys : List Part) :
+theorem drop_headOffset_static (xs : List Part) (head tail : Builder) (ys : List Part) :
     (encodeParts (xs ++ ⟨head, tail, false⟩ :: ys)).drop (headSizes xs) =
-      head ++ (encodeHeads (headSizes (xs ++ ⟨head, tail, false⟩ :: ys) + tailSizes xs) ys ++
-        encodeTails (xs ++ ⟨head, tail, false⟩ :: ys)) := by
-  rw [encodeParts, encodeHeads_append, encodeHeads]
+      head.toList ++ (encodeHeads (headSizes (xs ++ ⟨head, tail, false⟩ :: ys) +
+        tailSizes xs) ys ++ encodeTails (xs ++ ⟨head, tail, false⟩ :: ys)) := by
+  rw [encodeParts_unfold, encodeHeads_append, encodeHeads_cons_static]
   simp only [List.append_assoc]
   rw [drop_append_of_length (length_encodeHeads _ _)]
 
@@ -207,7 +265,8 @@ theorem wordAt_offset_append (hwf : WF (xs ++ ⟨head, tail, true⟩ :: ys)) :
     rw [length_encodeHeads]
     have hdv := dvd_headSizes hwfx
     omega
-  rw [encodeParts, encodeHeads_append, encodeHeads, tailOffset, take_append_of_length rfl]
+  rw [encodeParts_unfold, encodeHeads_append, encodeHeads_cons_dynamic, tailOffset,
+    take_append_of_length rfl]
   simp only [List.append_assoc]
   exact wordAt_append _ _ _ _ hA
 

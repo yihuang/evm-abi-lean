@@ -2,12 +2,12 @@ import EvmAbi.Bytes
 import EvmAbi.Align
 import EvmAbi.Word
 import EvmAbi.Ty
+import EvmAbi.Builder
 import EvmAbi.Static
 import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.Parts
 import EvmAbi.Packed
-import EvmAbi.Canonical
 import EvmAbi.HumanReadable
 
 /-!
@@ -24,18 +24,22 @@ the historical build order, nodes 1–8):
 * `EvmAbi.Align`   — 32-byte alignment arithmetic (`Aligned`)
 * `EvmAbi.Word`    — reading/writing 32-byte words (`UInt256`) at aligned offsets
 * `EvmAbi.Ty`      — the full ABI type universe + type-indexed value family
+* `EvmAbi.Builder` — the builder/reader layer: difference-list `Builder`
+                  with `O(1)` sequencing and the dual-cursor `Get2`
+                  prefix-reader monad, decoupling ABI layout logic from
+                  byte plumbing
 * `EvmAbi.Static`  — static primitives: `uintM`, `intM`, `bool`, `address`,
-                  `bytesN`, with roundtrips
+                  `bytesN`, with roundtrips (list form)
 * `EvmAbi.Dynamic` — dynamic `bytes` / `string` with roundtrips, prefix decoder
-* `EvmAbi.Codec`   — `Ty`-indexed encode/decode for all types + unified roundtrip
+* `EvmAbi.Codec`   — `Ty`-indexed `encode` and the linear decoder `decode`
+                  (`Get2` walkers), with the roundtrip / soundness /
+                  static-delegation families and the strict API
+                  `IsCanonical` / `decodeStrict` (canonical buffers are
+                  exactly the image of `encode`)
 * `EvmAbi.Parts`   — head/tail combinator: `Part`, `encodeParts`, offset theorems
 * `EvmAbi.Packed`  — packed ABI (`abi.encodePacked`, Solidity's non-standard
                   packed mode): tight scalars, in-place dynamic payloads,
                   padded array elements; static packed roundtrip
-* `EvmAbi.Canonical` — canonical-layout validation: `validate`, `IsCanonical`,
-                  `decodeCanonical`, and the C1–C3 theorems (encodings
-                  validate; canonical input lenient-decodes; canonical
-                  buffers are exactly the image of `encode`)
 * `EvmAbi.HumanReadable` — parser for Solidity-style human-readable ABI
                   signatures into `Ty` and `AbiItem` representations
 

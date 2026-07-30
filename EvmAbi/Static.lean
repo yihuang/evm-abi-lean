@@ -1,5 +1,6 @@
 import Binary.UInt256
 import EvmAbi.Word
+import EvmAbi.Builder
 
 /-!
 # EvmAbi.Static
@@ -122,5 +123,50 @@ theorem decodeBytesN_length {n : Nat} {buf bs : List UInt8}
       subst h
       exact hc.1
   · contradiction
+
+/-! ## Builder form (roadmap node 9)
+
+The same primitives in builder form (`EvmAbi.Builder`): puts compose
+with `Builder.append` in `O(1)` and materialize via `toList`, matching
+the list-based API above through the `toList_*` lemmas.
+-/
+
+/-- Write a `uintM` word. -/
+def putUint (n : Nat) : Builder := Builder.putWord (UInt256.ofNat n)
+
+@[simp] theorem toList_putUint (n : Nat) : (putUint n).toList = encodeUint n := by
+  simp [putUint, encodeUint]
+
+
+/-- Write an `intM` word (two's complement). -/
+def putInt (i : Int) : Builder :=
+  putUint (if 0 ≤ i then i.toNat else 2 ^ 256 - (-i).toNat)
+
+@[simp] theorem toList_putInt (i : Int) : (putInt i).toList = encodeInt i := by
+  simp [putInt, encodeInt]
+
+
+/-- Write a `bool` word. -/
+def putBool (b : Bool) : Builder := putUint (if b then 1 else 0)
+
+@[simp] theorem toList_putBool (b : Bool) : (putBool b).toList = encodeBool b := by
+  simp [putBool, encodeBool]
+
+
+/-- Write an `address` word. -/
+def putAddress (a : Nat) : Builder := putUint a
+
+@[simp] theorem toList_putAddress (a : Nat) : (putAddress a).toList = encodeAddress a := by
+  simp [putAddress, encodeAddress]
+
+
+/-- Write fixed-size bytes (`bytesN`): left-aligned, right zero-padded
+to 32 bytes. -/
+def putBytesN (bs : List UInt8) : Builder :=
+  Builder.ofList (bs ++ List.replicate (32 - bs.length) 0)
+
+@[simp] theorem toList_putBytesN (bs : List UInt8) : (putBytesN bs).toList = encodeBytesN bs := by
+  simp [putBytesN, encodeBytesN]
+
 
 end EvmAbi

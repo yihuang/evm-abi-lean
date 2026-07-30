@@ -126,13 +126,14 @@ end
 
 /-- Read `n` consecutive packed array elements of type `t` from the front
 of the buffer.  Packed array elements carry their standard padded layout,
-so each is read by the standard `decode` and occupies `t.headSize` bytes. -/
+so each is read by the linear canonical reader `decode` (static
+types are bound-free) and occupies `t.headSize` bytes. -/
 def decodePackedElems (t : Ty) : (n : Nat) → List UInt8 →
     Option { vs : List t.Val // vs.length = n }
   | 0, _ => some ⟨[], rfl⟩
   | n + 1, buf => match decode t buf with
     | none => none
-    | some v => match decodePackedElems t n (buf.drop t.headSize) with
+    | some (v, _) => match decodePackedElems t n (buf.drop t.headSize) with
       | none => none
       | some ⟨vs, h⟩ => some ⟨v :: vs, by simp [List.length_cons, h]⟩
 
@@ -342,7 +343,7 @@ theorem decodePackedElems_append (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid
       have hn' : n = vs.length + 1 := by rw [← hn, List.length_cons]
       subst hn'
       simp only [List.map_cons, List.flatten_cons, List.append_assoc, decodePackedElems]
-      rw [decode_encode_append_static t hs hv v _]
+      rw [decode_static_append t hs hv v _]
       rw [drop_append_of_length (encode_length_static t hs hv v)]
       rw [ih _ rfl]
 
