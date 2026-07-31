@@ -16,6 +16,10 @@ decode ⇒ encode) and bound-free static delegation (`decode_static_append`)
 are their theorems; `IsCanonical` / `decodeStrict` and the capstones
 (`isCanonical_iff`, `decodeStrict_eq_some_iff`) form the strict API.
 `EvmAbi.Packed` (`decodePacked`) builds on `decode_static_append`.
+`EvmAbi.Codec` holds the codec proper (defs, helper packages, static
+delegation); the theorem families live in `EvmAbi.Codec.Roundtrip` /
+`EvmAbi.Codec.Sound` / `EvmAbi.Codec.Strict` (each family is one self-
+contained `mutual` block).
 
 ## Style rules
 
@@ -84,17 +88,7 @@ are their theorems; `IsCanonical` / `decodeStrict` and the capstones
   `decodeElems` +2 calls `decodeElem` +1; `decode` calls `decodeElems`/
   `decodeTuple` on strictly smaller types).
 
-## Current migration state
-
-The migration is complete: the lenient `decode` family and the `validate`
-checker family are deleted; `decode` (the linear `Get2` decoder), its
-roundtrip / soundness / static-delegation families, and the strict API
-(`decodeStrict`, `IsCanonical`, capstones) are the only decoding stack.
-`EvmAbi.Codec` holds the codec proper (defs, helper packages, static
-delegation); its theorem families live in `EvmAbi.Codec.Roundtrip` /
-`EvmAbi.Codec.Sound` / `EvmAbi.Codec.Strict` (each family is one self-
-contained `mutual` block, so the split is purely a file move).  Remaining
-quirks to respect:
+## Quirks to respect
 
 * `IsCanonical` is `(decodeStrict t buf).isSome = true` with an explicit
   `Decidable` instance — instance search does not unfold plain defs.
