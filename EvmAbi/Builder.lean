@@ -128,6 +128,23 @@ end Builder
 
 /-! ## Get2: the dual-cursor reader -/
 
+namespace Get2
+
+/-- The result of a `Get2` run: the decoded value together with the
+advanced head and tail cursors and the new expected tail frontier. -/
+@[ext]
+structure Result (α : Type) where
+  /-- The decoded value. -/
+  val : α
+  /-- Remaining head cursor. -/
+  head : List UInt8
+  /-- Remaining tail cursor. -/
+  tails : List UInt8
+  /-- New expected tail frontier. -/
+  frontier : Nat
+
+end Get2
+
 /-- A dual-cursor prefix reader: consumes from a *head cursor* (the head
 section of a canonical layout) and a *tail cursor* (the tails), threading
 the expected tail frontier `E`.  Each component step advances one or both
@@ -136,27 +153,27 @@ canonical layouts decode in a single pass.  The frontier is the absolute
 position the next dynamic tail must occupy; a dynamic component's offset
 word must equal it exactly. -/
 structure Get2 (α : Type) where
-  run : List UInt8 → List UInt8 → Nat → Option (α × List UInt8 × List UInt8 × Nat)
+  run : List UInt8 → List UInt8 → Nat → Option (Get2.Result α)
 
 namespace Get2
 
 instance : Monad Get2 where
-  pure a := ⟨fun head tails E => some (a, head, tails, E)⟩
+  pure a := ⟨fun head tails E => some ⟨a, head, tails, E⟩⟩
   bind x f := ⟨fun head tails E =>
     match x.run head tails E with
     | none => none
-    | some (a, head', tails', E') => (f a).run head' tails' E'⟩
+    | some r => (f r.val).run r.head r.tails r.frontier⟩
 
 /-- Failure, cursors untouched. -/
 def fail : Get2 α := ⟨fun _ _ _ => none⟩
 
 @[simp] theorem pure_run (a : α) (head tails : List UInt8) (E : Nat) :
-    (pure a : Get2 α).run head tails E = some (a, head, tails, E) := rfl
+    (pure a : Get2 α).run head tails E = some ⟨a, head, tails, E⟩ := rfl
 
 @[simp] theorem bind_run (x : Get2 α) (f : α → Get2 β) (head tails : List UInt8) (E : Nat) :
     (x >>= f).run head tails E = (match x.run head tails E with
       | none => none
-      | some (a, head', tails', E') => (f a).run head' tails' E') := rfl
+      | some r => (f r.val).run r.head r.tails r.frontier) := rfl
 
 @[simp] theorem fail_run (head tails : List UInt8) (E : Nat) :
     (fail : Get2 α).run head tails E = none := rfl
