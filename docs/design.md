@@ -104,7 +104,12 @@ The type grammar is an inductive `Ty` with ten constructors.  Four
 auxiliary predicates/functions are defined alongside it:
 
 - **`Valid`** — size-parameter constraints (e.g., `uintM` requires `8∣M`,
-  `8≤M≤256`).  Defined as a `Prop` with a `Decidable` instance.
+  `8≤M≤256`).  Defined as a `Prop` with a `Decidable` instance.  A dynamic
+  array additionally requires `0 < t.headSize` of its element type: an
+  element occupying no head (`()`, `T[0]`) would let a 32-byte length word
+  name arbitrarily many elements, leaving the decoder's element walk
+  bounded by nothing.  The specification has no such types, and `decode`
+  and the human-readable parser both reject them.
 
 - **`isStatic`** — whether the encoding size is fixed by the type (a `Bool`
   predicate, lowercase per Lean convention).  Used by the head/tail layout:
@@ -158,13 +163,21 @@ Encoding and decoding are defined by structural recursion on `Ty`:
   (via `partOf` / `partsOfTuple`) and delegate to `encodeParts`.
 
 - **`decode t buf`** is the linear canonical decoder, in prefix form: it
-  returns the value together with the untouched remainder
-  (`Option (t.Val × List UInt8)`), so nested components are prefixes of
-  their parent's buffer.  Its walkers (`decodeElem` / `decodeElems` /
-  `decodeTuple`) are `Get2` programs: a head cursor and a tail cursor
-  advance monotonically while an expected tail frontier is threaded — a
-  dynamic component's offset word must equal the frontier exactly, and
-  static components decode inline from the head.
+  returns the value together with the bytes it consumed and the untouched
+  remainder (`Option (t.Val × Nat × List UInt8)`), so nested components
+  are prefixes of their parent's buffer.  Its walkers (`decodeElem` /
+  `decodeElems` / `decodeTuple`) are `Get2` programs: a head cursor and a
+  tail cursor advance monotonically while an expected tail frontier is
+  threaded — a dynamic component's offset word must equal the frontier
+  exactly, and static components decode inline from the head.
+
+  The consumed count is what keeps the walk linear.  It is computed
+  *structurally* — 32 for the word types, the count `decodeBytesPrefix`
+  already reports for the payload types, and the walker's own final
+  frontier for the compound types — so `decodeElem` advances the frontier
+  by an addition rather than by measuring the cursors.  Deriving it as
+  `tails.length - rest.length` instead would cost `O(remaining)` per
+  dynamic component, i.e. `O(n²)` for the whole buffer.
 
 The codec is **mutually recursive** with its component-level helpers
 (`partOf`, `decodeElems`, etc.), each assigned an explicit `termination_by`
@@ -290,7 +303,8 @@ concatenated.  A strict decoder that validates trailing padding (e.g.,
 the next element's data follows immediately.
 
 **Solution.**  Every base-type decoder is proved **prefix-tolerant**: for
-any `rest : List UInt8`, `decode t (encode t v ++ rest) = some v`.  For
+any `rest : List UInt8`, `decode t (encode t v ++ rest)` returns `v`, the
+bytes it consumed, and `rest` untouched.  For
 `bytes` and `string`, a separate prefix decoder `decodeBytesPrefix` returns
 the decoded data *and* the number of bytes consumed, making composition
 explicit.

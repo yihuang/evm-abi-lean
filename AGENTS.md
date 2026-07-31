@@ -36,6 +36,13 @@ contained `mutual` block).
 * The per-component step (`decodeElem`) stays a **bare run**
   (`⟨fun head tails E => …⟩`): the frontier check `o = E` needs the
   state, which `do`-notation cannot read.  The walkers use `do`-notation.
+* **Never measure a cursor.**  `decode` returns the bytes it consumed
+  (`Option (t.Val × Nat × List UInt8)`) and `decodeElem` advances the
+  frontier by that count.  `List.length` on a cursor is `O(remaining)`,
+  so anything of the shape `tails.length - rest.length` turns the walk
+  quadratic — this is exactly the bug the linear decoder replaced.  The
+  count is structural: `32`, the count `decodeBytesPrefix` reports, or
+  the walker's own final frontier.
 * Mutual blocks use `termination_by` measures `8 * sizeOf t + N` (or
   `(sizeOf t, N)`); a call from sibling `A` to sibling `B` must satisfy
   `measure_B(args) < measure_A(args)`.  Two siblings at the same offset

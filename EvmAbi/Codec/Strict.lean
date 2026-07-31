@@ -27,7 +27,7 @@ canonical reader `decode`.  For call data (selector ++ arguments),
 decode the argument tuple on `buf.drop 4` and compare against `buf.length - 4`. -/
 def decodeStrict (t : Ty) (buf : List UInt8) : Option t.Val :=
   match decode t buf with
-  | some (v, rest) => if rest = [] then some v else none
+  | some (v, _, rest) => if rest = [] then some v else none
   | none => none
 
 /-- A buffer is a canonical encoding of type `t`: the strict decoder
@@ -70,13 +70,13 @@ theorem encode_of_decodeStrict (t : Ty) (hv : t.Valid) (buf : List UInt8) (v : t
   cases hg : decode t buf with
   | none => simp only [hg] at h; contradiction
   | some p =>
-      obtain ⟨v', rest⟩ := p
+      obtain ⟨v', c, rest⟩ := p
       simp only [hg] at h
       by_cases hrest : rest = []
       · rw [if_pos hrest] at h
         have hv' : v' = v := Option.some.inj h
         subst hv'
-        have hsnd := decode_sound t hv v' buf rest hg
+        have hsnd := (decode_sound t hv v' buf rest c hg).1
         rw [hrest, List.append_nil] at hsnd
         exact hsnd
       · rw [if_neg hrest] at h; contradiction

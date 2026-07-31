@@ -29,7 +29,7 @@ correctness theorems of `EvmAbi.Parts`. -/
 /-- `decode` at `bytes` through a known prefix-decode result. -/
 theorem decode_bytes_pos {buf bs : List UInt8} {n : Nat}
     (hp : decodeBytesPrefix buf = some (bs, n)) :
-    decode .bytes buf = some (⟨bs, length_lt_of_decodeBytesPrefix hp⟩, buf.drop n) := by
+    decode .bytes buf = some (⟨bs, length_lt_of_decodeBytesPrefix hp⟩, n, buf.drop n) := by
   simp only [decode]
   split
   · next bs' n' hp' =>
@@ -44,7 +44,7 @@ results. -/
 theorem decode_string_pos {buf bs : List UInt8} {n : Nat} {s : String}
     (hp : decodeBytesPrefix buf = some (bs, n))
     (hs : String.fromUTF8? bs.toByteArray = some s) :
-    decode .string buf = some (⟨s, size_toUTF8_lt_of_decodeBytesPrefix hp hs⟩, buf.drop n) := by
+    decode .string buf = some (⟨s, size_toUTF8_lt_of_decodeBytesPrefix hp hs⟩, n, buf.drop n) := by
   simp only [decode]
   split
   · next bs' n' hp' =>
@@ -102,10 +102,7 @@ theorem decodeElem_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
     rw [hr]
     dsimp only []
     rw [htailLen]
-    have htlen' : (encode t v ++ (encodeTails zs ++ rest)).length -
-        (encodeTails zs ++ rest).length = (encode t v).length := by
-      rw [List.length_append, Nat.add_sub_cancel]
-    rw [← List.drop_drop, ← hhead32, htlen']
+    rw [← List.drop_drop, ← hhead32]
     rw [show (encodeParts (xs ++ partOf t v :: zs) ++ rest).drop (E + (encode t v).length) =
         encodeTails zs ++ rest from by
       rw [hE, ← List.drop_drop, hdropTail]
@@ -244,12 +241,13 @@ theorem decodeTuple_roundtrip : (ts : List Ty) → AllValid ts → (vs : TupleVa
 termination_by ts => 8 * sizeOf ts + 3
 
 /-- **Roundtrip, prefix form**: every value of a valid type reads back
-canonically from the front of its own encoding, leaving the suffix
-touched.  `hb` bounds the whole buffer (so no offset word wraps); the
-dynamic payload bounds are intrinsic to `Val`. -/
+canonically from the front of its own encoding, reporting its encoding
+length as the consumed count and leaving the suffix untouched.  `hb`
+bounds the whole buffer (so no offset word wraps); the dynamic payload
+bounds are intrinsic to `Val`. -/
 theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
     (rest : List UInt8) (hb : (encode t v ++ rest).length < 2 ^ 256) :
-    decode t (encode t v ++ rest) = some (v, rest) := by
+    decode t (encode t v ++ rest) = some (v, (encode t v).length, rest) := by
   cases t with
   | uint m =>
       obtain ⟨n, hn⟩ := v
@@ -294,7 +292,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
       rw [hdec]
       dsimp only []
       rw [dif_pos hbs]
-      rw [show (encodeBytesN bs ++ rest).drop 32 = rest from drop_append_of_length hlen]
+      rw [show (encodeBytesN bs ++ rest).drop 32 = rest from drop_append_of_length hlen, hlen]
   | bytes =>
       obtain ⟨bs, hlb⟩ := v
       have hr := decodeBytesPrefix_append (bs := bs) (rest := rest) hlb
@@ -315,7 +313,9 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
       rw [drop_append_of_length rfl]
   | array t =>
       obtain ⟨vs, hlk⟩ := v
-      have hvt : t.Valid := hv
+      have hva := valid_array.mp hv
+      have hvt : t.Valid := hva.1
+      have hhs : ¬ t.headSize = 0 := by have := hva.2; omega
       have hbT : (encodeParts (vs.map (partOf t)) ++ rest).length < 2 ^ 256 := by
         have hb' := hb
         simp only [encode, put, toList_append, toList_putUint, List.length_append,
@@ -347,7 +347,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
         rw [hw, UInt256.toNat_ofNat, Nat.mod_eq_of_lt
           (show vs.length < UInt256.size from hlk)]
       simp only [encode, put, decode, toList_append, toList_putUint, List.append_assoc]
-      rw [← encodeParts]
+      rw [← encodeParts, if_neg hhs]
       split
       · next hk' => rw [hcnt] at hk'; contradiction
       · next k hk' =>
@@ -358,7 +358,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
               encodeParts (vs.map (partOf t)) ++ rest from drop_append_of_length (length_encodeUint _)]
           rw [hwalk]
           dsimp only []
-          rw [htails]
+          rw [htails, List.length_append, length_encodeUint, length_encodeParts, hlenH]
   | fixedArray t n =>
       obtain ⟨vs, hvs⟩ := v
       have hvt : t.Valid := hv
@@ -387,7 +387,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
       rw [← encodeParts]
       rw [hwalk]
       dsimp only []
-      rw [htails]
+      rw [htails, length_encodeParts, hlenH]
   | tuple ts =>
       have hvts : AllValid ts := hv
       have hbT : (encodeParts (partsOfTuple ts v) ++ rest).length < 2 ^ 256 := by
@@ -415,7 +415,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
       rw [← encodeParts]
       rw [hwalk]
       dsimp only []
-      rw [htails]
+      rw [htails, length_encodeParts, hlenH]
 termination_by 8 * sizeOf t
 end
 
