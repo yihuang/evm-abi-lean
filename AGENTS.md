@@ -15,7 +15,10 @@ exact-consumption check.  The `Get2` walkers (`decodeElem`, `decodeElems`,
 decode ⇒ encode) and bound-free static delegation (`decode_static_append`)
 are their theorems; `IsCanonical` / `decodeStrict` and the capstones
 (`isCanonical_iff`, `decodeStrict_eq_some_iff`) form the strict API.
-`EvmAbi.Packed` (`decodePacked`) builds on `decode_static_append`.
+`EvmAbi.Packed` (`decodePacked`) mirrors the codec shape — a `Builder`
+encoder (`putPacked`) and `Get2` walkers (`decodePackedElem` /
+`decodePackedTuple`) — and reads array elements via the bound-free static
+delegation (`decodeElems` / `decode_static_append`).
 `EvmAbi.Codec` holds the codec proper (defs, helper packages, static
 delegation); the theorem families live in `EvmAbi.Codec.Roundtrip` /
 `EvmAbi.Codec.Sound` / `EvmAbi.Codec.Strict` (each family is one self-
@@ -95,4 +98,6 @@ contained `mutual` block).
 * `decodeStrict` needs the `2^256` bound only for the completeness
   direction (`encode ⇒ decode`), so offset words cannot wrap; static
   types never need it (`decode_static_append`).
-* `Packed` reads elements via `decode_static_append`.
+* `Packed` reads array elements via the standard `decodeElems`
+  (bound-free static delegation); its own walkers stay structurally
+  recursive so `by decide` still evaluates packed decodes.

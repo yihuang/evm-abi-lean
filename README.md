@@ -88,6 +88,12 @@ theorem roundtrip_packed_static (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
     (v : t.Val) : decodePacked t (encodePacked t v) = some v
 ```
 
+The packed codec mirrors the standard one: encoding is assembled with the
+`Builder` difference list (`putPacked`, materialized once by `toList`),
+and decoding is a single linear pass with `Get2` walkers
+(`decodePackedElem` / `decodePackedTuple`), reading array elements at
+their padded widths via the standard `decodeElems`.
+
 Packed sizes are computed by `packedSize : Ty → Nat` (`uint8` → 1 byte,
 `address` → 20 bytes, `uint8[3]` → 96 bytes — array elements are padded).
 The `.tuple` arm is the flat argument list of a multi-argument

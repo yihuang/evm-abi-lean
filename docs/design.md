@@ -200,18 +200,24 @@ nested arrays are not supported.  The module provides:
 
 - **Type-indexed packed codec** — `encodePacked : (t : Ty) → t.Val →
   List UInt8` (total) and `decodePacked : (t : Ty) → List UInt8 →
-  Option t.Val`.  Scalars pack tight; `bytes`/`string` pack as their raw
-  payload; array elements are standard-encoded (`encode`, padded words)
-  and read back with the standard `decode`; tuples concatenate — the
+  Option t.Val`.  The codec mirrors the standard one: the encoder is a
+  `Builder` difference list (`putPacked`, materialized once by `toList`)
+  and the decoder is a single linear pass with `Get2` walkers
+  (`decodePackedElem` / `decodePackedTuple`; the tail cursor and frontier
+  are inert in packed layouts).  Scalars pack tight; `bytes`/`string`
+  pack as their raw payload; array elements are standard-encoded
+  (`encode`, padded words) and read back by the standard `decodeElems`
+  (bound-free for static element types); tuples concatenate — the
   `.tuple` arm models the flat argument list of a multi-argument
   `abi.encodePacked(a, b, …)` call, and on nested tuples is a documented
   non-Solidity extension.  `PackedSupported` marks the conformant
   fragment.
 
 - **Static roundtrip** — `roundtrip_packed_static`: every static value
-  decodes from its own packed encoding.  Array elements ride on the
-  standard codec's bound-free static roundtrip `decode_static_append`;
-  only the scalar and tuple walks need packed-specific lemmas.
+  decodes from its own packed encoding.  The lemmas are stated in `Get2`
+  `.run` form (`decodePackedElem_append` / `decodePackedTuple_append`),
+  and array elements ride on the standard codec's bound-free static
+  roundtrip (`decodeElems_static_append`).
 
 Dynamic types encode but do not decode: packed encoding provides no
 mechanism to delimit variable-length elements, so `decodePacked` returns
