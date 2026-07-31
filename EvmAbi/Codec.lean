@@ -5,69 +5,41 @@ import EvmAbi.Align
 import EvmAbi.Word
 import EvmAbi.Parts
 
-/-!
-# EvmAbi.Codec
-
-The full ABI codec (roadmap node 8): a single `encode : (t : Ty) → t.Val →
-List UInt8` / `decode : (t : Ty) → List UInt8 → Option t.Val` over the whole
-type universe, built on the head/tail combinator of `EvmAbi.Parts`.
-
-Layout of the module:
-
-* **encode family** — `encode` / `partOf` / `partsOfTuple` (mutual).  A
-  component's `Part` is its inline encoding when static, or an empty head
-  plus its encoding as tail when dynamic; `encodeParts` fills in the offset
-  words.
-
-* **decode family** — `decode` / `readElem` / `decodeElems` / `decodeTuple`
-  (mutual).  Every decoder is *prefix-tolerant*: it reads its value from the
-  front of the buffer and ignores the rest, so components compose inside a
-  head/tail layout.  `readElem` follows the offset word for dynamic
-  components; `decodeElems`/`decodeTuple` step through the head by
-  `headSize`.
-
-* **length and alignment packages** — static encodings occupy exactly their
-  `headSize`; every encoding is 32-byte aligned (`WF` of the part lists).
-
-* **roundtrip packages** — the static-prefix roundtrip
-  (`decode_encode_append_static` family) and the full roundtrip
-  (`decode_encode_append` family), ending in the unified `roundtrip`.
-
-The mutual blocks use explicit measures (`sizeOf` with constant offsets
-distinguishing the sibling levels) so the default `decreasing_tactic`
-discharges every goal.
--/
-
 namespace EvmAbi
 
 open Ty
 open Binary
+open Builder
 
 /-! ## encode family -/
 
-/- The encoder: `encode` assembles a value; `partOf` views a typed value as
-a head/tail `Part`; `partsOfTuple` maps a tuple value to a list of parts. -/
+/- The encoder lives in builder form: `put` assembles a value with `O(1)`
+sequencing, `partOf` views it as a head/tail `Part`, `partsOfTuple` maps a
+tuple value to a list of parts.  The list form `encode` is the
+materialization of `put` (`Builder.toList`), so every specification is
+still stated about the byte list. -/
+
 mutual
-/-- ABI encoder (type-indexed). -/
-def encode : (t : Ty) → t.Val → List UInt8
-  | .uint _, ⟨n, _⟩   => encodeUint n
-  | .int _,  ⟨i, _⟩   => encodeInt i
-  | .bool,   b         => encodeBool b
-  | .address, ⟨n, _⟩  => encodeAddress n
-  | .bytesN _, ⟨bs, _⟩ => encodeBytesN bs
-  | .bytes,   ⟨bs, _⟩  => encodeBytes bs
-  | .string,  ⟨s, _⟩   => encodeString s
-  | .array t, ⟨vs, _⟩  => encodeUint vs.length ++ encodeParts (vs.map (partOf t))
-  | .fixedArray t _, ⟨vs, _⟩ => encodeParts (vs.map (partOf t))
-  | .tuple ts, vs      => encodeParts (partsOfTuple ts vs)
+/-- ABI encoder, builder form: O(1) sequencing via `Builder`. -/
+def put : (t : Ty) → t.Val → Builder
+  | .uint _, ⟨n, _⟩   => putUint n
+  | .int _,  ⟨i, _⟩   => putInt i
+  | .bool,   b         => putBool b
+  | .address, ⟨n, _⟩  => putAddress n
+  | .bytesN _, ⟨bs, _⟩ => putBytesN bs
+  | .bytes,   ⟨bs, _⟩  => putBytes bs
+  | .string,  ⟨s, _⟩   => putString s
+  | .array t, ⟨vs, _⟩  => putUint vs.length ++ putParts (vs.map (partOf t))
+  | .fixedArray t _, ⟨vs, _⟩ => putParts (vs.map (partOf t))
+  | .tuple ts, vs      => putParts (partsOfTuple ts vs)
 termination_by t => (sizeOf t, 0)
 
 /-- A value seen as a head/tail part: static values sit in the head,
 dynamic values in the tail (their head is the offset word). -/
 def partOf (t : Ty) (v : t.Val) : Part :=
-  match t.IsStatic with
-  | true => ⟨encode t v, [], false⟩
-  | false => ⟨[], encode t v, true⟩
+  match t.isStatic with
+  | true => ⟨put t v, ∅, false⟩
+  | false => ⟨∅, put t v, true⟩
 termination_by (sizeOf t, 1)
 
 /-- A tuple value seen as a list of parts. -/
@@ -77,135 +49,8 @@ def partsOfTuple : (ts : List Ty) → TupleVal ts → List Part
 termination_by ts => (sizeOf ts, 2)
 end
 
-/-! ## decode family -/
-
-/- The decoder, prefix-tolerant throughout.  `readElem` reads one component
-at head offset `off`: static components are decoded in place, dynamic
-components are reached by following the offset word.  `decodeElems` reads
-`k` consecutive elements of the same type; `decodeTuple` walks a type list. -/
-mutual
-/-- ABI decoder (type-indexed, prefix-tolerant).  A malformed buffer or an
-out-of-range value yields `none`. -/
-def decode : (t : Ty) → List UInt8 → Option t.Val
-  | .uint m, buf => match decodeUint buf with
-    | some n => if h : n < 2 ^ m then some ⟨n, h⟩ else none
-    | none => none
-  | .int m, buf => match decodeInt buf with
-    | some i => if h : -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int) then
-        some ⟨i, h⟩
-      else none
-    | none => none
-  | .bool, buf => decodeBool buf
-  | .address, buf => match decodeAddress buf with
-    | some n => if h : n < 2 ^ 160 then some ⟨n, h⟩ else none
-    | none => none
-  | .bytesN m, buf => match decodeBytesN m buf with
-    | some bs => if h : bs.length = m then some ⟨bs, h⟩ else none
-    | none => none
-  | .bytes, buf => match hp : decodeBytesPrefix buf with
-    | some (bs, _) => some ⟨bs, length_lt_of_decodeBytesPrefix hp⟩
-    | none => none
-  | .string, buf => match hp : decodeBytesPrefix buf with
-    | some (bs, _) => match hs : String.fromUTF8? bs.toByteArray with
-      | some s => some ⟨s, size_toUTF8_lt_of_decodeBytesPrefix hp hs⟩
-      | none => none
-    | none => none
-  | .array t, buf => match hk : natAt buf 0 with
-    | none => none
-    | some k => (decodeElems t k (buf.drop 32) 0).map fun vs =>
-        ⟨vs.val, by rw [vs.property]; exact natAt_lt hk⟩
-  | .fixedArray t n, buf => decodeElems t n buf 0
-  | .tuple ts, buf => decodeTuple ts buf 0
-termination_by t => (sizeOf t, 0)
-
-/-- Read one component at head offset `off`. -/
-def readElem (t : Ty) (buf : List UInt8) (off : Nat) : Option t.Val :=
-  match t.IsStatic with
-  | true => decode t (buf.drop off)
-  | false => match natAt buf (off / 32) with
-    | none => none
-    | some o => decode t (buf.drop o)
-termination_by (sizeOf t, 1)
-
-/-- Read `k` consecutive elements of type `t`, starting at head offset `off`. -/
-def decodeElems (t : Ty) (k : Nat) (buf : List UInt8) (off : Nat) :
-    Option { vs : List t.Val // vs.length = k } :=
-  match k with
-  | 0 => some ⟨[], rfl⟩
-  | k + 1 => match readElem t buf off with
-    | none => none
-    | some v => match decodeElems t k buf (off + t.headSize) with
-      | none => none
-      | some ⟨vs, h⟩ => some ⟨v :: vs, by simp [List.length_cons, h]⟩
-termination_by (sizeOf t, k + 2)
-
-/-- Read a tuple, walking the head from offset `off`. -/
-def decodeTuple : (ts : List Ty) → List UInt8 → Nat → Option (TupleVal ts)
-  | [], _, _ => some ()
-  | t :: ts, buf, off => match readElem t buf off with
-    | none => none
-    | some v => (decodeTuple ts buf (off + t.headSize)).map (v, ·)
-termination_by ts => (sizeOf ts, 2)
-end
-
-/-! ## decode unfolding equations -/
-
-/- `decode`'s dynamic arms bind their scrutinee equation to build the
-refined value, so plain rewriting cannot step through the match; these
-equations do it once and for all. -/
-
-/-- `decode` at `bytes` through a known prefix-decode result. -/
-theorem decode_bytes_pos {buf bs : List UInt8} {n : Nat}
-    (hp : decodeBytesPrefix buf = some (bs, n)) :
-    decode .bytes buf = some ⟨bs, length_lt_of_decodeBytesPrefix hp⟩ := by
-  simp only [decode]
-  split
-  · next bs' n' hp' =>
-      rw [hp] at hp'
-      simp only [Option.some.injEq, Prod.mk.injEq] at hp'
-      obtain ⟨rfl, rfl⟩ := hp'
-      rfl
-  · next hp' => rw [hp] at hp'; contradiction
-
-/-- `decode` at `bytes` when the prefix decode fails. -/
-theorem decode_bytes_neg {buf : List UInt8} (hp : decodeBytesPrefix buf = none) :
-    decode .bytes buf = none := by
-  simp only [decode]
-  split
-  · next hp' => rw [hp] at hp'; contradiction
-  · rfl
-
-/-- `decode` at `string` through known prefix-decode and UTF-8 results. -/
-theorem decode_string_pos {buf bs : List UInt8} {n : Nat} {s : String}
-    (hp : decodeBytesPrefix buf = some (bs, n))
-    (hs : String.fromUTF8? bs.toByteArray = some s) :
-    decode .string buf = some ⟨s, size_toUTF8_lt_of_decodeBytesPrefix hp hs⟩ := by
-  simp only [decode]
-  split
-  · next bs' n' hp' =>
-      rw [hp] at hp'
-      simp only [Option.some.injEq, Prod.mk.injEq] at hp'
-      obtain ⟨rfl, rfl⟩ := hp'
-      split
-      · next s' hs' =>
-          rw [hs] at hs'
-          obtain rfl := Option.some.inj hs'
-          rfl
-      · next hs' => rw [hs] at hs'; contradiction
-  · next hp' => rw [hp] at hp'; contradiction
-
-/-- `decode` at `array` through a known length word. -/
-theorem decode_array_pos {t : Ty} {buf : List UInt8} {k : Nat}
-    (hk : natAt buf 0 = some k) :
-    decode (.array t) buf = (decodeElems t k (buf.drop 32) 0).map fun vs =>
-      ⟨vs.val, by rw [vs.property]; exact natAt_lt hk⟩ := by
-  simp only [decode]
-  split
-  · next hk' => rw [hk] at hk'; contradiction
-  · next k' hk' =>
-      rw [hk] at hk'
-      obtain rfl := Option.some.inj hk'
-      rfl
+/-- ABI encoder (type-indexed): the materialization of `put`. -/
+def encode (t : Ty) (v : t.Val) : List UInt8 := (put t v).toList
 
 /-! ## helper lemmas -/
 
@@ -237,44 +82,32 @@ theorem natAt_append_left (A B : List UInt8) (i : Nat) (h : 32 * (i + 1) ≤ A.l
   simp only [natAt, wordAt_append_left A B i h]
 
 /-- `partOf` of a static value is the inline head part. -/
-theorem partOf_static (t : Ty) (v : t.Val) (h : t.IsStatic = true) :
-    partOf t v = ⟨encode t v, [], false⟩ := by
+theorem partOf_static (t : Ty) (v : t.Val) (h : t.isStatic = true) :
+    partOf t v = ⟨put t v, ∅, false⟩ := by
   simp [partOf, h]
 
 /-- `partOf` of a dynamic value is the offset-word head plus tail part. -/
-theorem partOf_dynamic (t : Ty) (v : t.Val) (h : t.IsStatic = false) :
-    partOf t v = ⟨[], encode t v, true⟩ := by
+theorem partOf_dynamic (t : Ty) (v : t.Val) (h : t.isStatic = false) :
+    partOf t v = ⟨∅, put t v, true⟩ := by
   simp [partOf, h]
 
 /-- A component contributes its part's tail to the tail section: nothing for
 a static component (whose part has an empty tail), its encoding for a
 dynamic one. -/
 theorem encodeTails_cons_partOf (t : Ty) (v : t.Val) (ps : List Part) :
-    encodeTails (partOf t v :: ps) = (partOf t v).tail ++ encodeTails ps := by
-  cases hs : t.IsStatic
-  · rw [partOf_dynamic t v hs]; rfl
-  · rw [partOf_static t v hs]; rfl
-
-/-- `readElem` of a static type decodes in place. -/
-theorem readElem_static (t : Ty) (buf : List UInt8) (off : Nat) (h : t.IsStatic = true) :
-    readElem t buf off = decode t (buf.drop off) := by
-  simp [readElem, h]
-
-/-- `readElem` of a dynamic type follows the offset word. -/
-theorem readElem_dynamic (t : Ty) (buf : List UInt8) (off : Nat) (h : t.IsStatic = false) :
-    readElem t buf off = match natAt buf (off / 32) with
-      | none => none
-      | some o => decode t (buf.drop o) := by
-  simp [readElem, h]
+    encodeTails (partOf t v :: ps) = (partOf t v).tail.toList ++ encodeTails ps := by
+  cases hs : t.isStatic
+  · rw [partOf_dynamic t v hs, encodeTails_cons_dynamic]
+  · rw [partOf_static t v hs, encodeTails_cons_static]; simp [Builder.toList_empty]
 
 /-- Dynamic types occupy exactly one offset word in the head. -/
-theorem headSize_of_dynamic (t : Ty) (h : t.IsStatic = false) : t.headSize = 32 := by
+theorem headSize_of_dynamic (t : Ty) (h : t.isStatic = false) : t.headSize = 32 := by
   cases t
   case fixedArray t n =>
-      have h' : t.IsStatic = false := by simpa [IsStatic] using h
+      have h' : t.isStatic = false := by simpa [isStatic] using h
       simp [headSize, h']
   case tuple ts =>
-      have h' : allStatic ts = false := by simpa [IsStatic] using h
+      have h' : allStatic ts = false := by simpa [isStatic] using h
       simp [headSize, h']
   all_goals simp [headSize]
 
@@ -285,15 +118,15 @@ encoding occupies exactly its head size.  The list siblings use the
 `+1`-offset measure so the default decreasing tactic closes every goal. -/
 mutual
 /-- The head size of a static type is 32-byte aligned. -/
-theorem dvd_headSize_static : (t : Ty) → t.IsStatic = true → 32 ∣ t.headSize
+theorem dvd_headSize_static : (t : Ty) → t.isStatic = true → 32 ∣ t.headSize
   | uint _, _ | int _, _ | Ty.bool, _ | address, _ | bytesN _, _ => ⟨1, by simp [headSize]⟩
-  | bytes, hs | string, hs | array _, hs => by simp [IsStatic] at hs
+  | bytes, hs | string, hs | array _, hs => by simp [isStatic] at hs
   | fixedArray t n, hs => by
-      have hst : t.IsStatic = true := by simp only [IsStatic] at hs; exact hs
+      have hst : t.isStatic = true := by simp only [isStatic] at hs; exact hs
       obtain ⟨k, hk⟩ := dvd_headSize_static t hst
       exact ⟨n * k, by simp only [headSize]; rw [if_pos hst, hk]; ac_rfl⟩
   | tuple ts, hs => by
-      have hss : allStatic ts = true := by simp only [IsStatic] at hs; exact hs
+      have hss : allStatic ts = true := by simp only [isStatic] at hs; exact hs
       obtain ⟨k, hk⟩ := dvd_headSizeSum_static ts hss
       exact ⟨k, by simp only [headSize]; rw [if_pos hss, hk]⟩
 termination_by t => 2 * sizeOf t
@@ -314,29 +147,29 @@ end
 /-- Every head slot is 32-byte aligned — a static one because its encoding
 is, a dynamic one because it is a single offset word. -/
 theorem dvd_headSize (t : Ty) : 32 ∣ t.headSize := by
-  cases hs : t.IsStatic
+  cases hs : t.isStatic
   · rw [headSize_of_dynamic t hs]; exact ⟨1, rfl⟩
   · exact dvd_headSize_static t hs
 
 mutual
 /-- Static encodings occupy exactly their head size. -/
-theorem encode_length_static : (t : Ty) → t.IsStatic = true → t.Valid → (v : t.Val) →
+theorem encode_length_static : (t : Ty) → t.isStatic = true → t.Valid → (v : t.Val) →
     (encode t v).length = t.headSize
-  | uint _, _, _, ⟨n, _⟩ => by simp [encode, length_encodeUint, headSize]
+  | uint _, _, _, ⟨n, _⟩ => by simp [encode, put, length_encodeUint, headSize]
   | int _, _, _, ⟨i, _⟩ => by
-      simp only [encode]
+      simp only [encode, put]
       simp [encodeInt, length_encodeUint, headSize]
-  | Ty.bool, _, _, b => by simp [encode, encodeBool, length_encodeUint, headSize]
-  | address, _, _, ⟨n, _⟩ => by simp [encode, encodeAddress, length_encodeUint, headSize]
+  | Ty.bool, _, _, b => by simp [encode, put, encodeBool, length_encodeUint, headSize]
+  | address, _, _, ⟨n, _⟩ => by simp [encode, put, encodeAddress, length_encodeUint, headSize]
   | bytesN m, _, hv, ⟨bs, hbs⟩ => by
       obtain ⟨h1, h32⟩ := hv
       have hlen : (encodeBytesN bs).length = 32 := length_encodeBytesN (by omega)
-      simp only [encode]
+      simp only [encode, put, toList_putBytesN]
       rw [hlen]
       simp [headSize]
-  | bytes, hs, _, _ | string, hs, _, _ | array _, hs, _, _ => by simp [IsStatic] at hs
+  | bytes, hs, _, _ | string, hs, _, _ | array _, hs, _, _ => by simp [isStatic] at hs
   | fixedArray t n, hs, hv, ⟨vs, hvs⟩ => by
-      have hst : t.IsStatic = true := by simp only [IsStatic] at hs; exact hs
+      have hst : t.isStatic = true := by simp only [isStatic] at hs; exact hs
       have hvt : t.Valid := hv
       have hlen : ∀ vs' : List t.Val, headSizes (vs'.map (partOf t)) =
           vs'.length * t.headSize ∧ tailSizes (vs'.map (partOf t)) = 0 := by
@@ -348,21 +181,23 @@ theorem encode_length_static : (t : Ty) → t.IsStatic = true → t.Valid → (v
             rw [List.map_cons, partOf_static t w hst]
             constructor
             · simp only [headSizes, Part.headSize, List.length_cons]
+              change (encode t w).length + headSizes (List.map (partOf t) ws) =
+                (ws.length + 1) * t.headSize
               rw [ih1, encode_length_static t hst hvt w, Nat.add_mul, Nat.one_mul]
               omega
             · simp only [tailSizes, Part.tailSize, ih2]
-      simp only [encode]
-      rw [length_encodeParts, (hlen vs).1, (hlen vs).2, hvs, Nat.add_zero]
+      simp only [encode, put]
+      rw [<- encodeParts, length_encodeParts, (hlen vs).1, (hlen vs).2, hvs, Nat.add_zero]
       simp only [headSize]
       rw [if_pos hst]
   | tuple ts, hs, hv, vs => by
-      have hss : allStatic ts = true := by simp only [IsStatic] at hs; exact hs
+      have hss : allStatic ts = true := by simp only [isStatic] at hs; exact hs
       have hvts : AllValid ts := hv
       have hgoal : headSize (tuple ts) = headSizeSum ts := by
         simp only [headSize]
         rw [if_pos hss]
       rw [hgoal]
-      simp only [encode]
+      simp only [encode, put]
       exact encode_length_static_tuple ts hss hvts vs
 termination_by t => 2 * sizeOf t
 
@@ -383,7 +218,8 @@ theorem encode_length_static_tuple : (ts : List Ty) → allStatic ts = true → 
         exact hlen
       simp only [partsOfTuple]
       rw [partOf_static t v hst, length_encodeParts]
-      simp only [headSizes, tailSizes, Part.headSize, Part.tailSize, headSizeSum]
+      change (encode t v).length + headSizes (partsOfTuple ts vs) +
+          (0 + tailSizes (partsOfTuple ts vs)) = t.headSize + headSizeSum ts
       rw [encode_length_static t hst hvt v]
       omega
 termination_by ts => 2 * sizeOf ts + 1
@@ -394,10 +230,10 @@ encoding when static, one offset word when dynamic.  This is the single
 static/dynamic split that the head-section lemmas all reduce to. -/
 theorem headSize_partOf (t : Ty) (hv : t.Valid) (v : t.Val) :
     (partOf t v).headSize = t.headSize := by
-  cases hs : t.IsStatic
+  cases hs : t.isStatic
   · rw [partOf_dynamic t v hs]
     exact (headSize_of_dynamic t hs).symm
-  · rw [partOf_static t v hs]
+  · rw [partOf_static t v hs, Part.headSize]
     exact encode_length_static t hs hv v
 
 /-! ## Package B: alignment and well-formedness -/
@@ -410,37 +246,37 @@ mutual
 /-- Every encoding is 32-byte aligned. -/
 theorem encode_length_aligned (t : Ty) (hv : t.Valid) (v : t.Val) :
     Aligned (encode t v).length := by
-  by_cases hs : t.IsStatic
+  by_cases hs : t.isStatic
   · rw [encode_length_static t hs hv v]
     exact dvd_headSize_static t hs
-  · have hsf : t.IsStatic = false := by simp at hs; exact hs
+  · have hsf : t.isStatic = false := by simp at hs; exact hs
     cases t with
-    | uint m => simp [IsStatic] at hsf
-    | int m => simp [IsStatic] at hsf
-    | bool => simp [IsStatic] at hsf
-    | address => simp [IsStatic] at hsf
-    | bytesN m => simp [IsStatic] at hsf
+    | uint m => simp [isStatic] at hsf
+    | int m => simp [isStatic] at hsf
+    | bool => simp [isStatic] at hsf
+    | address => simp [isStatic] at hsf
+    | bytesN m => simp [isStatic] at hsf
     | bytes =>
         obtain ⟨bs, _⟩ := v
-        simp only [encode, encodeBytes, List.length_append, length_encodeUint]
+        simp only [encode, put, toList_putBytes, encodeBytes, List.length_append, length_encodeUint]
         exact aligned_add (aligned_mul 1) (dvd_length_pad32 _)
     | string =>
         obtain ⟨s, _⟩ := v
-        simp only [encode, encodeString, encodeBytes, List.length_append, length_encodeUint]
+        simp only [encode, put, toList_putString, encodeString, encodeBytes, List.length_append, length_encodeUint]
         exact aligned_add (aligned_mul 1) (dvd_length_pad32 _)
     | array t =>
         obtain ⟨vs, _⟩ := v
-        have hvt : t.Valid := hv
-        simp only [encode, List.length_append, length_encodeUint]
+        have hvt : t.Valid := (valid_array.mp hv).1
+        simp only [encode, put, toList_append, toList_putUint, List.length_append, length_encodeUint]
         exact aligned_add (aligned_mul 1) (dvd_length_encodeParts (wf_map_partOf t hvt vs))
     | fixedArray t n =>
         obtain ⟨vs, hvs⟩ := v
         have hvt : t.Valid := hv
-        simp only [encode]
+        simp only [encode, put]
         exact dvd_length_encodeParts (wf_map_partOf t hvt vs)
     | tuple ts =>
         have hvts : AllValid ts := hv
-        simp only [encode]
+        simp only [encode, put]
         exact dvd_length_encodeParts (wf_partsOfTuple ts hvts v)
 termination_by 4 * sizeOf t
 
@@ -454,19 +290,18 @@ theorem wf_map_partOf (t : Ty) (hv : t.Valid) (vs : List t.Val) :
   | cons w ws ih =>
       rw [List.map_cons]
       apply wf_cons
-      · by_cases hs : t.IsStatic
+      · by_cases hs : t.isStatic
         · rw [partOf_static t w hs]
           constructor
-          · show 32 ∣ (encode t w).length
-            rw [encode_length_static t hs hv w]
-            exact dvd_headSize_static t hs
+          · change 32 ∣ (encode t w).length
+            rw [encode_length_static t hs hv w]; exact dvd_headSize_static t hs
           · exact ⟨0, rfl⟩
-        · have hsf : t.IsStatic = false := by simp at hs; exact hs
+        · have hsf : t.isStatic = false := by simp at hs; exact hs
           rw [partOf_dynamic t w hsf]
           constructor
           · exact ⟨0, rfl⟩
-          · show 32 ∣ (encode t w).length
-            exact encode_length_aligned t hv w
+          · change 32 ∣ (encode t w).length
+            simpa [Aligned] using encode_length_aligned t hv w
       · exact ih
 termination_by 4 * sizeOf t + 1
 
@@ -480,29 +315,28 @@ theorem wf_partsOfTuple : (ts : List Ty) → AllValid ts → (vs : TupleVal ts) 
       obtain ⟨hvt, hvs⟩ := hv
       simp only [partsOfTuple]
       apply wf_cons
-      · by_cases hs : t.IsStatic
+      · by_cases hs : t.isStatic
         · rw [partOf_static t v hs]
           constructor
-          · show 32 ∣ (encode t v).length
-            rw [encode_length_static t hs hvt v]
-            exact dvd_headSize_static t hs
+          · change 32 ∣ (encode t v).length
+            rw [encode_length_static t hs hvt v]; exact dvd_headSize_static t hs
           · exact ⟨0, rfl⟩
-        · have hsf : t.IsStatic = false := by simp at hs; exact hs
+        · have hsf : t.isStatic = false := by simp at hs; exact hs
           rw [partOf_dynamic t v hsf]
           constructor
           · exact ⟨0, rfl⟩
-          · show 32 ∣ (encode t v).length
-            exact encode_length_aligned t hvt v
+          · change 32 ∣ (encode t v).length
+            simpa [Aligned] using encode_length_aligned t hvt v
       · exact wf_partsOfTuple ts hvs vs
 termination_by ts => 4 * sizeOf ts + 2
 end
 
-/-! ## Package C: static-prefix roundtrip -/
+/-! ## Package C: appended-buffer read lemmas -/
 
-/- Appended-buffer read lemmas: every primitive decoder reads through a
-suffix it does not care about.  Together with `drop_head_partOf_static`
-(a static part's head sits at its head offset) they give the static
-roundtrip in *prefix* form — the shape tuple and array decoding need. -/
+/- Every primitive decoder reads through a suffix it does not care about;
+`drop_head_partOf_static` locates a static part's head at its head offset.
+The linear decoder's bound-free static roundtrip
+(`decode_static_append` below) is the bound-free static roundtrip. -/
 
 /-- `uintM` read-back over an appended suffix. -/
 theorem decodeUint_append (n : Nat) (rest : List UInt8) (h : n < 2 ^ 256) :
@@ -518,14 +352,7 @@ theorem decodeInt_append {M : Nat} (hM0 : 0 < M) (hM : M ≤ 256)
     (rest : List UInt8) : decodeInt (encodeInt i ++ rest) = some i := by
   have hcast : ((2 ^ (M - 1) : Nat) : Int) = (2 : Int) ^ (M - 1) := Int.natCast_pow 2 (M - 1)
   rw [hcast] at hl hu
-  have hb : (2 : Int) ^ (M - 1) ≤ 2 ^ 255 := by
-    have e : (2 : Int) ^ (M - 1) = ((2 ^ (M - 1) : Nat) : Int) :=
-      (Int.natCast_pow 2 (M - 1)).symm
-    have hle : (2 : Nat) ^ (M - 1) ≤ 2 ^ 255 :=
-      Nat.pow_le_pow_right (n := 2) (by decide) (by omega)
-    rw [e]; exact Int.ofNat_le.mpr hle
-  have hub : i < (2 : Int) ^ 255 := by omega
-  have hlb : -(2 : Int) ^ 255 ≤ i := by omega
+  obtain ⟨hlb, hub⟩ := intM_bounds_lt_255 (M := M) hM0 hM hl hu
   by_cases hi : 0 ≤ i
   · have hn : i.toNat < 2 ^ 256 := by omega
     rw [encodeInt, if_pos hi, decodeInt, decodeUint_append _ rest hn, Option.map_some,
@@ -569,17 +396,18 @@ theorem decodeBytesN_append {n : Nat} (h32 : n ≤ 32) (h : bs.length = n)
 
 /-- A static part's encoding sits at its head offset, even with further
 parts and a trailing suffix after it. -/
-theorem drop_head_partOf_static (t : Ty) (hs : t.IsStatic = true) (v : t.Val)
+theorem drop_head_partOf_static (t : Ty) (hs : t.isStatic = true) (v : t.Val)
     (xs ys : List Part) (rest : List UInt8) (off : Nat) (hoff : off = headSizes xs) :
     (encodeParts (xs ++ (partOf t v :: ys)) ++ rest).drop off =
       encode t v ++ (encodeHeads (headSizes (xs ++ (partOf t v :: ys)) + tailSizes xs) ys ++
         (encodeTails (xs ++ (partOf t v :: ys)) ++ rest)) := by
   rw [partOf_static t v hs]
-  have hle : off ≤ (encodeParts (xs ++ ⟨encode t v, [], false⟩ :: ys)).length := by
+  have hle : off ≤ (encodeParts (xs ++ ⟨put t v, ∅, false⟩ :: ys)).length := by
     rw [hoff, length_encodeParts, headSizes_append]
     omega
   rw [drop_append_of_le hle, hoff, drop_headOffset_static]
   simp only [List.append_assoc]
+  rfl
 
 /-- Extending the already-encoded head prefix by one component advances the
 head offset by that component's head size — for static components because
@@ -590,179 +418,17 @@ theorem headSizes_snoc_partOf (t : Ty) (hv : t.Valid) (v : t.Val) (xs : List Par
     off + t.headSize = headSizes (xs ++ [partOf t v]) := by
   rw [hoff, headSizes_append]
   simp [headSizes, headSize_partOf t hv v]
+/-! ## Package D: locating dynamic tails in the layout -/
 
-/- The static roundtrip, prefix form.  `decode_encode_append_static` is the
-single-component statement; `readElem_partOf_append_static` places one
-component in a larger head; `decodeElems_static_append` and
-`decodeTuple_static_append` generalize it to a run of static components
-inside a larger head (the `xs` already-encoded prefix, the `ys` remaining
-parts, `rest` everything after the encoding). -/
-mutual
-/-- **Static roundtrip, prefix form**: a static value decodes from the front
-of its own encoding followed by an arbitrary suffix. -/
-theorem decode_encode_append_static : (t : Ty) → t.IsStatic = true → t.Valid →
-    (v : t.Val) → (rest : List UInt8) → decode t (encode t v ++ rest) = some v
-  | uint m, hs, hv, ⟨n, hn⟩, rest => by
-      have hdec : decodeUint (encodeUint n ++ rest) = some n :=
-        decodeUint_append n rest
-          (Nat.lt_of_lt_of_le hn (Nat.pow_le_pow_right (n := 2) (by decide) hv.2.1))
-      simp only [encode, decode]
-      rw [hdec]
-      exact dif_pos hn
-  | int m, hs, hv, ⟨i, hi⟩, rest => by
-      have h0 : 0 < m := by have h8 := hv.1; omega
-      have hdec : decodeInt (encodeInt i ++ rest) = some i :=
-        decodeInt_append h0 hv.2.1 hi.1 hi.2 rest
-      simp only [encode, decode]
-      rw [hdec]
-      exact dif_pos hi
-  | Ty.bool, hs, hv, b, rest => by
-      simp only [encode, decode]
-      exact decodeBool_append b rest
-  | address, hs, hv, ⟨n, hn⟩, rest => by
-      have hdec : decodeAddress (encodeAddress n ++ rest) = some n :=
-        decodeAddress_append n rest hn
-      simp only [encode, decode]
-      rw [hdec]
-      exact dif_pos hn
-  | bytesN m, hs, hv, ⟨bs, hbs⟩, rest => by
-      have hdec : decodeBytesN m (encodeBytesN bs ++ rest) = some bs :=
-        decodeBytesN_append hv.2 hbs rest
-      simp only [encode, decode]
-      rw [hdec]
-      exact dif_pos hbs
-  | bytes, hs, _, _, _ | string, hs, _, _, _ | array _, hs, _, _, _ => by
-      simp [IsStatic] at hs
-  | fixedArray t n, hs, hv, v, rest => by
-      obtain ⟨vs, hvs⟩ := v
-      have hst : t.IsStatic = true := by simp only [IsStatic] at hs; exact hs
-      have hvt : t.Valid := hv
-      simp only [decode, encode]
-      have h := decodeElems_static_append t hst hvt vs n hvs [] [] 0 (by simp [headSizes]) rest
-      simpa using h
-  | tuple ts, hs, hv, v, rest => by
-      have hss : allStatic ts = true := by simp only [IsStatic] at hs; exact hs
-      have hvts : AllValid ts := hv
-      simp only [decode, encode]
-      have h := decodeTuple_static_append ts hss hvts v [] [] 0 (by simp [headSizes]) rest
-      simpa using h
-termination_by t => 8 * sizeOf t
-
-/-- **The per-component step, static case**: a static component decodes in
-place at its head slot.  The static counterpart of `readElem_partOf_append`,
-without the offset word and hence without any buffer bound. -/
-theorem readElem_partOf_append_static (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid)
-    (v : t.Val) (xs zs : List Part) (off : Nat) (hoff : off = headSizes xs)
-    (rest : List UInt8) :
-    readElem t (encodeParts (xs ++ partOf t v :: zs) ++ rest) off = some v := by
-  rw [readElem_static t _ _ hs, drop_head_partOf_static t hs v xs zs rest off hoff]
-  exact decode_encode_append_static t hs hv v _
-termination_by 8 * sizeOf t + 1
-
-/-- Static element lists decode from their own encoding inside a larger
-head/tail layout. -/
-theorem decodeElems_static_append (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid)
-    (vs : List t.Val) (k : Nat) (hk : vs.length = k) (xs ys : List Part) (off : Nat)
-    (hoff : off = headSizes xs) (rest : List UInt8) :
-    decodeElems t k (encodeParts (xs ++ vs.map (partOf t) ++ ys) ++ rest) off =
-      some ⟨vs, hk⟩ := by
-  induction vs generalizing k xs off with
-  | nil =>
-      subst hk
-      simp only [List.map_nil, List.length_nil, decodeElems]
-  | cons w ws ih =>
-      have hk' : k = ws.length + 1 := by rw [← hk, List.length_cons]
-      subst hk'
-      simp only [List.map_cons, decodeElems]
-      simp only [List.append_assoc, List.cons_append]
-      have hre : xs ++ (partOf t w :: (ws.map (partOf t) ++ ys)) =
-          ((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys := by
-        simp [List.append_assoc]
-      rw [readElem_partOf_append_static t hs hv w xs (ws.map (partOf t) ++ ys) off hoff rest,
-        hre, ih (ws.length) rfl (xs ++ [partOf t w]) (off + t.headSize)
-          (headSizes_snoc_partOf t hv w xs off hoff)]
-termination_by 8 * sizeOf t + 2
-
-/-- Static tuples decode from their own encoding inside a larger head/tail
-layout. -/
-theorem decodeTuple_static_append : (ts : List Ty) → allStatic ts = true → AllValid ts →
-    (vs : TupleVal ts) → (xs ys : List Part) → (off : Nat) → off = headSizes xs →
-    (rest : List UInt8) →
-    decodeTuple ts (encodeParts (xs ++ partsOfTuple ts vs ++ ys) ++ rest) off = some vs
-  | [], _, _, _, _, _, _, _, _ => by
-      simp only [partsOfTuple, decodeTuple]
-  | t :: ts, hall, hv, (v, vs), xs, ys, off, hoff, rest => by
-      simp only [allStatic] at hall
-      rw [Bool.and_eq_true] at hall
-      obtain ⟨hst, hss⟩ := hall
-      obtain ⟨hvt, hvs⟩ := hv
-      simp only [partsOfTuple]
-      simp only [decodeTuple]
-      simp only [List.append_assoc, List.cons_append]
-      have hre : xs ++ (partOf t v :: (partsOfTuple ts vs ++ ys)) =
-          ((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys := by
-        simp [List.append_assoc]
-      rw [readElem_partOf_append_static t hst hvt v xs (partsOfTuple ts vs ++ ys) off hoff rest,
-        hre, decodeTuple_static_append ts hss hvs vs (xs ++ [partOf t v]) ys (off + t.headSize)
-          (headSizes_snoc_partOf t hvt v xs off hoff) rest]
-      rfl
-termination_by ts => 8 * sizeOf ts + 3
-end
-
-/-! ## Roundtrips derived from the prefix forms -/
-
-/-- **Static roundtrip**: every static type decodes its own encoding without
-any side condition. -/
-theorem roundtrip_static (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid) (v : t.Val) :
-    decode t (encode t v) = some v := by
-  have h := decode_encode_append_static t hs hv v []
-  rwa [List.append_nil] at h
-
-/-- **Roundtrip** for dynamic `bytes` — conditionless: the length bound is
-carried by the value itself. -/
-theorem roundtrip_bytes (v : Ty.Val .bytes) :
-    decode .bytes (encode .bytes v) = some v := by
-  obtain ⟨bs, h⟩ := v
-  have hr := decodeBytesPrefix_append (bs := bs) (rest := []) h
-  rw [List.append_nil] at hr
-  simp only [encode]
-  rw [decode_bytes_pos hr]
-
-/-- **Roundtrip** for dynamic `string` — conditionless. -/
-theorem roundtrip_string (v : Ty.Val .string) :
-    decode .string (encode .string v) = some v := by
-  obtain ⟨s, h⟩ := v
-  have hb : s.toUTF8.data.toList.length < 2 ^ 256 := by
-    rw [← Binary.ByteArray.size_eq_toList_length s.toUTF8]
-    exact h
-  have hr := decodeBytesPrefix_append (bs := s.toUTF8.data.toList) (rest := []) hb
-  rw [List.append_nil] at hr
-  have hs : String.fromUTF8? (s.toUTF8.data.toList).toByteArray = some s := by
-    rw [dataToList_toByteArray]
-    exact fromUTF8?_toUTF8 s
-  simp only [encode, encodeString]
-  rw [decode_string_pos hr hs]
-
-/-! ## Package D: the dynamic roundtrip -/
-
-/- The static roundtrip (Package C) handled components sitting in the head.
-Dynamic components sit in the tail and are reached through an offset word in
-the head.  The lemmas below locate a dynamic part's tail inside a larger
-head/tail layout (`drop_tail_partOf_dynamic`), show its offset word reads
-back the correct tail offset (`natAt_offset_partOf_dynamic`), and combine
-both into a single `readElem` rewrite (`readElem_partOf_dynamic`).  The
-mutual block `decode_encode_append` / `readElem_partOf_append` /
-`decodeElems_append` / `decodeTuple_append` then proves the roundtrip in
-prefix form for *all* types, ending in the unified `roundtrip`.
-
-`readElem_partOf_append` is the per-component step both walkers share: it
-reads one component back from its head slot, static in place and dynamic
-through its offset word.  The walkers themselves only enumerate parts and
-advance the head offset (`headSizes_snoc_partOf`). -/
+/- Dynamic components sit in the tail and are reached through an offset word
+in the head.  The lemmas below locate a dynamic part's tail inside a larger
+head/tail layout (`drop_tail_partOf_dynamic`) and show its offset word reads
+back the correct tail offset (`natAt_offset_partOf_dynamic`) — used by the
+linear decoder's roundtrip (`decodeElem_roundtrip` below). -/
 
 /-- The tail offset of a dynamic part never exceeds the total encoding
 length. -/
-theorem tailOffset_partOf_dynamic_le (t : Ty) (v : t.Val) (h : t.IsStatic = false)
+theorem tailOffset_partOf_dynamic_le (t : Ty) (v : t.Val) (h : t.isStatic = false)
     (xs ys : List Part) :
     tailOffset (xs ++ (partOf t v :: ys)) xs.length ≤
       (encodeParts (xs ++ (partOf t v :: ys))).length := by
@@ -772,7 +438,7 @@ theorem tailOffset_partOf_dynamic_le (t : Ty) (v : t.Val) (h : t.IsStatic = fals
 
 /-- Dropping to a dynamic part's tail offset lands exactly on its tail, even
 with a trailing suffix after the whole layout. -/
-theorem drop_tail_partOf_dynamic (t : Ty) (v : t.Val) (h : t.IsStatic = false)
+theorem drop_tail_partOf_dynamic (t : Ty) (v : t.Val) (h : t.isStatic = false)
     (xs ys : List Part) (rest : List UInt8) :
     (encodeParts (xs ++ (partOf t v :: ys)) ++ rest).drop
       (tailOffset (xs ++ (partOf t v :: ys)) xs.length) =
@@ -781,10 +447,11 @@ theorem drop_tail_partOf_dynamic (t : Ty) (v : t.Val) (h : t.IsStatic = false)
   rw [partOf_dynamic t v h] at hle ⊢
   rw [drop_append_of_le hle, drop_tailOffset_append]
   simp only [List.append_assoc]
+  rfl
 
 /-- The offset word of a dynamic part reads back its tail offset, even with a
 trailing suffix after the whole layout. -/
-theorem natAt_offset_partOf_dynamic (t : Ty) (v : t.Val) (h : t.IsStatic = false)
+theorem natAt_offset_partOf_dynamic (t : Ty) (v : t.Val) (h : t.isStatic = false)
     (xs ys : List Part) (rest : List UInt8)
     (hwf : WF (xs ++ (partOf t v :: ys)))
     (hb : (encodeParts (xs ++ (partOf t v :: ys)) ++ rest).length < 2 ^ 256) :
@@ -796,7 +463,7 @@ theorem natAt_offset_partOf_dynamic (t : Ty) (v : t.Val) (h : t.IsStatic = false
     omega
   rw [partOf_dynamic t v h] at hwf hle hb0 ⊢
   have hle32 : 32 * (headSizes xs / 32 + 1) ≤
-      (encodeParts (xs ++ (⟨[], encode t v, true⟩ : Part) :: ys)).length := by
+      (encodeParts (xs ++ (⟨∅, put t v, true⟩ : Part) :: ys)).length := by
     have hd : 32 ∣ headSizes xs := dvd_headSizes fun q hq => hwf q (List.mem_append_left _ hq)
     rw [length_encodeParts, headSizes_append]
     simp only [headSizes, Part.headSize]
@@ -806,181 +473,449 @@ theorem natAt_offset_partOf_dynamic (t : Ty) (v : t.Val) (h : t.IsStatic = false
     Option.some.injEq]
   exact Nat.mod_eq_of_lt (Nat.lt_of_le_of_lt hle hb0)
 
-/-- Reading a dynamic component resolves its offset word and lands on its
-tail. -/
-theorem readElem_partOf_dynamic (t : Ty) (v : t.Val) (h : t.IsStatic = false)
-    (xs ys : List Part) (rest : List UInt8) (off : Nat) (hoff : off = headSizes xs)
-    (hwf : WF (xs ++ (partOf t v :: ys)))
-    (hb : (encodeParts (xs ++ (partOf t v :: ys)) ++ rest).length < 2 ^ 256) :
-    readElem t (encodeParts (xs ++ (partOf t v :: ys)) ++ rest) off =
-      decode t (encode t v ++ (encodeTails ys ++ rest)) := by
-  rw [readElem_dynamic t _ _ h, hoff,
-    natAt_offset_partOf_dynamic t v h xs ys rest hwf hb]
-  show decode t ((encodeParts (xs ++ (partOf t v :: ys)) ++ rest).drop
-      (tailOffset (xs ++ (partOf t v :: ys)) xs.length)) =
-    decode t (encode t v ++ (encodeTails ys ++ rest))
-  rw [drop_tail_partOf_dynamic t v h xs ys rest]
+/-! ## decoder helpers: sizes and word recovery -/
+
+/-- The head section of an element list mapped through `partOf`, for
+arbitrary (not only static) element types. -/
+theorem headSizes_map_partOf_any (t : Ty) (hv : t.Valid) :
+    (vs : List t.Val) → headSizes (vs.map (partOf t)) = vs.length * t.headSize
+  | [] => by simp [headSizes]
+  | v :: vs => by
+      rw [List.map_cons]
+      simp only [headSizes, headSize_partOf t hv v, List.length_cons]
+      rw [headSizes_map_partOf_any t hv vs, Nat.succ_mul]
+      omega
+
+/-- The head section of a tuple part list, for arbitrary component types. -/
+theorem headSizes_partsOfTuple_any : (ts : List Ty) → AllValid ts → (vs : TupleVal ts) →
+    headSizes (partsOfTuple ts vs) = headSizeSum ts
+  | [], _, _ => by simp [partsOfTuple, headSizes, headSizeSum]
+  | t :: ts, hv, (v, vs) => by
+      obtain ⟨hvt, hvs⟩ := hv
+      simp only [partsOfTuple, headSizes, headSize_partOf t hvt v, headSizeSum]
+      rw [headSizes_partsOfTuple_any ts hvs vs]
+
+
+/-- A successful word read determines the word's bytes: the 32 bytes at the
+read position are the big-endian encoding of the value read. -/
+theorem take_32_eq_encodeUint_of_natAt (buf : List UInt8) (i : Nat) (n : Nat)
+    (h : natAt buf i = some n) : (buf.drop (32 * i)).take 32 = encodeUint n := by
+  unfold natAt wordAt at h
+  split at h
+  · next hl =>
+    rw [Option.map_some, Option.some.injEq] at h
+    subst h
+    show _ = UInt256.toBEBytes (UInt256.ofNat (UInt256.ofBEBytes _).toNat)
+    rw [UInt256.ofNat_toNat, UInt256.toBEBytes_ofBEBytes hl]
+  · contradiction
+
+/- The soundness theorems in both directions need the inverse of the
+appended-buffer read lemmas: a successful primitive decode pins the front
+of the buffer to the encoding of the decoded value. -/
+
+/- The soundness theorems in both directions (the linear-decoder soundness
+below and the C3 soundness) need the inverse of the append roundtrips: a
+successful primitive decode pins the front of the buffer to the encoding
+of the decoded value. -/
+
+/-- When `decodeUint` succeeds, the front word is the big-endian encoding
+of the decoded value. -/
+theorem buf_take_32_eq_encodeUint_of_decodeUint (buf : List UInt8) (x : Nat)
+    (hdu : decodeUint buf = some x) : buf.take 32 = encodeUint x := by
+  have h := take_32_eq_encodeUint_of_natAt buf 0 x hdu
+  simpa using h
+
+/-- The `int` decoder recovers the word it read. -/
+theorem encodeInt_eq_encodeUint_of_decodeInt {buf : List UInt8} {i : Int} {x : Nat}
+    (hdi : decodeInt buf = some i) (hdu : decodeUint buf = some x) :
+    encodeInt i = encodeUint x := by
+  have hx256 : x < 2 ^ 256 := natAt_lt hdu
+  have hxi : (if x < 2 ^ 255 then (x : Int) else (x : Int) - 2 ^ 256) = i := by
+    simpa [decodeInt, hdu] using hdi
+  by_cases hx2 : x < 2 ^ 255
+  · rw [if_pos hx2] at hxi
+    subst hxi
+    rw [encodeInt, if_pos (by omega)]
+    rfl
+  · rw [if_neg hx2] at hxi
+    subst hxi
+    rw [encodeInt, if_neg (by omega)]
+    congr 1
+    omega
+
+/-- The `bool` decoder succeeds exactly on the canonical boolean words. -/
+theorem decodeBool_eq_some_iff (buf : List UInt8) (b : Bool) :
+    decodeBool buf = some b ↔ decodeUint buf = some (if b then 1 else 0) := by
+  unfold decodeBool
+  cases hdu : decodeUint buf with
+  | none => simp
+  | some x =>
+      cases x with
+      | zero => cases b <;> simp
+      | succ x =>
+          cases x with
+          | zero => cases b <;> simp
+          | succ x => cases b <;> simp <;> omega
+
+/-- A successful `decodeBytesN` pins the front word to the encoding. -/
+theorem buf_take_32_eq_encodeBytesN_of_decodeBytesN {m : Nat} {buf bs : List UInt8}
+    (h : decodeBytesN m buf = some bs) : buf.take 32 = encodeBytesN bs := by
+  unfold decodeBytesN at h
+  split at h
+  · next hc =>
+      rw [Option.some.injEq] at h
+      have hlen : bs.length = m := by rw [← h]; exact hc.1
+      rw [encodeBytesN, hlen, ← h, ← hc.2]
+      exact (List.take_append_drop m (buf.take 32)).symm
+  · contradiction
+
+/-- A successful prefix decode determines the consumed prefix: it is exactly
+the encoding of the decoded bytes. -/
+theorem take_eq_encodeBytes_of_decodeBytesPrefix (buf : List UInt8) (bs : List UInt8) (m : Nat)
+    (h : decodeBytesPrefix buf = some (bs, m)) :
+    buf.take m = encodeBytes bs ∧ m = (encodeBytes bs).length := by
+  simp only [decodeBytesPrefix] at h
+  cases hlen : natAt buf 0 with
+  | none => simp only [hlen, Option.bind_none] at h; contradiction
+  | some len =>
+      simp only [hlen, Option.bind_some] at h
+      by_cases hc : ((buf.drop 32).take len).length = len ∧
+          ((buf.drop 32).drop len).take ((32 - len % 32) % 32) =
+            List.replicate ((32 - len % 32) % 32) 0
+      · rw [if_pos hc] at h
+        have h2 := Option.some.inj h
+        have hbs : (buf.drop 32).take len = bs := congrArg Prod.fst h2
+        have hm : 32 + len + (32 - len % 32) % 32 = m := congrArg Prod.snd h2
+        have htake32 := take_32_eq_encodeUint_of_natAt buf 0 len hlen
+        simp only [Nat.mul_zero, List.drop_zero] at htake32
+        have hblen : bs.length = len := by rw [← hbs]; exact hc.1
+        subst hm
+        constructor
+        · have hsplit : buf.take (32 + len + (32 - len % 32) % 32) =
+              buf.take 32 ++ (buf.drop 32).take (len + (32 - len % 32) % 32) := by
+            rw [← List.take_add]
+            congr 1
+            omega
+          rw [hsplit, htake32, List.take_add, hbs, hc.2]
+          rw [encodeBytes, pad32, ← hblen]
+        · rw [encodeBytes, List.length_append, length_encodeUint, length_pad32, ← hblen]
+          omega
+      · rw [if_neg hc] at h; contradiction
+
+
+/-! ## the linear decoder -/
+
+/- Canonical layouts are *sequential* — offset words must equal the
+frontier, and tails follow the head contiguously — so the decoder is a
+pure front-consumer: at the compound level two cursors (head section, tail
+section) advance monotonically and every byte is touched at most once. -/
+
+/-- Reading a word from a dropped buffer reads the original at a larger
+index. -/
+theorem wordAt_drop_add (buf : List UInt8) (i j : Nat) :
+    wordAt (buf.drop (32 * j)) i = wordAt buf (i + j) := by
+  unfold wordAt
+  simp [List.drop_drop, Nat.mul_add, Nat.add_comm]
+
+/-- `natAt` variant of `wordAt_drop_add`. -/
+theorem natAt_drop_add (buf : List UInt8) (i j : Nat) :
+    natAt (buf.drop (32 * j)) i = natAt buf (i + j) := by
+  simp [natAt, wordAt_drop_add]
+
+/-- `natAt` on the front of a dropped buffer reads the word at the drop
+index. -/
+theorem natAt_drop (buf : List UInt8) (off i : Nat) (h : off = 32 * i) :
+    natAt (buf.drop off) 0 = natAt buf i := by
+  rw [h]
+  simpa using natAt_drop_add buf 0 i
 
 mutual
-/-- **Roundtrip, prefix form**: a value decodes from the front of its own
-encoding followed by an arbitrary suffix.  `hb` bounds the whole buffer (so
-no offset word wraps); the dynamic payload bounds are carried by the value
-itself. -/
-theorem decode_encode_append (t : Ty) (hv : t.Valid) (v : t.Val)
-    (rest : List UInt8) (hb : (encode t v ++ rest).length < 2 ^ 256) :
-    decode t (encode t v ++ rest) = some v := by
-  by_cases hs : t.IsStatic
-  · exact decode_encode_append_static t hs hv v rest
-  · have hsf : t.IsStatic = false := by simp at hs; exact hs
-    cases t with
-    | uint m => simp [IsStatic] at hsf
-    | int m => simp [IsStatic] at hsf
-    | bool => simp [IsStatic] at hsf
-    | address => simp [IsStatic] at hsf
-    | bytesN m => simp [IsStatic] at hsf
-    | bytes =>
-        obtain ⟨bs, hlb⟩ := v
-        have hr := decodeBytesPrefix_append (bs := bs) (rest := rest) hlb
-        simp only [encode]
-        rw [decode_bytes_pos hr]
-    | string =>
-        obtain ⟨s, hlb⟩ := v
-        have hb2 : s.toUTF8.data.toList.length < 2 ^ 256 := by
-          rw [← Binary.ByteArray.size_eq_toList_length s.toUTF8]
-          exact hlb
-        have hr := decodeBytesPrefix_append (bs := s.toUTF8.data.toList) (rest := rest) hb2
-        have hus : String.fromUTF8? (s.toUTF8.data.toList).toByteArray = some s := by
-          rw [dataToList_toByteArray]
-          exact fromUTF8?_toUTF8 s
-        simp only [encode, encodeString]
-        rw [decode_string_pos hr hus]
-    | array t =>
-        obtain ⟨vs, hlk⟩ := v
-        have hvt : t.Valid := hv
-        have hbT : (encodeParts (vs.map (partOf t)) ++ rest).length < 2 ^ 256 := by
-          have hb' := hb
-          simp only [encode, List.length_append, length_encodeUint] at hb'
-          rw [List.length_append]
-          omega
-        have hcnt : natAt (encodeUint vs.length ++ (encodeParts (vs.map (partOf t)) ++ rest)) 0 =
-            some vs.length := by
-          unfold encodeUint
-          have hw := natAt_append ([] : List UInt8) (encodeParts (vs.map (partOf t)) ++ rest)
-            (UInt256.ofNat vs.length) 0 (by simp)
-          rw [List.nil_append] at hw
-          rw [hw, UInt256.toNat_ofNat, Nat.mod_eq_of_lt
-            (show vs.length < UInt256.size from hlk)]
-        have hdrop : (encodeUint vs.length ++ (encodeParts (vs.map (partOf t)) ++ rest)).drop 32 =
-            encodeParts (vs.map (partOf t)) ++ rest :=
-          drop_append_of_length (length_encodeUint _)
-        have hde : decodeElems t vs.length (encodeParts (vs.map (partOf t)) ++ rest) 0 =
-            some ⟨vs, rfl⟩ := by
-          have h := decodeElems_append t hvt vs vs.length rfl [] [] 0 (by simp [headSizes])
-            rest (by simpa using wf_map_partOf t hvt vs) (by simpa using hbT)
-          simpa using h
-        simp only [encode, List.append_assoc]
-        rw [decode_array_pos hcnt, hdrop, hde]
-        rfl
-    | fixedArray t n =>
-        obtain ⟨vs, hvs⟩ := v
-        have hvt : t.Valid := hv
-        have h := decodeElems_append t hvt vs n hvs [] [] 0 (by simp [headSizes]) rest
-          (by simpa using wf_map_partOf t hvt vs) (by simpa [encode] using hb)
-        simp only [decode, encode]
-        simpa using h
-    | tuple ts =>
-        have hvts : AllValid ts := hv
-        have h := decodeTuple_append ts hvts v [] [] 0 (by simp [headSizes]) rest
-          (by simpa using wf_partsOfTuple ts hvts v) (by simpa [encode] using hb)
-        simp only [decode, encode]
-        simpa using h
-termination_by 8 * sizeOf t
+/-- **Canonical decoder, prefix form**: reads one canonical value of type
+`t` from the front of the buffer, returning it together with the number of
+bytes it consumed and the untouched remainder.
 
-/-- **The per-component step**: one component reads back from its head slot
-inside a larger head/tail layout — a static one decoded in place, a dynamic
-one reached through its offset word.  This is the whole of what the two
-walkers below do per element; they differ only in how they enumerate the
-parts. -/
-theorem readElem_partOf_append (t : Ty) (hv : t.Valid) (v : t.Val)
-    (xs zs : List Part) (off : Nat) (hoff : off = headSizes xs) (rest : List UInt8)
-    (hwf : WF (xs ++ partOf t v :: zs))
-    (hb : (encodeParts (xs ++ partOf t v :: zs) ++ rest).length < 2 ^ 256) :
-    readElem t (encodeParts (xs ++ partOf t v :: zs) ++ rest) off = some v := by
-  cases hs : t.IsStatic
-  · have heq := drop_tail_partOf_dynamic t v hs xs zs rest
-    rw [readElem_partOf_dynamic t v hs xs zs rest off hoff hwf hb]
-    exact decode_encode_append t hv v _ (by rw [← heq, List.length_drop]; omega)
-  · exact readElem_partOf_append_static t hs hv v xs zs off hoff rest
+The consumed count is computed *structurally* — a constant for the word
+types, the count already reported by `decodeBytesPrefix` for the payload
+types, and the walker's final frontier for the compound types (the
+frontier starts at the head size and advances by each tail, so it ends at
+exactly the size of the layout).  It is never measured off the buffers:
+`decodeElem` advances the frontier by it in `O(1)`, which is what keeps
+the whole walk linear.
+
+The `array` case rejects element types with no head up front: nothing
+would advance either cursor, so the element walk would not be bounded by
+the buffer.  `Ty.Valid` rules those types out (`0 < t.headSize`), so no
+theorem loses ground. -/
+def decode : (t : Ty) → List UInt8 → Option (t.Val × Nat × List UInt8)
+  | .uint m, buf => match decodeUint buf with
+      | some n => if h : n < 2 ^ m then some (⟨n, h⟩, 32, buf.drop 32) else none
+      | none => none
+  | .int m, buf => match decodeInt buf with
+      | some i => if h : -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int) then
+          some (⟨i, h⟩, 32, buf.drop 32)
+        else none
+      | none => none
+  | .bool, buf => match decodeBool buf with
+      | some b => some (b, 32, buf.drop 32)
+      | none => none
+  | .address, buf => match decodeAddress buf with
+      | some n => if h : n < 2 ^ 160 then some (⟨n, h⟩, 32, buf.drop 32) else none
+      | none => none
+  | .bytesN m, buf => match decodeBytesN m buf with
+      | some bs => if h : bs.length = m then some (⟨bs, h⟩, 32, buf.drop 32) else none
+      | none => none
+  | .bytes, buf => match hp : decodeBytesPrefix buf with
+      | some (bs, n) => some (⟨bs, length_lt_of_decodeBytesPrefix hp⟩, n, buf.drop n)
+      | none => none
+  | .string, buf => match hp : decodeBytesPrefix buf with
+      | some (bs, n) => match hs : String.fromUTF8? bs.toByteArray with
+          | some s => some (⟨s, size_toUTF8_lt_of_decodeBytesPrefix hp hs⟩, n, buf.drop n)
+          | none => none
+      | none => none
+  | .array t, buf => if t.headSize = 0 then none else
+      match hk : natAt buf 0 with
+      | none => none
+      | some k => match (decodeElems t k).run (buf.drop 32) (buf.drop (32 + k * t.headSize)) (k * t.headSize) with
+          | some ⟨vs, _, rest, E⟩ =>
+              some (⟨vs.val, by rw [vs.property]; exact natAt_lt hk⟩, 32 + E, rest)
+          | none => none
+  | .fixedArray t n, buf => match (decodeElems t n).run buf (buf.drop (n * t.headSize)) (n * t.headSize) with
+      | some ⟨vs, _, rest, E⟩ => some (vs, E, rest)
+      | none => none
+  | .tuple ts, buf => match (decodeTuple ts).run buf (buf.drop (headSizeSum ts)) (headSizeSum ts) with
+      | some ⟨vs, _, rest, E⟩ => some (vs, E, rest)
+      | none => none
+termination_by t => (sizeOf t, 0)
+
+/-- Read one component at its head slot, as a `Get2` program: static
+components decode in place from the head cursor; dynamic components must
+have their offset word equal to the frontier `E` and decode from the tail
+cursor, advancing the frontier by the bytes that component consumed. -/
+def decodeElem (t : Ty) : Get2 t.Val := ⟨fun head tails E =>
+  match t.isStatic with
+  | true => match decode t head with
+      | some (v, _, rest) => some ⟨v, rest, tails, E⟩
+      | none => none
+  | false => match natAt head 0 with
+      | none => none
+      | some o => if o = E then
+          match decode t tails with
+          | some (v, n, rest) => some ⟨v, head.drop 32, rest, E + n⟩
+          | none => none
+        else none⟩
+termination_by (sizeOf t, 1)
+
+/-- Read `k` consecutive canonical elements as a `Get2` program, walking
+the head from the head cursor and the tails from the tail cursor. -/
+def decodeElems (t : Ty) (k : Nat) : Get2 ({ vs : List t.Val // vs.length = k }) :=
+  match k with
+  | 0 => pure ⟨[], rfl⟩
+  | k + 1 => do
+      let v ← decodeElem t
+      let ⟨vs, h⟩ ← decodeElems t k
+      pure ⟨v :: vs, by simp [List.length_cons, h]⟩
+termination_by (sizeOf t, k + 2)
+
+/-- Read a canonical tuple as a `Get2` program, walking the head and
+tails. -/
+def decodeTuple : (ts : List Ty) → Get2 (TupleVal ts)
+  | [] => pure ()
+  | t :: ts => do
+      let v ← decodeElem t
+      let vs ← decodeTuple ts
+      pure (v, vs)
+termination_by ts => (sizeOf ts, 2)
+end
+
+/- ## static delegation: static types decode bound-free -/
+
+/- Static types carry no offset words: the frontier never moves and the
+tail cursor is never read, so the roundtrips hold without the `2^256`
+bound that compound layouts need for their offset words.  This is what
+`decodePacked` (`EvmAbi.Packed`) relies on. -/
+
+/-- The tails of a static part list are empty. -/
+theorem encodeTails_map_partOf_static (t : Ty) (hs : t.isStatic = true) (vs : List t.Val) :
+    encodeTails (vs.map (partOf t)) = [] := by
+  induction vs with
+  | nil => simp [encodeTails, putTails, Builder.toList_empty]
+  | cons v vs ih =>
+      rw [List.map_cons, partOf_static t v hs, encodeTails_cons_static, ih]
+
+/-- The tails of an all-static tuple part list are empty. -/
+theorem encodeTails_partsOfTuple_static : (ts : List Ty) → allStatic ts = true →
+    (vs : TupleVal ts) → encodeTails (partsOfTuple ts vs) = []
+  | [], _, _ => by simp [partsOfTuple, encodeTails, putTails, Builder.toList_empty]
+  | t :: ts, hs, (v, vs) => by
+      simp only [allStatic] at hs
+      rw [Bool.and_eq_true] at hs
+      obtain ⟨hst, hss⟩ := hs
+      rw [partsOfTuple, partOf_static t v hst, encodeTails_cons_static,
+        encodeTails_partsOfTuple_static ts hss vs]
+
+mutual
+/-- A static component's head slot reads back in place. -/
+theorem decodeElem_static_append (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
+    (v : t.Val) (head tails : List UInt8) (E : Nat) :
+    (decodeElem t).run (encode t v ++ head) tails E = some ⟨v, head, tails, E⟩ := by
+  simp only [decodeElem, hs]
+  rw [decode_static_append t hs hv v head]
 termination_by 8 * sizeOf t + 1
 
-/-- Element lists decode from their own encoding inside a larger head/tail
-layout, static components in place and dynamic ones through their offset
-words. -/
-theorem decodeElems_append (t : Ty) (hv : t.Valid) (vs : List t.Val) (k : Nat)
-    (hk : vs.length = k)
-    (xs ys : List Part) (off : Nat) (hoff : off = headSizes xs)
-    (rest : List UInt8)
-    (hwf : WF (xs ++ vs.map (partOf t) ++ ys))
-    (hb : (encodeParts (xs ++ vs.map (partOf t) ++ ys) ++ rest).length < 2 ^ 256) :
-    decodeElems t k (encodeParts (xs ++ vs.map (partOf t) ++ ys) ++ rest) off =
-      some ⟨vs, hk⟩ := by
-  induction vs generalizing k xs off with
+/-- A run of static elements reads back from its flattened encodings,
+leaving the suffix and the tail cursor untouched. -/
+theorem decodeElems_static_append (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
+    (vs : List t.Val) (k : Nat) (hk : vs.length = k) (E : Nat) (head tails : List UInt8) :
+    (decodeElems t k).run (encodeHeads E (vs.map (partOf t)) ++ head) tails E =
+      some ⟨⟨vs, hk⟩, head, tails, E⟩ := by
+  induction vs generalizing k with
   | nil =>
       subst hk
-      simp only [List.map_nil, List.length_nil, decodeElems]
+      simp [decodeElems, Get2.pure_run, encodeHeads, putHeads, Builder.toList_empty]
   | cons w ws ih =>
       have hk' : k = ws.length + 1 := by rw [← hk, List.length_cons]
       subst hk'
-      simp only [List.map_cons, decodeElems] at ⊢
-      simp only [List.map_cons] at hwf hb
-      simp only [List.append_assoc, List.cons_append] at hwf hb ⊢
-      have hre : xs ++ (partOf t w :: (ws.map (partOf t) ++ ys)) =
-          ((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys := by
-        simp [List.append_assoc]
-      have hwf' : WF (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) := by
-        rwa [← hre]
-      have hb' : (encodeParts (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) ++ rest).length <
-          2 ^ 256 := by
-        rwa [← hre]
-      rw [readElem_partOf_append t hv w xs (ws.map (partOf t) ++ ys) off hoff rest hwf hb,
-        hre, ih (ws.length) rfl (xs ++ [partOf t w]) (off + t.headSize)
-          (headSizes_snoc_partOf t hv w xs off hoff) hwf' hb']
+      simp only [List.map_cons, decodeElems, Get2.bind_run, Get2.pure_run]
+      rw [partOf_static t w hs, encodeHeads_cons_static]
+      rw [List.append_assoc]
+      rw [show (put t w).toList = encode t w from rfl]
+      rw [decodeElem_static_append t hs hv w (encodeHeads E (ws.map (partOf t)) ++ head) tails E]
+      dsimp only []
+      rw [ih ws.length rfl]
 termination_by 8 * sizeOf t + 2
 
-/-- Tuples decode from their own encoding inside a larger head/tail layout. -/
-theorem decodeTuple_append : (ts : List Ty) → AllValid ts → (vs : TupleVal ts) →
-    (xs ys : List Part) → (off : Nat) → off = headSizes xs →
-    (rest : List UInt8) → WF (xs ++ partsOfTuple ts vs ++ ys) →
-    (encodeParts (xs ++ partsOfTuple ts vs ++ ys) ++ rest).length < 2 ^ 256 →
-    decodeTuple ts (encodeParts (xs ++ partsOfTuple ts vs ++ ys) ++ rest) off = some vs
-  | [], _, _, _, _, _, _, _, _, _ => by
-      simp only [partsOfTuple, decodeTuple]
-  | t :: ts, hv, (v, vs), xs, ys, off, hoff, rest, hwf, hb => by
+/-- An all-static tuple reads back from its flattened heads, leaving the
+suffix and the tail cursor untouched. -/
+theorem decodeTuple_static_append : (ts : List Ty) → allStatic ts = true → AllValid ts →
+    (vs : TupleVal ts) → (E : Nat) → (head tails : List UInt8) →
+    (decodeTuple ts).run (encodeHeads E (partsOfTuple ts vs) ++ head) tails E =
+      some ⟨vs, head, tails, E⟩
+  | [], _, _, _, E, head, tails => by
+      simp [decodeTuple, Get2.pure_run, partsOfTuple, encodeHeads, putHeads,
+        Builder.toList_empty]
+  | t :: ts, hs, hv, (v, vs), E, head, tails => by
+      simp only [allStatic] at hs
+      rw [Bool.and_eq_true] at hs
+      obtain ⟨hst, hss⟩ := hs
       obtain ⟨hvt, hvs⟩ := hv
-      simp only [partsOfTuple] at hwf hb ⊢
-      simp only [decodeTuple]
-      simp only [List.append_assoc, List.cons_append] at hwf hb ⊢
-      have hre : xs ++ (partOf t v :: (partsOfTuple ts vs ++ ys)) =
-          ((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys := by
-        simp [List.append_assoc]
-      have hwf' : WF (((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys) := by
-        rwa [← hre]
-      have hb' : (encodeParts (((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys) ++ rest).length <
-          2 ^ 256 := by
-        rwa [← hre]
-      rw [readElem_partOf_append t hvt v xs (partsOfTuple ts vs ++ ys) off hoff rest hwf hb,
-        hre, decodeTuple_append ts hvs vs (xs ++ [partOf t v]) ys (off + t.headSize)
-          (headSizes_snoc_partOf t hvt v xs off hoff) rest hwf' hb']
-      rfl
+      simp only [decodeTuple, Get2.bind_run, Get2.pure_run]
+      rw [partsOfTuple, partOf_static t v hst, encodeHeads_cons_static]
+      rw [List.append_assoc]
+      rw [show (put t v).toList = encode t v from rfl]
+      rw [decodeElem_static_append t hst hvt v (encodeHeads E (partsOfTuple ts vs) ++ head) tails E]
+      dsimp only []
+      rw [decodeTuple_static_append ts hss hvs vs E head tails]
 termination_by ts => 8 * sizeOf ts + 3
+
+/-- **Static roundtrip, prefix form**: a static value reads back from the
+front of its own encoding followed by an arbitrary suffix, consuming
+exactly its head size — bound-free, since static types have no offset
+words. -/
+theorem decode_static_append (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
+    (v : t.Val) (rest : List UInt8) :
+    decode t (encode t v ++ rest) = some (v, t.headSize, rest) := by
+  cases t with
+  | uint m =>
+      obtain ⟨n, hn⟩ := v
+      have hdec : decodeUint (encodeUint n ++ rest) = some n :=
+        decodeUint_append n rest
+          (Nat.lt_of_lt_of_le hn (Nat.pow_le_pow_right (n := 2) (by decide) hv.2.1))
+      simp only [encode, put, decode, toList_putUint, headSize]
+      rw [hdec]
+      exact dif_pos hn
+  | int m =>
+      obtain ⟨i, hi⟩ := v
+      have h0 : 0 < m := by have h8 := hv.1; omega
+      have hdec : decodeInt (encodeInt i ++ rest) = some i :=
+        decodeInt_append h0 hv.2.1 hi.1 hi.2 rest
+      simp only [encode, put, decode, toList_putInt, headSize]
+      rw [hdec]
+      exact dif_pos hi
+  | bool =>
+      simp only [encode, put, decode, toList_putBool, headSize]
+      rw [decodeBool_append v rest]
+      rfl
+  | address =>
+      obtain ⟨n, hn⟩ := v
+      have hdec : decodeAddress (encodeAddress n ++ rest) = some n :=
+        decodeAddress_append n rest hn
+      simp only [encode, put, decode, toList_putAddress, headSize]
+      rw [hdec]
+      exact dif_pos hn
+  | bytesN m =>
+      obtain ⟨bs, hbs⟩ := v
+      have hdec : decodeBytesN m (encodeBytesN bs ++ rest) = some bs :=
+        decodeBytesN_append hv.2 hbs rest
+      have hlen : (encodeBytesN bs).length = 32 :=
+        length_encodeBytesN (by rw [hbs]; exact hv.2)
+      simp only [encode, put, decode, toList_putBytesN, headSize]
+      rw [hdec]
+      dsimp only []
+      rw [dif_pos hbs]
+      rw [show (encodeBytesN bs ++ rest).drop 32 = rest from drop_append_of_length hlen]
+  | bytes => simp [isStatic] at hs
+  | string => simp [isStatic] at hs
+  | array t => simp [isStatic] at hs
+  | fixedArray t n =>
+      obtain ⟨vs, hvs⟩ := v
+      have hst : t.isStatic = true := by simpa [isStatic] using hs
+      have hvt : t.Valid := hv
+      have hlen : headSizes (vs.map (partOf t)) = n * t.headSize := by
+        rw [headSizes_map_partOf_any t hvt vs, hvs]
+      have hbuf : encodeParts (vs.map (partOf t)) ++ rest =
+          encodeHeads (n * t.headSize) (vs.map (partOf t)) ++ rest := by
+        rw [encodeParts_unfold, hlen, encodeTails_map_partOf_static t hst vs]
+        simp
+      have hdr : (encodeHeads (n * t.headSize) (vs.map (partOf t)) ++ rest).drop
+          (n * t.headSize) = rest := by
+        rw [drop_append_of_length (by rw [length_encodeHeads, hlen])]
+      simp only [encode, put, decode, headSize, hst, if_true]
+      rw [← encodeParts, hbuf, hdr,
+        decodeElems_static_append t hst hvt vs n hvs (n * t.headSize) rest rest]
+  | tuple ts =>
+      have hss : allStatic ts = true := by simpa [isStatic] using hs
+      have hvts : AllValid ts := hv
+      have hlen : headSizes (partsOfTuple ts v) = headSizeSum ts :=
+        headSizes_partsOfTuple_any ts hvts v
+      have hbuf : encodeParts (partsOfTuple ts v) ++ rest =
+          encodeHeads (headSizeSum ts) (partsOfTuple ts v) ++ rest := by
+        rw [encodeParts_unfold, hlen, encodeTails_partsOfTuple_static ts hss v]
+        simp
+      have hdr : (encodeHeads (headSizeSum ts) (partsOfTuple ts v) ++ rest).drop
+          (headSizeSum ts) = rest := by
+        rw [drop_append_of_length (by rw [length_encodeHeads, hlen])]
+      simp only [encode, put, decode, headSize, hss, if_true]
+      rw [← encodeParts, hbuf, hdr,
+        decodeTuple_static_append ts hss hvts v (headSizeSum ts) rest rest]
+termination_by 8 * sizeOf t
 end
 
-/-- **Unified roundtrip**: every value of a valid type decodes from its own
-encoding, provided the total encoding length stays below `2^256` (so no
-offset word wraps); the dynamic payload bounds are intrinsic to `Val`. -/
-theorem roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
-    (hb : (encode t v).length < 2 ^ 256) : decode t (encode t v) = some v := by
-  have h := decode_encode_append t hv v [] (by rwa [List.append_nil])
-  rwa [List.append_nil] at h
+/-- The tail size of a static component's part is zero. -/
+theorem tailSize_partOf_static (t : Ty) (v : t.Val) (h : t.isStatic = true) :
+    (partOf t v).tailSize = 0 := by
+  rw [partOf_static t v h]
+  rfl
 
-end EvmAbi
+/-- The tail size of a dynamic component's part is its encoding length. -/
+theorem tailSize_partOf_dynamic (t : Ty) (v : t.Val) (h : t.isStatic = false) :
+    (partOf t v).tailSize = (encode t v).length := by
+  rw [partOf_dynamic t v h, Part.tailSize]
+  rfl
+
+/-- The frontier invariant is preserved by extending the head prefix: a part
+advances the expected tail position by its own tail size — zero for a static
+component, its encoding length for a dynamic one. -/
+theorem tailOffset_snoc (p : Part) (xs zs : List Part) (E : Nat)
+    (hE : E = tailOffset (xs ++ p :: zs) xs.length) :
+    E + p.tailSize = tailOffset (xs ++ p :: zs) (xs ++ [p]).length := by
+  have hll : (xs ++ [p]).length = xs.length + 1 := by simp [List.length_append]
+  rw [hll]
+  have h_succ : tailOffset (xs ++ p :: zs) (xs.length + 1) =
+      tailOffset (xs ++ p :: zs) xs.length + p.tailSize := by
+    rw [tailOffset, tailOffset, take_append_of_length rfl]
+    have htake : (xs ++ p :: zs).take (xs.length + 1) = xs ++ [p] := by
+      simp [List.take_append, List.take_of_length_le (Nat.le_succ _)]
+    rw [htake, tailSizes_append]
+    simp [tailSizes]
+    omega
+  rw [h_succ, hE]

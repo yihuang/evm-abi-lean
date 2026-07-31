@@ -2,12 +2,13 @@ import EvmAbi.Bytes
 import EvmAbi.Align
 import EvmAbi.Word
 import EvmAbi.Ty
+import EvmAbi.Builder
 import EvmAbi.Static
 import EvmAbi.Dynamic
 import EvmAbi.Codec
+import EvmAbi.Codec.Strict
 import EvmAbi.Parts
 import EvmAbi.Packed
-import EvmAbi.Canonical
 import EvmAbi.HumanReadable
 import EvmAbi.HumanReadable.Meta
 
@@ -97,40 +98,41 @@ example : decodeBytesN 2 ([0x12, 0x34] ++ List.replicate 29 0 ++ [1]) = none := 
 
 -- Ty-level roundtrips by computation
 
-example : decode (.uint 8) (encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ := by
+example : decodeStrict (.uint 8) (encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ := by
   native_decide
 
-example : decode (.int 16) (encode (.int 16) ⟨-1000, by decide⟩) = some ⟨-1000, by decide⟩ := by
+example : decodeStrict (.int 16) (encode (.int 16) ⟨-1000, by decide⟩) = some ⟨-1000, by decide⟩ := by
   native_decide
 
-example : decode .bool (encode .bool true) = some true := by native_decide
+example : decodeStrict .bool (encode .bool true) = some true := by native_decide
 
-example : decode (.bytesN 5) (encode (.bytesN 5) ⟨[1,2,3,4,5], rfl⟩)
+example : decodeStrict (.bytesN 5) (encode (.bytesN 5) ⟨[1,2,3,4,5], rfl⟩)
     = some ⟨[1,2,3,4,5], rfl⟩ := by native_decide
 
-example : decode .bytes (encode .bytes ⟨[0x61, 0x62, 0x63], by decide⟩)
+example : decodeStrict .bytes (encode .bytes ⟨[0x61, 0x62, 0x63], by decide⟩)
     = some ⟨[0x61, 0x62, 0x63], by decide⟩ := by native_decide
 
-example : decode .string (encode .string ⟨"Hello, world!", by native_decide⟩)
+example : decodeStrict .string (encode .string ⟨"Hello, world!", by native_decide⟩)
     = some ⟨"Hello, world!", by native_decide⟩ := by native_decide
 
 -- The same instances via library theorems (no computation)
 
-example : decode (.uint 8) (encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ :=
-  roundtrip_static (.uint 8) rfl (by native_decide) _
+example : decodeStrict (.uint 8) (encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ :=
+  decodeStrict_encode (.uint 8) (by native_decide) _ (by native_decide)
 
-example : decode (.int 8) (encode (.int 8) ⟨-5, by decide⟩) = some ⟨-5, by decide⟩ :=
-  roundtrip_static (.int 8) rfl (by native_decide) _
+example : decodeStrict (.int 8) (encode (.int 8) ⟨-5, by decide⟩) = some ⟨-5, by decide⟩ :=
+  decodeStrict_encode (.int 8) (by native_decide) _ (by native_decide)
 
-example : decode .bool (encode .bool false) = some false :=
-  roundtrip_static .bool rfl (by native_decide) _
+example : decodeStrict .bool (encode .bool false) = some false :=
+  decodeStrict_encode .bool (by native_decide) _ (by native_decide)
 
-example : decode .bytes (encode .bytes ⟨[1, 2, 3], by decide⟩) = some ⟨[1, 2, 3], by decide⟩ :=
-  roundtrip_bytes ⟨[1, 2, 3], by decide⟩
+example : decodeStrict .bytes (encode .bytes ⟨[1, 2, 3], by decide⟩) =
+    some ⟨[1, 2, 3], by decide⟩ :=
+  decodeStrict_encode .bytes (by native_decide) _ (by native_decide)
 
-example : decode .string (encode .string ⟨"hello", by native_decide⟩) =
+example : decodeStrict .string (encode .string ⟨"hello", by native_decide⟩) =
     some ⟨"hello", by native_decide⟩ :=
-  roundtrip_string ⟨"hello", by native_decide⟩
+  decodeStrict_encode .string (by native_decide) _ (by native_decide)
 
 -- encodeStatic_length
 
@@ -148,9 +150,9 @@ example : Aligned (encode .bytes ⟨[1, 2, 3], by decide⟩).length :=
 /-- Demo tuple `(uint 1, bytes 0x010203, uint 2)`: a dynamic part between
 two static ones. -/
 def demoParts : List Part :=
-  [ ⟨encodeUint 1, [], false⟩,
-    ⟨[], encodeBytes [1, 2, 3], true⟩,
-    ⟨encodeUint 2, [], false⟩ ]
+  [ ⟨Builder.ofList (encodeUint 1), ∅, false⟩,
+    ⟨∅, Builder.ofList (encodeBytes [1, 2, 3]), true⟩,
+    ⟨Builder.ofList (encodeUint 2), ∅, false⟩ ]
 
 theorem wf_demoParts : WF demoParts :=
   wf_cons (by native_decide) (wf_cons (by native_decide) (wf_cons (by native_decide) wf_nil))
@@ -163,16 +165,18 @@ example : 32 ∣ (encodeParts demoParts).length := dvd_length_encodeParts wf_dem
 -- the offset word of the dynamic part sits at head position 1 and contains 96
 example : wordAt (encodeParts demoParts) 1 = some (UInt256.ofNat 96) := by native_decide
 example : wordAt (encodeParts demoParts) 1 = some (UInt256.ofNat 96) := by
-  have h := wordAt_offset_append (xs := [⟨encodeUint 1, [], false⟩]) (head := [])
-    (tail := encodeBytes [1, 2, 3]) (ys := [⟨encodeUint 2, [], false⟩]) wf_demoParts
+  have h := wordAt_offset_append (xs := [⟨Builder.ofList (encodeUint 1), ∅, false⟩]) (head := ∅)
+    (tail := Builder.ofList (encodeBytes [1, 2, 3]))
+    (ys := [⟨Builder.ofList (encodeUint 2), ∅, false⟩]) wf_demoParts
   exact h
 
 -- dropping to the tail offset lands on the bytes encoding
 example : (encodeParts demoParts).drop 96 = encodeBytes [1, 2, 3] := by native_decide
 example : (encodeParts demoParts).drop (tailOffset demoParts 1) =
-    encodeBytes [1, 2, 3] ++ encodeTails [⟨encodeUint 2, [], false⟩] :=
-  drop_tailOffset_append (xs := [⟨encodeUint 1, [], false⟩]) (head := [])
-    (tail := encodeBytes [1, 2, 3]) (ys := [⟨encodeUint 2, [], false⟩])
+    encodeBytes [1, 2, 3] ++ encodeTails [⟨Builder.ofList (encodeUint 2), ∅, false⟩] :=
+  drop_tailOffset_append (xs := [⟨Builder.ofList (encodeUint 1), ∅, false⟩]) (head := ∅)
+    (tail := Builder.ofList (encodeBytes [1, 2, 3]))
+    (ys := [⟨Builder.ofList (encodeUint 2), ∅, false⟩])
 
 -- end-to-end: prefix-decode the dynamic bytes value at its tail offset
 example : decodeBytesPrefix ((encodeParts demoParts).drop 96) = some ([1, 2, 3], 64) := by
@@ -240,49 +244,46 @@ example : encode specSamTy specSamVal = specSamBytes := by native_decide
 example : encode specFTy specFVal = specFBytes := by native_decide
 example : encode specGTy specGVal = specGBytes := by native_decide
 
-example : decode specSamTy (encode specSamTy specSamVal) = some specSamVal :=
-  roundtrip specSamTy (by native_decide) specSamVal (by native_decide)
+example : decodeStrict specSamTy (encode specSamTy specSamVal) = some specSamVal :=
+  decodeStrict_encode specSamTy (by native_decide) specSamVal (by native_decide)
 
-example : decode specFTy (encode specFTy specFVal) = some specFVal :=
-  roundtrip specFTy (by native_decide) specFVal (by native_decide)
+example : decodeStrict specFTy (encode specFTy specFVal) = some specFVal :=
+  decodeStrict_encode specFTy (by native_decide) specFVal (by native_decide)
 
--- the spec encodings validate, consuming exactly their length
-example : validate specSamTy specSamBytes = some specSamBytes.length := by native_decide
-example : validate specFTy specFBytes = some specFBytes.length := by native_decide
-example : validate specGTy specGBytes = some specGBytes.length := by native_decide
+-- the spec encodings are canonical (strictly decodable, no trailing garbage)
+example : IsCanonical specSamTy specSamBytes := by native_decide
+example : IsCanonical specFTy specFBytes := by native_decide
+example : IsCanonical specGTy specGBytes := by native_decide
 
 -- and are strictly decodable (checked via `.isSome` since the dependent
 -- return type has no `DecidableEq` instance)
-example : (decodeCanonical specSamTy specSamBytes).isSome = true := by native_decide
-example : (decodeCanonical specFTy specFBytes).isSome = true := by native_decide
-example : (decodeCanonical specGTy specGBytes).isSome = true := by native_decide
+example : (decodeStrict specSamTy specSamBytes).isSome = true := by native_decide
+example : (decodeStrict specFTy specFBytes).isSome = true := by native_decide
+example : (decodeStrict specGTy specGBytes).isSome = true := by native_decide
 
 -- the same instances via library theorems (no computation)
 
 example : IsCanonical specSamTy (encode specSamTy specSamVal) :=
   isCanonical_encode specSamTy (by native_decide) specSamVal (by native_decide)
 
-example : decodeCanonical specSamTy (encode specSamTy specSamVal) = some specSamVal :=
-  decodeCanonical_encode specSamTy (by native_decide) specSamVal (by native_decide)
+example : decodeStrict specSamTy (encode specSamTy specSamVal) = some specSamVal :=
+  decodeStrict_encode specSamTy (by native_decide) specSamVal (by native_decide)
 
 /-! ## C4: bounds are intrinsic, image characterization -/
 
 -- forward: a canonical buffer IS an encoding — no bound on the value side
-example : ∃ v, decode specSamTy specSamBytes = some v ∧
-    encode specSamTy v = specSamBytes :=
+example : ∃ v, encode specSamTy v = specSamBytes :=
   (isCanonical_iff specSamTy (by native_decide) specSamBytes (by native_decide)).mp
     (by unfold IsCanonical; native_decide)
 
 -- backward: canonicity of an encoding through the iff
 example : IsCanonical specSamTy (encode specSamTy specSamVal) :=
   (isCanonical_iff specSamTy (by native_decide) _ (by native_decide)).mpr
-    ⟨specSamVal,
-      roundtrip specSamTy (by native_decide) specSamVal (by native_decide),
-      rfl⟩
+    ⟨specSamVal, rfl⟩
 
 -- the strict roundtrip through the strict-decoder characterization
-example : decodeCanonical specSamTy (encode specSamTy specSamVal) = some specSamVal :=
-  (decodeCanonical_eq_some_iff specSamTy (by native_decide) _ specSamVal
+example : decodeStrict specSamTy (encode specSamTy specSamVal) = some specSamVal :=
+  (decodeStrict_eq_some_iff specSamTy (by native_decide) _ specSamVal
     (by native_decide)).mpr rfl
 
 /-! ## Canonical validation: negative vectors -/
@@ -310,29 +311,53 @@ def ncIntoHead : List UInt8 :=
 def ncMisaligned : List UInt8 :=
   encodeUint 0x41 ++ encodeUint 0x80 ++ encodeBytes [1] ++ encodeBytes [2]
 
--- the lenient decoder accepts all of these (the leniency gap)
-example : (decode ncTy ncSharedTail).isSome = true := by native_decide
-example : (decode ncTy ncSwapped).isSome = true := by native_decide
-example : (decode ncTy ncGap).isSome = true := by native_decide
-example : (decode ncTy ncIntoHead).isSome = true := by native_decide
+-- the strict decoder rejects all of them (offset words that violate the
+-- canonical layout: duplicate, swapped, gapped, head-pointing, misaligned)
+example : (decodeStrict ncTy ncSharedTail).isNone = true := by native_decide
+example : (decodeStrict ncTy ncSwapped).isNone = true := by native_decide
+example : (decodeStrict ncTy ncGap).isNone = true := by native_decide
+example : (decodeStrict ncTy ncIntoHead).isNone = true := by native_decide
+example : (decodeStrict ncTy ncMisaligned).isNone = true := by native_decide
 
--- the canonical validator and the strict decoder reject all of them
-example : validate ncTy ncSharedTail = none := by native_decide
-example : validate ncTy ncSwapped = none := by native_decide
-example : validate ncTy ncGap = none := by native_decide
-example : validate ncTy ncIntoHead = none := by native_decide
-example : validate ncTy ncMisaligned = none := by native_decide
-example : (decodeCanonical ncTy ncSharedTail).isNone = true := by native_decide
-example : (decodeCanonical ncTy ncSwapped).isNone = true := by native_decide
-example : (decodeCanonical ncTy ncGap).isNone = true := by native_decide
-example : (decodeCanonical ncTy ncIntoHead).isNone = true := by native_decide
-example : (decodeCanonical ncTy ncMisaligned).isNone = true := by native_decide
+-- trailing garbage: the strict decoder rejects it
+example : (decodeStrict specSamTy (specSamBytes ++ [0])).isNone = true := by native_decide
 
--- trailing garbage: the prefix validator accepts (reporting the canonical
--- prefix length), but the strict decoder rejects it
-example : validate specSamTy (specSamBytes ++ [0]) = some specSamBytes.length := by
+/-! ## The consumed count is structural
+
+`decode` reports how many bytes it consumed, so `decodeElem` advances the
+tail frontier in `O(1)` instead of measuring the cursors — the count is
+the encoding's length, and the remainder is untouched. -/
+
+-- a prefix decode through trailing data reports the encoding length
+example :
+    decode .bytes (encodeBytes [1, 2, 3] ++ [0xFF]) =
+      some (⟨[1, 2, 3], by decide⟩, 64, [0xFF]) := by native_decide
+
+example :
+    decode (.uint 8) (encode (.uint 8) ⟨7, by decide⟩ ++ [0xFF]) =
+      some (⟨7, by decide⟩, 32, [0xFF]) := by native_decide
+
+-- a compound value's count is its whole layout, head plus tails
+example :
+    (decode specSamTy (specSamBytes ++ [0xFF])).map (fun p => (p.2.1, p.2.2)) =
+      some (specSamBytes.length, [0xFF]) := by native_decide
+
+/-! ## Zero-head element types are rejected
+
+An element type occupying no head bytes (`()`, `T[0]`) would let a
+32-byte length word name arbitrarily many elements, with the element walk
+bounded by nothing.  Such array types are invalid, and `decode` rejects
+them before reading the length word. -/
+
+example : ¬ (Ty.array (.tuple [])).Valid := by decide
+example : ¬ (Ty.array (.fixedArray (.uint 8) 0)).Valid := by decide
+
+-- the element type itself stays valid — it is only its array that is not
+example : (Ty.tuple []).Valid := by decide
+
+-- a 32-byte buffer claiming 2^64 elements is rejected outright
+example : (decodeStrict (.array (.tuple [])) (encodeUint (2 ^ 64))).isNone = true := by
   native_decide
-example : (decodeCanonical specSamTy (specSamBytes ++ [0])).isNone = true := by native_decide
 
 /-! ## Packed ABI: primitive encodings -/
 
@@ -496,6 +521,34 @@ example : encodePacked (.tuple [.uint 8, .bool]) (⟨42, by decide⟩, (true, ()
     [42, 1] := by decide
 example : decodePacked (.uint 8) [42] = some ⟨42, by decide⟩ := by decide
 
+/-! ## Packed ABI: large scalar tuples (linear walk) -/
+
+/-- A replicated `uint8` tuple: `n` copies of `42`. -/
+def repU8 : (n : Nat) → TupleVal (List.replicate n (.uint 8))
+  | 0 => ()
+  | n + 1 => (⟨42, by decide⟩, repU8 n)
+
+-- Roundtrip a 1024-element flat scalar tuple in a single walk.  Every
+-- scalar primitive only ever touches its own component width (the
+-- take-based sufficiency check), so the walk is linear in the tuple
+-- length rather than quadratic in it.
+example : decodePacked (.tuple (List.replicate 1024 (.uint 8)))
+    (encodePacked (.tuple (List.replicate 1024 (.uint 8))) (repU8 1024)) =
+    some (repU8 1024) := by
+  apply roundtrip_packed_static
+  · native_decide
+  · native_decide
+
+-- Decode larger flat scalar tuples in a single walk.  With the old
+-- length-based primitives each step re-measured the whole remaining
+-- cursor (`O(k²)` total); the counted take-based check keeps every step
+-- bounded by the component's own width, so these finish in a single
+-- linear pass.
+#eval (decodePacked (.tuple (List.replicate 4096 (.uint 8)))
+    (encodePacked (.tuple (List.replicate 4096 (.uint 8))) (repU8 4096))).isSome  -- true
+#eval (decodePacked (.tuple (List.replicate 8192 (.uint 8)))
+    (encodePacked (.tuple (List.replicate 8192 (.uint 8))) (repU8 8192))).isSome  -- true
+
 /-!
 ## Human-readable ABI
 
@@ -541,8 +594,8 @@ theorem composite_valid : composite.Valid := by decide
 
 example : (encode composite compositeVal).length = 576 := by native_decide
 
-example : decode composite (encode composite compositeVal) = some compositeVal :=
-  roundtrip composite composite_valid _ (by native_decide)
+example : decodeStrict composite (encode composite compositeVal) = some compositeVal :=
+  decodeStrict_encode composite composite_valid _ (by native_decide)
 
 /-! ### Widths outside the spec are rejected
 
@@ -559,13 +612,21 @@ above).  `Ty` has no `DecidableEq`, so rejection is checked through
 #guard (Ty.parse "(uint8, bytes33)").isNone
 #guard (Ty.parse "uint7[]").isNone
 #guard (Ty.parse "(uint8, bytes32)[]").isSome
+-- an array whose element type occupies no head is rejected, though the
+-- element type parses on its own
+#guard (Ty.parse "()").isSome
+#guard (Ty.parse "()[]").isNone
+#guard (Ty.parse "uint8[0][]").isNone
+#guard (Ty.parse "uint8[0]").isSome
 
 /-! ### Tuple arrays: `(T₁, …, Tₙ)[]` and `(T₁, …, Tₙ)[k]` -/
 
 example : ty! "(address, uint256)[]" = .array (.tuple [.address, .uint 256]) := rfl
 example : ty! "(address, uint256)[2]" = .fixedArray (.tuple [.address, .uint 256]) 2 := rfl
 example : ty! "(bool)[][3]" = .fixedArray (.array (.tuple [.bool])) 3 := rfl
-example : ty! "()[]" = .array (.tuple []) := rfl
+-- `()[2]` is fine (the element count comes from the type), but `()[]` is not:
+-- see "Zero-head element types are rejected" above
+example : ty! "()[2]" = .fixedArray (.tuple []) 2 := rfl
 
 /-- A dynamic array of static structs — the shape of a Solidity `struct[]`. -/
 def structArray : Ty := ty! "(address, uint256)[]"
@@ -576,8 +637,8 @@ def structArrayVal : structArray.Val :=
   ⟨[(⟨0xAAAA, by decide⟩, (⟨1, by decide⟩, ())),
     (⟨0xBBBB, by decide⟩, (⟨2, by decide⟩, ()))], by decide⟩
 
-example : decode structArray (encode structArray structArrayVal) = some structArrayVal :=
-  roundtrip structArray structArray_valid _ (by native_decide)
+example : decodeStrict structArray (encode structArray structArrayVal) = some structArrayVal :=
+  decodeStrict_encode structArray structArray_valid _ (by native_decide)
 
 /-! ### `item!` — function/event/error signatures → call-data encoding -/
 
@@ -587,9 +648,9 @@ example :
   let item := item! "function transfer(address to, uint256 amount) returns (bool)"
   let t := item.inputsTy
   let v : t.Val := (⟨0xABCDEF, by decide⟩, (⟨1000, by decide⟩, ()))
-  decode t (encode t v) = some v
+  decodeStrict t (encode t v) = some v
 := by
-  intro item t v; apply roundtrip t (by native_decide) v (by native_decide)
+  intro item t v; apply decodeStrict_encode t (by native_decide) v (by native_decide)
 
 -- ERC-20 `balanceOf(address)` — single-argument function, view modifier
 
@@ -689,10 +750,22 @@ example :
   let v : t.Val :=
     (⟨[0x64, 0x61, 0x76, 0x65], by decide⟩, (true,
       (⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩, ())))
-  decode t (encode t v) = some v
+  decodeStrict t (encode t v) = some v
 := by
-  intro t v; apply roundtrip t (by native_decide) v (by native_decide)
+  intro t v; apply decodeStrict_encode t (by native_decide) v (by native_decide)
 
 end HumanReadable
+
+/-! ## Builder form (roadmap node 9) -/
+
+-- Materialization agrees with the legacy encoders.
+#eval (putUint 42).toList == encodeUint 42                      -- true
+#eval (putBytes [1, 2, 3]).toList == encodeBytes [1, 2, 3]      -- true
+
+example : (putUint 42).toList = encodeUint 42 := by native_decide
+example : (putBytes [1, 2, 3]).toList = encodeBytes [1, 2, 3] := by native_decide
+
+-- Builder composition: O(1) sequencing, materialized once.
+#eval (putUint 42 ++ putBool true ++ putBytes [1, 2, 3]).toList.length  -- 128
 
 end EvmAbi

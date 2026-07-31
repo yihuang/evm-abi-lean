@@ -120,4 +120,26 @@ theorem size_toUTF8_lt_of_decodeBytesPrefix {buf bs : List UInt8} {n : Nat} {s :
   rw [Binary.ByteArray.size_eq_toList_length, toUTF8_of_fromUTF8? hs]
   simpa [List.data_toByteArray] using length_lt_of_decodeBytesPrefix hp
 
+/-! ## Builder form (roadmap node 9)
+
+Dynamic `bytes` in builder form — the first composite encoder of the
+layer: `putBytes` sequences two builders (`O(1)`) and materializes via
+`toList` to `encodeBytes`.
+-/
+
+/-- Write dynamic `bytes`: the length word, then zero-padded data. -/
+def putBytes (bs : List UInt8) : Builder :=
+  putUint bs.length ++ Builder.ofList (pad32 bs)
+
+@[simp] theorem toList_putBytes (bs : List UInt8) :
+    (putBytes bs).toList = encodeBytes bs := by
+  simp [putBytes, encodeBytes]
+
+/-- Write a `string` as dynamic `bytes` over its UTF-8 encoding. -/
+def putString (s : String) : Builder := putBytes s.toUTF8.data.toList
+
+@[simp] theorem toList_putString (s : String) : (putString s).toList = encodeString s := by
+  simp [putString, encodeString]
+
+
 end EvmAbi

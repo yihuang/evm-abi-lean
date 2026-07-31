@@ -256,7 +256,13 @@ partial def parseTupleType (cs : List Char) : Option (Ty × List Char) := do
     let rest2 ← parseChar ')' rest1
     parseArraySuffix (.tuple tys) rest2
 
-/-- Parse optional array suffix: `[]` (dynamic) or `[N]` (fixed), or none. -/
+/-- Parse optional array suffix: `[]` (dynamic) or `[N]` (fixed), or none.
+
+The dynamic case rechecks `Ty.Valid`: a dynamic array needs an element
+type that occupies head bytes, so `()[]` and `uint8[0][]` are rejected
+here even though `()` and `uint8[0]` parse on their own.  Without the
+check a successful parse could yield an invalid type, which no codec
+theorem covers. -/
 partial def parseArraySuffix (ty : Ty) (cs : List Char) : Option (Ty × List Char) :=
   let cs' := skipWS cs
   match cs' with
@@ -265,7 +271,7 @@ partial def parseArraySuffix (ty : Ty) (cs : List Char) : Option (Ty × List Cha
     match rest' with
     | ']' :: rest'' =>
       -- dynamic array: T[]
-      parseArraySuffix (.array ty) rest''
+      if (Ty.array ty).Valid then parseArraySuffix (.array ty) rest'' else none
     | _ =>
       match parseNat rest' with
       | some (n, restNum) =>
