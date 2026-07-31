@@ -187,7 +187,7 @@ def decodePacked : (t : Ty) → List UInt8 → Option t.Val
   | .bytesN m, buf => match decodeBytesNPacked m buf with
     | some bs => if h : bs.length = m then some ⟨bs, h⟩ else none
     | none => none
-  | .fixedArray t n, buf => match t.IsStatic with
+  | .fixedArray t n, buf => match t.isStatic with
     | true => decodePackedElems t n buf
     | false => none
   | .tuple ts, buf => decodePackedTuple ts buf
@@ -206,7 +206,7 @@ end
 
 mutual
 /-- The packed encoding of a static type occupies exactly `packedSize t` bytes. -/
-theorem length_encodePacked : (t : Ty) → t.IsStatic = true → t.Valid → (v : t.Val) →
+theorem length_encodePacked : (t : Ty) → t.isStatic = true → t.Valid → (v : t.Val) →
     (encodePacked t v).length = t.packedSize
   | .uint m, hs, hv, ⟨n, _⟩ => by simp [encodePacked, encodeUintPacked, length_encodeBEU, packedSize]
   | .int m, hs, hv, ⟨i, _⟩ => by
@@ -219,9 +219,9 @@ theorem length_encodePacked : (t : Ty) → t.IsStatic = true → t.Valid → (v 
       rw [length_encodeBEU]
       simp [packedSize]
   | .bytesN m, hs, hv, ⟨bs, hbs⟩ => by simp [encodePacked, encodeBytesNPacked, packedSize, hbs]
-  | .bytes, hs, hv, v | .string, hs, hv, v | .array _, hs, hv, v => by simp [IsStatic] at hs
+  | .bytes, hs, hv, v | .string, hs, hv, v | .array _, hs, hv, v => by simp [isStatic] at hs
   | .fixedArray t n, hs, hv, ⟨vs, hvs⟩ => by
-      have hst : t.IsStatic = true := by simp only [IsStatic] at hs; exact hs
+      have hst : t.isStatic = true := by simp only [isStatic] at hs; exact hs
       have hvt : t.Valid := hv
       simp only [encodePacked, List.length_flatten]
       have hmap : ∀ (vs : List t.Val),
@@ -236,7 +236,7 @@ theorem length_encodePacked : (t : Ty) → t.IsStatic = true → t.Valid → (v 
           exact Nat.add_comm _ _
       rw [hmap, hvs, packedSize]
   | .tuple ts, hs, hv, vs => by
-      have hss : allStatic ts = true := by simp only [IsStatic] at hs; exact hs
+      have hss : allStatic ts = true := by simp only [isStatic] at hs; exact hs
       have hvts : AllValid ts := hv
       simp only [encodePacked, packedSize]
       exact length_encodePackedTuple ts hss hvts vs
@@ -340,7 +340,7 @@ theorem decodeBytesNPacked_append (bs : List UInt8) (h : bs.length = n) (rest : 
 /-- Element lists decode from their own padded-element encoding followed by
 a suffix — a direct consequence of the standard codec's static prefix
 roundtrip, since packed array elements *are* standard-encoded. -/
-theorem decodePackedElems_append (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid)
+theorem decodePackedElems_append (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
     (vs : List t.Val) (n : Nat) (hn : vs.length = n) (rest : List UInt8) :
     decodePackedElems t n ((vs.map (encode t)).flatten ++ rest) = some ⟨vs, hn⟩ := by
   induction vs generalizing n with
@@ -358,7 +358,7 @@ theorem decodePackedElems_append (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid
 mutual
 /-- **Static packed roundtrip, prefix form**: a static value decodes from the front
 of its own packed encoding followed by an arbitrary suffix. -/
-theorem decodePacked_encodePacked_append : (t : Ty) → t.IsStatic = true → t.Valid →
+theorem decodePacked_encodePacked_append : (t : Ty) → t.isStatic = true → t.Valid →
     (v : t.Val) → (rest : List UInt8) → decodePacked t (encodePacked t v ++ rest) = some v
   | .uint m, hs, hv, ⟨n, hn⟩, rest => by
       have hm : 0 < m := by have h := hv.1; omega
@@ -388,15 +388,15 @@ theorem decodePacked_encodePacked_append : (t : Ty) → t.IsStatic = true → t.
       rw [hdec]
       exact dif_pos hbs
   | .bytes, hs, _, _, _ | .string, hs, _, _, _ | .array _, hs, _, _, _ => by
-      simp [IsStatic] at hs
+      simp [isStatic] at hs
   | .fixedArray t n, hs, hv, ⟨vs, hvs⟩, rest => by
-      have hst : t.IsStatic = true := by simp only [IsStatic] at hs; exact hs
+      have hst : t.isStatic = true := by simp only [isStatic] at hs; exact hs
       have hvt : t.Valid := hv
       simp only [encodePacked, decodePacked, hst]
       have h := decodePackedElems_append t hst hvt vs n hvs rest
       simpa using h
   | .tuple ts, hs, hv, vs, rest => by
-      have hss : allStatic ts = true := by simp only [IsStatic] at hs; exact hs
+      have hss : allStatic ts = true := by simp only [isStatic] at hs; exact hs
       have hvts : AllValid ts := hv
       simp only [encodePacked, decodePacked]
       have h := decodePackedTuple_append ts hss hvts vs rest
@@ -425,7 +425,7 @@ end
 
 /-- **Static packed roundtrip**: every static type decodes its own packed encoding
 without any side condition. -/
-theorem roundtrip_packed_static (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid) (v : t.Val) :
+theorem roundtrip_packed_static (t : Ty) (hs : t.isStatic = true) (hv : t.Valid) (v : t.Val) :
     decodePacked t (encodePacked t v) = some v := by
   have h := decodePacked_encodePacked_append t hs hv v []
   rwa [List.append_nil] at h

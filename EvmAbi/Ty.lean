@@ -23,7 +23,7 @@ Two technical points shape this module:
   `Valid (uint 8)` would no longer be a `Prop` one can inhabit by
   `⟨by decide, by decide⟩`.  All list-quantifying companions therefore come
   as structurally-recursive mutual siblings: `Valid/AllValid`,
-  `Val/TupleVal`, `IsStatic/allStatic`, `headSize/headSizeSum`.
+  `Val/TupleVal`, `isStatic/allStatic`, `headSize/headSizeSum`.
 
 * **`Val` is `@[reducible]`** so the dependent matches in `encode`/`decode`
   see through the type index.  The dynamic-payload length bounds (every
@@ -126,16 +126,16 @@ type alone, embedded inline in any head it appears in.  `allStatic` is the
 structural list sibling. -/
 mutual
 /-- Staticness predicate. -/
-def IsStatic : Ty → Bool
+def isStatic : Ty → Bool
   | uint _ | int _ | bool | address | bytesN _ => true
   | bytes | string | array _ => false
-  | fixedArray t _ => t.IsStatic
+  | fixedArray t _ => t.isStatic
   | tuple ts => allStatic ts
 
 /-- Every type in the list is static. -/
 def allStatic : List Ty → Bool
   | [] => true
-  | t :: ts => t.IsStatic && allStatic ts
+  | t :: ts => t.isStatic && allStatic ts
 end
 
 /- The number of bytes a type occupies in the head section: for static
@@ -144,7 +144,7 @@ word.  `headSizeSum` is the structural list sibling. -/
 mutual
 /-- Head size of a type. -/
 def headSize : Ty → Nat
-  | fixedArray t n => if t.IsStatic then n * t.headSize else 32
+  | fixedArray t n => if t.isStatic then n * t.headSize else 32
   | tuple ts => if allStatic ts then headSizeSum ts else 32
   | _ => 32
 

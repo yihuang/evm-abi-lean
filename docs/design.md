@@ -106,9 +106,10 @@ auxiliary predicates/functions are defined alongside it:
 - **`Valid`** — size-parameter constraints (e.g., `uintM` requires `8∣M`,
   `8≤M≤256`).  Defined as a `Prop` with a `Decidable` instance.
 
-- **`IsStatic`** — whether the encoding size is fixed by the type.  Used by
-  the head/tail layout: static elements sit inline in the head; dynamic
-  elements contribute an offset word.
+- **`isStatic`** — whether the encoding size is fixed by the type (a `Bool`
+  predicate, lowercase per Lean convention).  Used by the head/tail layout:
+  static elements sit inline in the head; dynamic elements contribute an
+  offset word.
 
 - **`headSize`** — bytes occupied in the head section.  Static types take
   their full encoding size; dynamic types take 32 (the offset word).

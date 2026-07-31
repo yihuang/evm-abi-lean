@@ -31,7 +31,7 @@ For **static types** (no dynamic offsets) the total-length bound is
 dispensed with entirely:
 
 ```lean4
-theorem decode_static_append (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid)
+theorem decode_static_append (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
     (v : t.Val) (rest : List UInt8) : decode t (encode t v ++ rest) = some (v, rest)
 ```
 
@@ -84,7 +84,7 @@ general; only the static fragment is decodable, and its roundtrip is
 proved:
 
 ```lean4
-theorem roundtrip_packed_static (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid)
+theorem roundtrip_packed_static (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
     (v : t.Val) : decodePacked t (encodePacked t v) = some v
 ```
 
