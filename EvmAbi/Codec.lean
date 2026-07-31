@@ -817,7 +817,7 @@ theorem decodeElems_static_append (t : Ty) (hs : t.IsStatic = true) (hv : t.Vali
       rw [List.append_assoc]
       rw [show (put t w).toList = encode t w from rfl]
       rw [decodeElem_static_append t hs hv w (encodeHeads E (ws.map (partOf t)) ++ head) tails E]
-      simp only []
+      dsimp only []
       rw [ih ws.length rfl]
 termination_by 8 * sizeOf t + 2
 
@@ -840,7 +840,7 @@ theorem decodeTuple_static_append : (ts : List Ty) → allStatic ts = true → A
       rw [List.append_assoc]
       rw [show (put t v).toList = encode t v from rfl]
       rw [decodeElem_static_append t hst hvt v (encodeHeads E (partsOfTuple ts vs) ++ head) tails E]
-      simp only []
+      dsimp only []
       rw [decodeTuple_static_append ts hss hvs vs E head tails]
 termination_by ts => 8 * sizeOf ts + 3
 
@@ -886,7 +886,7 @@ theorem decode_static_append (t : Ty) (hs : t.IsStatic = true) (hv : t.Valid)
         length_encodeBytesN (by rw [hbs]; exact hv.2)
       simp only [encode, put, decode, toList_putBytesN]
       rw [hdec]
-      simp only []
+      dsimp only []
       rw [dif_pos hbs]
       rw [show (encodeBytesN bs ++ rest).drop 32 = rest from drop_append_of_length hlen]
   | bytes => simp [IsStatic] at hs
@@ -1030,12 +1030,12 @@ theorem decodeElem_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
     unfold decodeElem
     simp only [hs]
     rw [hnat]
-    simp only []
+    dsimp only []
     simp only [if_true]
     rw [show (encodeParts (xs ++ partOf t v :: zs) ++ rest).drop E =
         encode t v ++ (encodeTails zs ++ rest) from by rw [hE, hdropTail]]
     rw [hr]
-    simp only []
+    dsimp only []
     rw [htailLen]
     have htlen' : (encode t v ++ (encodeTails zs ++ rest)).length -
         (encodeTails zs ++ rest).length = (encode t v).length := by
@@ -1058,7 +1058,7 @@ theorem decodeElem_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
         (encodeTails (xs ++ partOf t v :: zs) ++ rest)) hb'
     simp only [decodeElem, hs]
     rw [hstatic, hr, htail0]
-    simp only []
+    dsimp only []
     simp only [Nat.add_zero]
     congr 1
     rw [← List.drop_drop, hstatic, drop_append_of_length hlen]
@@ -1109,11 +1109,11 @@ theorem decodeElems_roundtrip (t : Ty) (hv : t.Valid) (vs : List t.Val) (k : Nat
         rw [tailOffset_snoc (partOf t w) xs (ws.map (partOf t) ++ ys) E hE]
       have helem := decodeElem_roundtrip t hv w xs (ws.map (partOf t) ++ ys) off hoff E hE rest hwf hb
       rw [helem]
-      simp only []
+      dsimp only []
       rw [hre,
         ih (ws.length) rfl (xs ++ [partOf t w]) (off + t.headSize) hoff'
           (E + (partOf t w).tailSize) hE' hwf' hb']
-      simp only []
+      dsimp only []
       simp only [Option.some.injEq]
       apply Prod.ext
       · apply Subtype.ext
@@ -1171,11 +1171,11 @@ theorem decodeTuple_roundtrip : (ts : List Ty) → AllValid ts → (vs : TupleVa
         rw [tailOffset_snoc (partOf t v) xs (partsOfTuple ts vs ++ ys) E hE]
       have helem := decodeElem_roundtrip t hvt v xs (partsOfTuple ts vs ++ ys) off hoff E hE rest hwf hb
       rw [helem]
-      simp only []
+      dsimp only []
       rw [hre,
         decodeTuple_roundtrip ts hvs vs (xs ++ [partOf t v]) ys (off + t.headSize) hoff'
           (E + (partOf t v).tailSize) hE' rest hwf' hb']
-      simp only []
+      dsimp only []
       simp only [tailSizes, Nat.add_assoc]
       rfl
 termination_by ts => 8 * sizeOf ts + 3
@@ -1195,7 +1195,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
           (Nat.lt_of_lt_of_le hn (Nat.pow_le_pow_right (n := 2) (by decide) hv.2.1))
       simp only [encode, put, decode, toList_putUint]
       rw [hdec]
-      simp only []
+      dsimp only []
       rw [dif_pos hn]
       simp [length_encodeUint]
   | int m =>
@@ -1205,7 +1205,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
         decodeInt_append h0 hv.2.1 hi.1 hi.2 rest
       simp only [encode, put, decode, toList_putInt]
       rw [hdec]
-      simp only []
+      dsimp only []
       rw [dif_pos hi]
       simp [encodeInt, length_encodeUint]
   | bool =>
@@ -1218,7 +1218,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
         decodeAddress_append n rest hn
       simp only [encode, put, decode, toList_putAddress]
       rw [hdec]
-      simp only []
+      dsimp only []
       rw [dif_pos hn]
       simp [encodeAddress, length_encodeUint]
   | bytesN m =>
@@ -1229,7 +1229,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
         length_encodeBytesN (by rw [hbs]; exact hv.2)
       simp only [encode, put, decode, toList_putBytesN]
       rw [hdec]
-      simp only []
+      dsimp only []
       rw [dif_pos hbs]
       rw [show (encodeBytesN bs ++ rest).drop 32 = rest from drop_append_of_length hlen]
   | bytes =>
@@ -1294,7 +1294,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
           rw [show (encodeUint vs.length ++ (encodeParts (vs.map (partOf t)) ++ rest)).drop 32 =
               encodeParts (vs.map (partOf t)) ++ rest from drop_append_of_length (length_encodeUint _)]
           rw [hwalk]
-          simp only []
+          dsimp only []
           rw [htails]
   | fixedArray t n =>
       obtain ⟨vs, hvs⟩ := v
@@ -1323,7 +1323,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
       simp only [encode, put, decode]
       rw [← encodeParts]
       rw [hwalk]
-      simp only []
+      dsimp only []
       rw [htails]
   | tuple ts =>
       have hvts : AllValid ts := hv
@@ -1351,7 +1351,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
       simp only [encode, put, decode]
       rw [← encodeParts]
       rw [hwalk]
-      simp only []
+      dsimp only []
       rw [htails]
 termination_by 8 * sizeOf t
 end
@@ -1882,7 +1882,7 @@ theorem decodeStrict_encode (t : Ty) (hv : t.Valid) (v : t.Val)
   have hr := decode_roundtrip t hv v [] (by rwa [List.append_nil])
   rw [show decode t (encode t v) = decode t (encode t v ++ []) from by simp]
   rw [hr]
-  simp only []
+  dsimp only []
   rfl
 
 /-- The encoder's output is canonical. -/

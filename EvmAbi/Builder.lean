@@ -88,7 +88,7 @@ theorem toList_empty : (∅ : Builder).toList = [] := rfl
 
 @[simp] theorem toList_invariant (a : Builder) (rest : List UInt8) :
     a.toList ++ rest = a.apply rest := by
-  rw [toList, <- a.invariant]
+  rw [toList, ← a.invariant]
 
 @[simp] theorem length_apply (b : Builder) (rest : List UInt8) :
     (b.apply rest).length = b.toList.length + rest.length := by
