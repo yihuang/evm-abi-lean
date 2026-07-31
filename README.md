@@ -198,7 +198,7 @@ The proof is built in incremental layers, each reusable independently:
 | **5. Static primitives** | `Static` | Standalone codecs for `uintM`, `intM`, `bool`, `address`, `bytesN`; strict bool/bytesN decoders |
 | **6. Dynamic primitives** | `Dynamic` | Standalone codecs for `bytes`, `string`; prefix-tolerant decoder variant |
 | **7. Head/tail combinator** | `Parts` | The core ABI layout abstraction (`Part`, `encodeParts`, offset-correctness theorems); type-independent |
-| **8. Full codec** | `Codec` | `Ty`-indexed `encode` and the linear decoder `decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); roundtrip, soundness and bound-free static-delegation families; strict API `decodeStrict`/`IsCanonical` and the capstones |
+| **8. Full codec** | `Codec` + `Codec.Roundtrip` / `Codec.Sound` / `Codec.Strict` | `Ty`-indexed `encode` and the linear decoder `decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); bound-free static delegation in `Codec`; roundtrip and soundness families in their own files; strict API `decodeStrict`/`IsCanonical` and the capstones in `Codec.Strict` |
 | **9. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
 | **10. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
 | **11. Compile-time macros** | `HumanReadable.Meta` | `ty!`, `item!`, `params!` — parse string literals at elaboration time |

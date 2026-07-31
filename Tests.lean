@@ -6,6 +6,7 @@ import EvmAbi.Builder
 import EvmAbi.Static
 import EvmAbi.Dynamic
 import EvmAbi.Codec
+import EvmAbi.Codec.Strict
 import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.HumanReadable

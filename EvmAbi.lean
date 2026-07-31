@@ -6,6 +6,9 @@ import EvmAbi.Builder
 import EvmAbi.Static
 import EvmAbi.Dynamic
 import EvmAbi.Codec
+import EvmAbi.Codec.Roundtrip
+import EvmAbi.Codec.Sound
+import EvmAbi.Codec.Strict
 import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.HumanReadable
@@ -32,9 +35,11 @@ the historical build order, nodes 1–8):
                   `bytesN`, with roundtrips (list form)
 * `EvmAbi.Dynamic` — dynamic `bytes` / `string` with roundtrips, prefix decoder
 * `EvmAbi.Codec`   — `Ty`-indexed `encode` and the linear decoder `decode`
-                  (`Get2` walkers), with the roundtrip / soundness /
-                  static-delegation families and the strict API
-                  `IsCanonical` / `decodeStrict` (canonical buffers are
+                  (`Get2` walkers) plus the bound-free static delegation
+                  `decode_static_append`; the roundtrip / soundness /
+                  strict-API families live in `EvmAbi.Codec.Roundtrip` /
+                  `EvmAbi.Codec.Sound` / `EvmAbi.Codec.Strict`
+                  (`IsCanonical` / `decodeStrict`: canonical buffers are
                   exactly the image of `encode`)
 * `EvmAbi.Parts`   — head/tail combinator: `Part`, `encodeParts`, offset theorems
 * `EvmAbi.Packed`  — packed ABI (`abi.encodePacked`, Solidity's non-standard

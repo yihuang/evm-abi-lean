@@ -219,18 +219,21 @@ mechanism to delimit variable-length elements, so `decodePacked` returns
 
 ### 3.6 Decoder Proof Structure
 
-The decoder's theorems live in `Codec.lean` alongside the encoder:
+The decoder's theorems live in `Codec.lean` alongside the encoder; each
+theorem family is a self-contained `mutual` block, so the later families
+were moved to sibling modules: `Codec.Roundtrip`, `Codec.Sound`,
+`Codec.Strict`.
 
-| Section | Content |
-|---|---|
-| Encoder packages A/B | Head sizes, static encoding lengths, alignment (`encode_length_static`, `wf_map_partOf`) |
-| Package C | Appended-buffer read lemmas (`decodeUint_append`, …) and the layout lemmas `drop_headPartOf_static` |
-| Package D | Locating dynamic tails (`drop_tail_partOf_dynamic`, `natAt_offset_partOf_dynamic`) |
-| Decoder helpers | Head-size and word-recovery lemmas the decoder proofs need |
-| **Static delegation** | `decode_static_append` family — static types carry no offset words, so the roundtrips are bound-free |
-| **Roundtrip** | `decode_roundtrip` family — every encoding decodes back, leaving the suffix untouched |
-| **Soundness** | `decode_sound` family — the decoder only produces encodings |
-| **Strict API** | `decodeStrict`, `IsCanonical`, and the capstones |
+| Section | Module | Content |
+|---|---|---|
+| Encoder packages A/B | `Codec` | Head sizes, static encoding lengths, alignment (`encode_length_static`, `wf_map_partOf`) |
+| Package C | `Codec` | Appended-buffer read lemmas (`decodeUint_append`, …) and the layout lemmas `drop_headPartOf_static` |
+| Package D | `Codec` | Locating dynamic tails (`drop_tail_partOf_dynamic`, `natAt_offset_partOf_dynamic`) |
+| Decoder helpers | `Codec` | Head-size and word-recovery lemmas the decoder proofs need |
+| **Static delegation** | `Codec` | `decode_static_append` family — static types carry no offset words, so the roundtrips are bound-free |
+| **Roundtrip** | `Codec.Roundtrip` | `decode_roundtrip` family — every encoding decodes back, leaving the suffix untouched |
+| **Soundness** | `Codec.Sound` | `decode_sound` family — the decoder only produces encodings |
+| **Strict API** | `Codec.Strict` | `decodeStrict`, `IsCanonical`, and the capstones |
 
 **Static delegation** is the first milestone: for static types the frontier
 never moves and the tail cursor is never read, so the roundtrips hold

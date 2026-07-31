@@ -5,18 +5,17 @@ Working notes for AI agents editing this repository: Lean 4 ABI codec
 
 ## Architecture in one paragraph
 
-The library is a proof-first ABI codec in **one module** (`EvmAbi.Codec`):
-`encode` (Builder-based) materializes a `Ty.Val` to bytes; `decode` (the
-linear canonical decoder) reads canonical layouts back with two monotonic
-cursors threaded through the **`Get2` monad** (`EvmAbi.Builder`);
-`decodeStrict` is `decode` plus an exact-consumption check.  The `Get2`
-walkers (`decodeElem`, `decodeElems`, `decodeTuple`) are the heart; the
-roundtrip family (`decode_roundtrip`: encode ⇒ decode), soundness family
-(`decode_sound`: decode ⇒ encode) and bound-free static delegation
-(`decode_static_append`) are their theorems; `IsCanonical` /
-`decodeStrict` and the capstones (`isCanonical_iff`,
-`decodeStrict_eq_some_iff`) form the strict API.  `EvmAbi.Packed`
-(`decodePacked`) builds on `decode_static_append`.
+The library is a proof-first ABI codec: `encode` (Builder-based)
+materializes a `Ty.Val` to bytes; `decode` (the linear canonical decoder)
+reads canonical layouts back with two monotonic cursors threaded through
+the **`Get2` monad** (`EvmAbi.Builder`); `decodeStrict` is `decode` plus an
+exact-consumption check.  The `Get2` walkers (`decodeElem`, `decodeElems`,
+`decodeTuple`) are the heart; the roundtrip family
+(`decode_roundtrip`: encode ⇒ decode), soundness family (`decode_sound`:
+decode ⇒ encode) and bound-free static delegation (`decode_static_append`)
+are their theorems; `IsCanonical` / `decodeStrict` and the capstones
+(`isCanonical_iff`, `decodeStrict_eq_some_iff`) form the strict API.
+`EvmAbi.Packed` (`decodePacked`) builds on `decode_static_append`.
 
 ## Style rules
 
@@ -90,8 +89,12 @@ roundtrip family (`decode_roundtrip`: encode ⇒ decode), soundness family
 The migration is complete: the lenient `decode` family and the `validate`
 checker family are deleted; `decode` (the linear `Get2` decoder), its
 roundtrip / soundness / static-delegation families, and the strict API
-(`decodeStrict`, `IsCanonical`, capstones) are the only decoding stack,
-in the single module `EvmAbi.Codec`.  Remaining quirks to respect:
+(`decodeStrict`, `IsCanonical`, capstones) are the only decoding stack.
+`EvmAbi.Codec` holds the codec proper (defs, helper packages, static
+delegation); its theorem families live in `EvmAbi.Codec.Roundtrip` /
+`EvmAbi.Codec.Sound` / `EvmAbi.Codec.Strict` (each family is one self-
+contained `mutual` block, so the split is purely a file move).  Remaining
+quirks to respect:
 
 * `IsCanonical` is `(decodeStrict t buf).isSome = true` with an explicit
   `Decidable` instance — instance search does not unfold plain defs.
