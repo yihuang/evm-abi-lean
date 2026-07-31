@@ -521,6 +521,34 @@ example : encodePacked (.tuple [.uint 8, .bool]) (⟨42, by decide⟩, (true, ()
     [42, 1] := by decide
 example : decodePacked (.uint 8) [42] = some ⟨42, by decide⟩ := by decide
 
+/-! ## Packed ABI: large scalar tuples (linear walk) -/
+
+/-- A replicated `uint8` tuple: `n` copies of `42`. -/
+def repU8 : (n : Nat) → TupleVal (List.replicate n (.uint 8))
+  | 0 => ()
+  | n + 1 => (⟨42, by decide⟩, repU8 n)
+
+-- Roundtrip a 1024-element flat scalar tuple in a single walk.  Every
+-- scalar primitive only ever touches its own component width (the
+-- take-based sufficiency check), so the walk is linear in the tuple
+-- length rather than quadratic in it.
+example : decodePacked (.tuple (List.replicate 1024 (.uint 8)))
+    (encodePacked (.tuple (List.replicate 1024 (.uint 8))) (repU8 1024)) =
+    some (repU8 1024) := by
+  apply roundtrip_packed_static
+  · native_decide
+  · native_decide
+
+-- Decode larger flat scalar tuples in a single walk.  With the old
+-- length-based primitives each step re-measured the whole remaining
+-- cursor (`O(k²)` total); the counted take-based check keeps every step
+-- bounded by the component's own width, so these finish in a single
+-- linear pass.
+#eval (decodePacked (.tuple (List.replicate 4096 (.uint 8)))
+    (encodePacked (.tuple (List.replicate 4096 (.uint 8))) (repU8 4096))).isSome  -- true
+#eval (decodePacked (.tuple (List.replicate 8192 (.uint 8)))
+    (encodePacked (.tuple (List.replicate 8192 (.uint 8))) (repU8 8192))).isSome  -- true
+
 /-!
 ## Human-readable ABI
 

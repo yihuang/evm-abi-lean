@@ -72,9 +72,12 @@ def encodeBytesNPacked (bs : List UInt8) : List UInt8 := bs
 /-- Read a packed `uintM` from the front of the buffer.  Widths that are
 not byte-aligned are rejected: `encodeBEU (m / 8)` truncates them, so
 accepting them would let a lossy encode "roundtrip" (e.g. `uint12` of
-`4095` through one byte). -/
+`4095` through one byte).  The sufficiency check is *counted*, not
+measured: `(buf.take (m / 8)).length = m / 8` walks only the component's
+own width, so a packed walk never re-measures the remaining buffer
+(`List.length` on the whole cursor would be `O(remaining)` per step). -/
 def decodeUintPacked (m : Nat) (buf : List UInt8) : Option Nat :=
-  if 0 < m ∧ m % 8 = 0 ∧ buf.length ≥ m / 8 then some (decodeBEU (buf.take (m / 8))) else none
+  if 0 < m ∧ m % 8 = 0 ∧ (buf.take (m / 8)).length = m / 8 then some (decodeBEU (buf.take (m / 8))) else none
 
 def decodeIntPacked (m : Nat) (buf : List UInt8) : Option Int :=
   (decodeUintPacked m buf).map fun n =>
@@ -86,7 +89,7 @@ def decodeBoolPacked (buf : List UInt8) : Option Bool :=
 def decodeAddressPacked (buf : List UInt8) : Option Nat := decodeUintPacked 160 buf
 
 def decodeBytesNPacked (n : Nat) (buf : List UInt8) : Option (List UInt8) :=
-  if buf.length ≥ n then some (buf.take n) else none
+  if (buf.take n).length = n then some (buf.take n) else none
 
 /-! ## Helpers -/
 
@@ -312,11 +315,9 @@ theorem decodeUintPacked_append (m : Nat) (n : Nat) (hm : 0 < m) (h8 : 8 ∣ m) 
     decodeUintPacked m (encodeUintPacked m n ++ rest) = some n := by
   unfold decodeUintPacked encodeUintPacked
   have hlen : (encodeBEU (m / 8) n).length = m / 8 := length_encodeBEU _ _
-  have hge : (encodeBEU (m / 8) n ++ rest).length ≥ m / 8 := by
-    rw [List.length_append, hlen]; omega
   have htk : (encodeBEU (m / 8) n ++ rest).take (m / 8) = encodeBEU (m / 8) n :=
     take_append_of_length hlen
-  rw [if_pos ⟨hm, by omega, hge⟩, htk]
+  rw [if_pos ⟨hm, by omega, by rw [htk, hlen]⟩, htk]
   have hpow := pow_eq_256 m h8
   have hn' : n < 256 ^ (m / 8) := by rw [← hpow]; exact hn
   have := decodeBEU_encodeBEU hn'
@@ -381,7 +382,7 @@ theorem decodeAddressPacked_append (a : Nat) (h : a < 2 ^ 160) (rest : List UInt
 theorem decodeBytesNPacked_append (bs : List UInt8) (h : bs.length = n) (rest : List UInt8) :
     decodeBytesNPacked n (encodeBytesNPacked bs ++ rest) = some bs := by
   unfold decodeBytesNPacked encodeBytesNPacked
-  rw [if_pos (by rw [List.length_append]; omega), take_append_of_length h]
+  rw [if_pos (by rw [take_append_of_length h, h]), take_append_of_length h]
 
 /-! ## Static packed roundtrip -/
 
