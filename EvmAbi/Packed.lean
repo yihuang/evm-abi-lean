@@ -93,6 +93,35 @@ private theorem pow_eq_256 (m : Nat) (h8 : 8 ∣ m) : 2 ^ m = 256 ^ (m / 8) := b
     _ = (2 ^ 8) ^ (m / 8) := by rw [Nat.pow_mul]
     _ = 256 ^ (m / 8) := by rw [show (2 : Nat) ^ 8 = 256 by decide]
 
+/-- In the negative case of `encodeIntPacked`, the wrapped two's-complement
+magnitude `2 ^ m - (-i).toNat` fits its width and has its high bit set, so
+`decodeIntPacked` reads it back as the negative value. -/
+private theorem twoComp_neg_range {m : Nat} (hm : 0 < m) (i : Int) (hi : ¬ 0 ≤ i)
+    (habs : (-i).toNat ≤ 2 ^ (m - 1)) :
+    2 ^ m - (-i).toNat < 2 ^ m ∧ ¬ (2 ^ m - (-i).toNat : Nat) < 2 ^ (m - 1) := by
+  have hpos_abs : 0 < (-i).toNat := by
+    apply Nat.pos_of_ne_zero; intro hz
+    have hle0 : -i ≤ 0 := Int.toNat_eq_zero.mp hz; omega
+  have hpos_pow : 0 < 2 ^ m := by
+    have h := Nat.one_le_pow m 2 (by decide); omega
+  constructor
+  · apply Nat.sub_lt <;> assumption
+  · have h_pow_eq : 2 ^ m = 2 ^ (m - 1) + 2 ^ (m - 1) := by
+      calc
+        2 ^ m = 2 ^ ((m - 1) + 1) := by rw [Nat.sub_add_cancel (by omega : 1 ≤ m)]
+        _ = 2 ^ (m - 1) * 2 := by rw [Nat.pow_succ]
+        _ = 2 ^ (m - 1) + 2 ^ (m - 1) := by omega
+    have hle' : (-i).toNat ≤ 2 ^ m :=
+      Nat.le_trans habs (Nat.pow_le_pow_right (by decide) (by omega))
+    intro hlt
+    have hsum : 2 ^ m < 2 ^ (m - 1) + (-i).toNat := by
+      have htemp := Nat.add_lt_add_right hlt ((-i).toNat)
+      rw [Nat.sub_add_cancel hle'] at htemp
+      exact htemp
+    have hsum_le : 2 ^ (m - 1) + (-i).toNat ≤ 2 ^ m := by
+      rw [h_pow_eq]; exact Nat.add_le_add_left habs _
+    exact Nat.lt_irrefl _ (Nat.lt_of_lt_of_le hsum hsum_le)
+
 /- The exact-buffer primitive roundtrips are derived from the prefix-
 tolerant `_append` forms below with `rest := []`, so each read-back fact
 is proved exactly once. -/
@@ -271,35 +300,14 @@ theorem decodeIntPacked_append (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
   · have hpos_neg : 0 ≤ -i := by omega
     have heq_toNat : ((-i).toNat : Int) = -i := Int.toNat_of_nonneg hpos_neg
     have h_abs : (-i).toNat ≤ 2 ^ (m - 1) := by omega
-    have hpos_abs : 0 < (-i).toNat := by
-      apply Nat.pos_of_ne_zero; intro hz
-      have hle0 : -i ≤ 0 := Int.toNat_eq_zero.mp hz; omega
-    have hpos_pow : 0 < 2 ^ m := by
-      have h := Nat.one_le_pow m 2 (by decide); omega
-    have hn : 2 ^ m - (-i).toNat < 2 ^ m := by
-      apply Nat.sub_lt <;> assumption
+    have hrng := twoComp_neg_range (m := m) hm i hi h_abs
     have h_enc : encodeIntPacked m i = encodeUintPacked m (2 ^ m - (-i).toNat) := by
       rw [encodeIntPacked, if_neg hi]
     rw [h_enc, decodeIntPacked]
-    have hdec := decodeUintPacked_append m (2 ^ m - (-i).toNat) hm h8 hn rest
+    have hdec := decodeUintPacked_append m (2 ^ m - (-i).toNat) hm h8 hrng.1 rest
     rw [hdec]
     dsimp
     apply Option.some.inj
-    have h_not_lt : ¬ (2 ^ m - (-i).toNat : Nat) < 2 ^ (m - 1) := by
-      have h_pow_eq : 2 ^ m = 2 ^ (m - 1) + 2 ^ (m - 1) := by
-        calc
-          2 ^ m = 2 ^ ((m - 1) + 1) := by rw [Nat.sub_add_cancel (by omega : 1 ≤ m)]
-          _ = 2 ^ (m - 1) * 2 := by rw [Nat.pow_succ]
-          _ = 2 ^ (m - 1) + 2 ^ (m - 1) := by omega
-      intro hlt
-      have hsum : 2 ^ m < 2 ^ (m - 1) + (-i).toNat := by
-        have htemp := Nat.add_lt_add_right hlt ((-i).toNat)
-        have hle' : (-i).toNat ≤ 2 ^ m :=
-          Nat.le_trans h_abs (Nat.pow_le_pow_right (by decide) (by omega))
-        rw [Nat.sub_add_cancel hle'] at htemp; exact htemp
-      have hsum_le : 2 ^ (m - 1) + (-i).toNat ≤ 2 ^ m := by
-        rw [h_pow_eq]; exact Nat.add_le_add_left h_abs _
-      exact Nat.lt_irrefl _ (Nat.lt_of_lt_of_le hsum hsum_le)
     have h_not_lt_int' : ¬ (↑(2 ^ m - (-i).toNat) < (2 ^ (m - 1) : Int)) := by
       have hp : ((2 ^ (m - 1) : Nat) : Int) = (2 : Int) ^ (m - 1) := by
         simp [Int.natCast_pow]

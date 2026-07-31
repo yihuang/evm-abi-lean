@@ -397,14 +397,7 @@ theorem decodeInt_append {M : Nat} (hM0 : 0 < M) (hM : M ≤ 256)
     (rest : List UInt8) : decodeInt (encodeInt i ++ rest) = some i := by
   have hcast : ((2 ^ (M - 1) : Nat) : Int) = (2 : Int) ^ (M - 1) := Int.natCast_pow 2 (M - 1)
   rw [hcast] at hl hu
-  have hb : (2 : Int) ^ (M - 1) ≤ 2 ^ 255 := by
-    have e : (2 : Int) ^ (M - 1) = ((2 ^ (M - 1) : Nat) : Int) :=
-      (Int.natCast_pow 2 (M - 1)).symm
-    have hle : (2 : Nat) ^ (M - 1) ≤ 2 ^ 255 :=
-      Nat.pow_le_pow_right (n := 2) (by decide) (by omega)
-    rw [e]; exact Int.ofNat_le.mpr hle
-  have hub : i < (2 : Int) ^ 255 := by omega
-  have hlb : -(2 : Int) ^ 255 ≤ i := by omega
+  obtain ⟨hlb, hub⟩ := intM_bounds_lt_255 (M := M) hM0 hM hl hu
   by_cases hi : 0 ≤ i
   · have hn : i.toNat < 2 ^ 256 := by omega
     rw [encodeInt, if_pos hi, decodeInt, decodeUint_append _ rest hn, Option.map_some,

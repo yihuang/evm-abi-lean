@@ -51,18 +51,25 @@ def decodeInt (buf : List UInt8) : Option Int :=
   (decodeUint buf).map fun (n : Nat) =>
     if n < 2 ^ 255 then (n : Int) else (n : Int) - 2 ^ 256
 
-/-- **Roundtrip for `intM`**: decode after encode is the identity in range. -/
-theorem decodeInt_encodeInt {M : Nat} (hM0 : 0 < M) (hM : M ≤ 256)
+/-- The `M`-bit two's-complement value bounds fit inside the full
+256-bit range, so the `M`-bit encoding decodes back through the 256-bit
+word decoder.  Shared by `decodeInt_encodeInt` and `decodeInt_append`. -/
+theorem intM_bounds_lt_255 {M : Nat} (hM0 : 0 < M) (hM : M ≤ 256)
     (hl : -(2 ^ (M - 1)) ≤ i) (hu : i < 2 ^ (M - 1)) :
-    decodeInt (encodeInt i) = some i := by
+    -(2 : Int) ^ 255 ≤ i ∧ i < (2 : Int) ^ 255 := by
   have hb : (2 : Int) ^ (M - 1) ≤ 2 ^ 255 := by
     have e : (2 : Int) ^ (M - 1) = ((2 ^ (M - 1) : Nat) : Int) :=
       (Int.natCast_pow 2 (M - 1)).symm
     have hle : (2 : Nat) ^ (M - 1) ≤ 2 ^ 255 :=
       Nat.pow_le_pow_right (n := 2) (by decide) (by omega)
     rw [e]; exact Int.ofNat_le.mpr hle
-  have hub : i < (2 : Int) ^ 255 := by omega
-  have hlb : -(2 : Int) ^ 255 ≤ i := by omega
+  constructor <;> omega
+
+/-- **Roundtrip for `intM`**: decode after encode is the identity in range. -/
+theorem decodeInt_encodeInt {M : Nat} (hM0 : 0 < M) (hM : M ≤ 256)
+    (hl : -(2 ^ (M - 1)) ≤ i) (hu : i < 2 ^ (M - 1)) :
+    decodeInt (encodeInt i) = some i := by
+  obtain ⟨hlb, hub⟩ := intM_bounds_lt_255 (M := M) hM0 hM hl hu
   by_cases hi : 0 ≤ i
   · have hn : i.toNat < 2 ^ 256 := by omega
     rw [encodeInt, if_pos hi, decodeInt, decodeUint_encodeUint hn, Option.map_some,
