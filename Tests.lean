@@ -322,6 +322,43 @@ example : (decodeStrict ncTy ncMisaligned).isNone = true := by native_decide
 -- trailing garbage: the strict decoder rejects it
 example : (decodeStrict specSamTy (specSamBytes ++ [0])).isNone = true := by native_decide
 
+/-! ## The consumed count is structural
+
+`decode` reports how many bytes it consumed, so `decodeElem` advances the
+tail frontier in `O(1)` instead of measuring the cursors — the count is
+the encoding's length, and the remainder is untouched. -/
+
+-- a prefix decode through trailing data reports the encoding length
+example :
+    decode .bytes (encodeBytes [1, 2, 3] ++ [0xFF]) =
+      some (⟨[1, 2, 3], by decide⟩, 64, [0xFF]) := by native_decide
+
+example :
+    decode (.uint 8) (encode (.uint 8) ⟨7, by decide⟩ ++ [0xFF]) =
+      some (⟨7, by decide⟩, 32, [0xFF]) := by native_decide
+
+-- a compound value's count is its whole layout, head plus tails
+example :
+    (decode specSamTy (specSamBytes ++ [0xFF])).map (fun p => (p.2.1, p.2.2)) =
+      some (specSamBytes.length, [0xFF]) := by native_decide
+
+/-! ## Zero-head element types are rejected
+
+An element type occupying no head bytes (`()`, `T[0]`) would let a
+32-byte length word name arbitrarily many elements, with the element walk
+bounded by nothing.  Such array types are invalid, and `decode` rejects
+them before reading the length word. -/
+
+example : ¬ (Ty.array (.tuple [])).Valid := by decide
+example : ¬ (Ty.array (.fixedArray (.uint 8) 0)).Valid := by decide
+
+-- the element type itself stays valid — it is only its array that is not
+example : (Ty.tuple []).Valid := by decide
+
+-- a 32-byte buffer claiming 2^64 elements is rejected outright
+example : (decodeStrict (.array (.tuple [])) (encodeUint (2 ^ 64))).isNone = true := by
+  native_decide
+
 /-! ## Packed ABI: primitive encodings -/
 
 -- uint8: 1 byte
@@ -547,13 +584,21 @@ above).  `Ty` has no `DecidableEq`, so rejection is checked through
 #guard (Ty.parse "(uint8, bytes33)").isNone
 #guard (Ty.parse "uint7[]").isNone
 #guard (Ty.parse "(uint8, bytes32)[]").isSome
+-- an array whose element type occupies no head is rejected, though the
+-- element type parses on its own
+#guard (Ty.parse "()").isSome
+#guard (Ty.parse "()[]").isNone
+#guard (Ty.parse "uint8[0][]").isNone
+#guard (Ty.parse "uint8[0]").isSome
 
 /-! ### Tuple arrays: `(T₁, …, Tₙ)[]` and `(T₁, …, Tₙ)[k]` -/
 
 example : ty! "(address, uint256)[]" = .array (.tuple [.address, .uint 256]) := rfl
 example : ty! "(address, uint256)[2]" = .fixedArray (.tuple [.address, .uint 256]) 2 := rfl
 example : ty! "(bool)[][3]" = .fixedArray (.array (.tuple [.bool])) 3 := rfl
-example : ty! "()[]" = .array (.tuple []) := rfl
+-- `()[2]` is fine (the element count comes from the type), but `()[]` is not:
+-- see "Zero-head element types are rejected" above
+example : ty! "()[2]" = .fixedArray (.tuple []) 2 := rfl
 
 /-- A dynamic array of static structs — the shape of a Solidity `struct[]`. -/
 def structArray : Ty := ty! "(address, uint256)[]"

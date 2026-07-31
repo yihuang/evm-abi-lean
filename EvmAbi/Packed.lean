@@ -162,7 +162,7 @@ def decodePackedElems (t : Ty) : (n : Nat) → List UInt8 →
   | 0, _ => some ⟨[], rfl⟩
   | n + 1, buf => match decode t buf with
     | none => none
-    | some (v, _) => match decodePackedElems t n (buf.drop t.headSize) with
+    | some (v, _, _) => match decodePackedElems t n (buf.drop t.headSize) with
       | none => none
       | some ⟨vs, h⟩ => some ⟨v :: vs, by simp [List.length_cons, h]⟩
 

@@ -19,9 +19,11 @@ theorem decodeStrict_encode (t : Ty) (hv : t.Valid) (v : t.Val)
 ```
 
 `decode` is the linear canonical decoder in *prefix form*: it returns the
-value together with the untouched remainder, so nested components are
-prefixes of their parent's buffer (`decode t (encode t v ++ rest) =
-some (v, rest)`).
+value together with the number of bytes it consumed and the untouched
+remainder, so nested components are prefixes of their parent's buffer
+(`decode t (encode t v ++ rest) = some (v, (encode t v).length, rest)`).
+The count is computed structurally, never by measuring the buffers, which
+is what lets the walk advance its tail frontier in `O(1)` per component.
 
 Injectivity of `encode` is an immediate corollary (`encode_of_decodeStrict`):
 if two values encode to the same buffer, decoding that buffer recovers
@@ -32,7 +34,8 @@ dispensed with entirely:
 
 ```lean4
 theorem decode_static_append (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
-    (v : t.Val) (rest : List UInt8) : decode t (encode t v ++ rest) = some (v, rest)
+    (v : t.Val) (rest : List UInt8) :
+    decode t (encode t v ++ rest) = some (v, t.headSize, rest)
 ```
 
 No `sorry`.  All types (`uintM`, `intM`, `bool`, `address`, `bytesM`, `bytes`, `string`,
