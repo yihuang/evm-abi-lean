@@ -42,26 +42,71 @@ The payload primitives need their bytes as a list — that is what a
 `bytes`/`string`/`bytesN` value *is* — but only their own bytes, not the
 buffer's.  `windowList` extracts exactly the window. -/
 
+/-- Walk `i` down from `stop` to `off`, consing `ba[i-1]!` onto `acc`: the
+result is `[ba[off], …, ba[stop-1]] ++ acc`.  Every read is in bounds
+because the caller passes `stop ≤ ba.size`. -/
+def windowList.loop (ba : ByteArray) (off : Nat) (i : Nat) (acc : List UInt8) : List UInt8 :=
+  if i > off then windowList.loop ba off (i - 1) (ba[i - 1]! :: acc) else acc
+termination_by i
+
 /-- The `len` bytes at `off`, as a list, without converting the rest of the
-buffer.
+buffer.  The window is walked by index — `ba[i]!` — so no boxed-array
+intermediate is built: the list is the only allocation.
 
 The end is clamped to the buffer.  That is not just tidiness: `len` comes
-off the wire — it is a length word an attacker chooses — and
-`ByteArray.extract` sizes its copy from the range it is given, so an
-unclamped `off + len` asks the allocator for up to `2 ^ 256` bytes.  `take`
-clamps on the list side, so the specification is unchanged. -/
+off the wire — it is a length word an attacker chooses — and a window that
+ran past the buffer would index out of bounds.  `take` clamps on the list
+side, so the specification is unchanged. -/
 def windowList (ba : ByteArray) (off len : Nat) : List UInt8 :=
-  (ba.extract off (min (off + len) ba.size)).data.toList
+  windowList.loop ba off (min (off + len) ba.size) []
+
+/-- The loop accumulates exactly the window: `[ba[off], …, ba[i-1]] ++ acc`.
+The `stop` bound is carried so every `ba[j]!` read is in bounds. -/
+theorem windowList.loop_eq (ba : ByteArray) (off : Nat) (stop : Nat)
+    (hstop : stop ≤ ba.size) :
+    ∀ (i : Nat) (_hi : i ≤ stop) (acc : List UInt8),
+      windowList.loop ba off i acc = (ba.data.toList.drop off).take (i - off) ++ acc := by
+  intro i
+  induction i with
+  | zero =>
+      intro hi acc
+      unfold windowList.loop
+      simp
+  | succ i ih =>
+      intro hi acc
+      by_cases h : i + 1 > off
+      · have hi' : i ≤ stop := by omega
+        have hi_off : i + 1 - off = (i - off) + 1 := by omega
+        have hlt : i - off < (ba.data.toList.drop off).length := by
+          rw [List.length_drop, ← ByteArray.size_eq_toList_length]
+          omega
+        have hb : i < ba.size := by omega
+        have hlen : ba.data.toList.length = ba.size := (ByteArray.size_eq_toList_length ba).symm
+        have hget : ba[i]! = (ba.data.toList.drop off)[i - off] := by
+          rw [getElem!_pos ba i hb, List.getElem_drop (i := off) (j := i - off) (h := hlt)]
+          change ba.data.toList[i]'(by omega) = ba.data.toList[off + (i - off)]'(by omega)
+          congr 1
+          omega
+        unfold windowList.loop
+        simp [h, hi_off]
+        rw [ih hi' (ba[i]! :: acc)]
+        rw [List.take_succ_eq_append_getElem hlt]
+        simp [hget]
+      · have hoff : i + 1 ≤ off := by omega
+        unfold windowList.loop
+        simp [h, Nat.sub_eq_zero_of_le hoff]
 
 @[simp] theorem windowList_eq (ba : ByteArray) (off len : Nat) :
     windowList ba off len = (ba.data.toList.drop off).take len := by
-  rw [windowList, ByteArray.data_extract, Array.toList_extract]
+  rw [windowList]
   have hlen : ba.data.toList.length = ba.size := (ByteArray.size_eq_toList_length ba).symm
+  have hstop : min (off + len) ba.size ≤ ba.size := Nat.min_le_right _ _
+  rw [windowList.loop_eq ba off (min (off + len) ba.size) hstop _ (Nat.le_refl _) [],
+    List.append_nil]
   rcases Nat.le_total (off + len) ba.size with h | h
-  · rw [show min (off + len) ba.size = off + len by omega]
-    simp [List.extract]
+  · rw [show min (off + len) ba.size = off + len by omega,
+      show (off + len) - off = len by omega]
   · rw [show min (off + len) ba.size = ba.size by omega]
-    simp only [List.extract]
     rw [List.take_of_length_le (by rw [List.length_drop]; omega),
       List.take_of_length_le (by rw [List.length_drop]; omega)]
 
@@ -69,6 +114,13 @@ def windowList (ba : ByteArray) (off len : Nat) : List UInt8 :=
 theorem drop_drop_ba (ba : ByteArray) (off k : Nat) :
     (ba.data.toList.drop off).drop k = ba.data.toList.drop (off + k) := by
   rw [List.drop_drop, Nat.add_comm]
+
+/-- The length of a clamped window is arithmetic — `min len (ba.size - off)`
+— so a decode can check that a `len`-byte payload fits without building the
+list (a list build is the value itself, not the check). -/
+@[simp] theorem take_length_drop_ba (ba : ByteArray) (off len : Nat) :
+    ((ba.data.toList.drop off).take len).length = min len (ba.size - off) := by
+  rw [List.length_take, List.length_drop, ← ByteArray.size_eq_toList_length]
 
 /-! ## primitives at an offset
 
@@ -123,11 +175,14 @@ theorem decodeBytesNBA_eq (n : Nat) (ba : ByteArray) (off : Nat) :
   simp only [decodeBytesNBA, windowList_eq, decodeBytesN, List.take_take, Nat.min_self]
 
 /-- Dynamic `bytes` at an offset: the length word, then the payload and its
-padding as windows. -/
+padding as windows.  The length check is arithmetic, not a list build: a
+clamped window at `off + 32` has exactly `len` bytes iff
+`min len (ba.size - (off + 32)) = len`, so the payload list is constructed
+once (for the value), not once for a length check and again for the value. -/
 def decodeBytesPrefixBA (ba : ByteArray) (off : Nat) : Option (List UInt8 × Nat) :=
   (natAtBA ba off).bind fun len =>
     let pad := (32 - len % 32) % 32
-    if (windowList ba (off + 32) len).length = len ∧
+    if min len (ba.size - (off + 32)) = len ∧
        windowList ba (off + 32 + len) pad = List.replicate pad 0 then
       some (windowList ba (off + 32) len, 32 + len + pad)
     else none
@@ -135,7 +190,7 @@ def decodeBytesPrefixBA (ba : ByteArray) (off : Nat) : Option (List UInt8 × Nat
 theorem decodeBytesPrefixBA_eq (ba : ByteArray) (off : Nat) :
     decodeBytesPrefixBA ba off = decodeBytesPrefix (ba.data.toList.drop off) := by
   rw [decodeBytesPrefixBA, decodeBytesPrefix, natAtBA_eq]
-  simp only [windowList_eq, drop_drop_ba, Nat.add_assoc]
+  simp only [windowList_eq, drop_drop_ba, take_length_drop_ba, Nat.add_assoc]
 
 /-! ## the reader
 

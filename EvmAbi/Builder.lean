@@ -155,6 +155,13 @@ def empty : Builder := ⟨.empty, 0, rfl⟩
 /-- A literal byte list. -/
 def ofList (bs : List UInt8) : Builder := ⟨.bytes bs, bs.length, rfl⟩
 
+/-- A literal byte list whose length is already known.  `ofList` measures
+the list; this variant takes the measurement, so a caller that needs the
+length anyway — a `bytes` value's length word, say — walks the list once
+instead of twice.  The size cache is only honest because `h` is there. -/
+def ofListLen (bs : List UInt8) (len : Nat) (h : len = bs.length) : Builder :=
+  ⟨.bytes bs, len, h⟩
+
 /-- A contiguous chunk, kept as-is. -/
 def chunk (ba : ByteArray) : Builder := ⟨.chunk ba, ba.size, ByteArray.size_eq_toList_length ba⟩
 
@@ -176,6 +183,8 @@ def toList (b : Builder) : List UInt8 := b.chunks.toList
 
 @[simp] theorem toList_empty : (∅ : Builder).toList = [] := rfl
 @[simp] theorem toList_ofList (bs : List UInt8) : (Builder.ofList bs).toList = bs := rfl
+@[simp] theorem toList_ofListLen (bs : List UInt8) (len : Nat) (h : len = bs.length) :
+    (Builder.ofListLen bs len h).toList = bs := rfl
 @[simp] theorem toList_chunk (ba : ByteArray) : (Builder.chunk ba).toList = ba.data.toList := rfl
 @[simp] theorem toList_zeros (n : Nat) : (Builder.zeros n).toList = List.replicate n 0 := rfl
 @[simp] theorem toList_append (a b : Builder) : (a ++ b).toList = a.toList ++ b.toList := rfl

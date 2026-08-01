@@ -128,9 +128,13 @@ layer: `putBytes` sequences two builders (`O(1)`) and materializes via
 -/
 
 /-- Write dynamic `bytes`: the length word, the data, then the padding as
-a `zeros` run — the padding is never materialised. -/
+a `zeros` run — the padding is never materialised.  The length is measured
+once and handed to `ofListLen`, so the payload list is walked once, not
+twice. -/
 def putBytes (bs : List UInt8) : Builder :=
-  putUint bs.length ++ Builder.ofList bs ++ Builder.zeros ((32 - bs.length % 32) % 32)
+  let len := bs.length
+  putUint len ++ Builder.ofListLen bs len (by rfl) ++
+    Builder.zeros ((32 - len % 32) % 32)
 
 @[simp] theorem toList_putBytes (bs : List UInt8) :
     (putBytes bs).toList = encodeBytes bs := by
