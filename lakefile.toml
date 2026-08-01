@@ -13,6 +13,10 @@ globs = ["EvmAbi", "EvmAbi.+"]
 [[lean_lib]]
 name = "Tests"
 
+[[lean_exe]]
+name = "bench"
+root = "Bench"
+
 [[require]]
 name = "binary"
 git = "https://github.com/yihuang/lean-binary.git"

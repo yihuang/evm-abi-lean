@@ -505,8 +505,13 @@ theorem take_32_eq_encodeUint_of_natAt (buf : List UInt8) (i : Nat) (n : Nat)
   · next hl =>
     rw [Option.map_some, Option.some.injEq] at h
     subst h
-    show _ = UInt256.toBEBytes (UInt256.ofNat (UInt256.ofBEBytes _).toNat)
-    rw [UInt256.ofNat_toNat, UInt256.toBEBytes_ofBEBytes hl]
+    have hc :
+        UInt256.toBEBytes (UInt256.ofNat (UInt256.ofBEBytes ((buf.drop (32 * i)).take 32)).toNat) =
+          (buf.drop (32 * i)).take 32 := by
+      exact (congrArg UInt256.toBEBytes
+        (UInt256.ofNat_toNat (UInt256.ofBEBytes ((buf.drop (32 * i)).take 32)))).trans
+        (UInt256.toBEBytes_ofBEBytes hl)
+    simpa [encodeUint, bytesOfWord] using hc.symm
   · contradiction
 
 /- The soundness theorems in both directions need the inverse of the
@@ -706,14 +711,27 @@ def decodeElem (t : Ty) : Get2 t.Val := ⟨fun head tails E =>
 termination_by (sizeOf t, 1)
 
 /-- Read `k` consecutive canonical elements as a `Get2` program, walking
-the head from the head cursor and the tails from the tail cursor. -/
+the head from the head cursor and the tails from the tail cursor.
+
+Static element types take a direct loop (no `Get2` bind/pure closures per
+element): each element is read in place from the head cursor with
+`decode`.  Dynamic elements keep the monadic shape (`decodeElem` checks
+the offset word against the frontier and reads from the tails). -/
 def decodeElems (t : Ty) (k : Nat) : Get2 ({ vs : List t.Val // vs.length = k }) :=
   match k with
   | 0 => pure ⟨[], rfl⟩
-  | k + 1 => do
-      let v ← decodeElem t
-      let ⟨vs, h⟩ ← decodeElems t k
-      pure ⟨v :: vs, by simp [List.length_cons, h]⟩
+  | k + 1 => match t.isStatic with
+      | true => ⟨fun head tails E =>
+          match decode t head with
+          | none => none
+          | some (v, _, rest) => match (decodeElems t k).run rest tails E with
+              | none => none
+              | some r => some ⟨⟨v :: r.val.val, by simp [List.length_cons, r.val.property]⟩,
+                  r.head, r.tails, r.frontier⟩⟩
+      | false => do
+          let v ← decodeElem t
+          let ⟨vs, h⟩ ← decodeElems t k
+          pure ⟨v :: vs, by simp [List.length_cons, h]⟩
 termination_by (sizeOf t, k + 2)
 
 /-- Read a canonical tuple as a `Get2` program, walking the head and
@@ -775,11 +793,11 @@ theorem decodeElems_static_append (t : Ty) (hs : t.isStatic = true) (hv : t.Vali
   | cons w ws ih =>
       have hk' : k = ws.length + 1 := by rw [← hk, List.length_cons]
       subst hk'
-      simp only [List.map_cons, decodeElems, Get2.bind_run, Get2.pure_run]
+      simp only [List.map_cons, decodeElems, hs]
       rw [partOf_static t w hs, encodeHeads_cons_static]
       rw [List.append_assoc]
       rw [show (put t w).toList = encode t w from rfl]
-      rw [decodeElem_static_append t hs hv w (encodeHeads E (ws.map (partOf t)) ++ head) tails E]
+      rw [decode_static_append t hs hv w (encodeHeads E (ws.map (partOf t)) ++ head)]
       dsimp only []
       rw [ih ws.length rfl]
 termination_by 8 * sizeOf t + 2
@@ -889,6 +907,19 @@ theorem decode_static_append (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
         decodeTuple_static_append ts hss hvts v (headSizeSum ts) rest rest]
 termination_by 8 * sizeOf t
 end
+
+/-- A static element's encoding sits at its head offset, so `decode`
+reads it in place from the layout, reporting the standard count. -/
+theorem decode_static_at_offset (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
+    (v : t.Val) (xs zs : List Part) (rest : List UInt8) (off : Nat) (hoff : off = headSizes xs) :
+    decode t ((encodeParts (xs ++ partOf t v :: zs) ++ rest).drop off) =
+      some (v, t.headSize, (encodeParts (xs ++ partOf t v :: zs) ++ rest).drop (off + t.headSize)) := by
+  rw [← List.drop_drop]
+  rw [drop_head_partOf_static t hs v xs zs rest off hoff]
+  rw [drop_append_of_length (encode_length_static t hs hv v)]
+  rw [decode_static_append t hs hv v
+    (encodeHeads (headSizes (xs ++ (partOf t v :: zs)) + tailSizes xs) zs ++
+      (encodeTails (xs ++ (partOf t v :: zs)) ++ rest))]
 
 /-- The tail size of a static component's part is zero. -/
 theorem tailSize_partOf_static (t : Ty) (v : t.Val) (h : t.isStatic = true) :

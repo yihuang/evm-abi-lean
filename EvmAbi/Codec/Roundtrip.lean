@@ -151,45 +151,86 @@ theorem decodeElems_roundtrip (t : Ty) (hv : t.Valid) (vs : List t.Val) (k : Nat
   | cons w ws ih =>
       have hk' : k = ws.length + 1 := by rw [← hk, List.length_cons]
       subst hk'
-      simp only [List.map_cons, decodeElems, Get2.bind_run, Get2.pure_run]
-      simp only [List.map_cons] at hwf hb hE
-      simp only [List.append_assoc, List.cons_append] at hwf hb hE ⊢
-      have hre : xs ++ (partOf t w :: (ws.map (partOf t) ++ ys)) =
-          ((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys := by
-        simp [List.append_assoc]
-      have hwf' : WF (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) := by
-        rwa [← hre]
-      have hb' : (encodeParts (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) ++ rest).length <
-          2 ^ 256 := by
-        rwa [← hre]
-      have hoff' : off + t.headSize = headSizes (xs ++ [partOf t w]) := by
-        rw [headSizes_snoc_partOf t hv w xs off hoff]
-      have hE' : E + (partOf t w).tailSize =
-          tailOffset ((xs ++ [partOf t w]) ++ ws.map (partOf t) ++ ys)
+      cases hs : t.isStatic
+      · -- dynamic element: the monadic walk
+        simp only [List.map_cons, decodeElems, Get2.bind_run, Get2.pure_run, hs]
+        simp only [List.map_cons] at hwf hb hE
+        simp only [List.append_assoc, List.cons_append] at hwf hb hE ⊢
+        have hre : xs ++ (partOf t w :: (ws.map (partOf t) ++ ys)) =
+            ((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys := by
+          simp [List.append_assoc]
+        have hwf' : WF (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) := by
+          rwa [← hre]
+        have hb' : (encodeParts (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) ++ rest).length <
+            2 ^ 256 := by
+          rwa [← hre]
+        have hoff' : off + t.headSize = headSizes (xs ++ [partOf t w]) := by
+          rw [headSizes_snoc_partOf t hv w xs off hoff]
+        have hE' : E + (partOf t w).tailSize =
+            tailOffset ((xs ++ [partOf t w]) ++ ws.map (partOf t) ++ ys)
+              (xs ++ [partOf t w]).length := by
+          rw [← hre]
+          rw [tailOffset_snoc (partOf t w) xs (ws.map (partOf t) ++ ys) E hE]
+        have helem := decodeElem_roundtrip t hv w xs (ws.map (partOf t) ++ ys) off hoff E hE rest hwf hb
+        rw [helem]
+        dsimp only []
+        rw [hre,
+          ih (ws.length) rfl (xs ++ [partOf t w]) (off + t.headSize) hoff'
+            (E + (partOf t w).tailSize) hE' hwf' hb']
+        dsimp only []
+        simp only [Option.some.injEq]
+        apply Get2.Result.ext
+        · apply Subtype.ext
+          rfl
+        · rw [show off + t.headSize + ws.length * t.headSize =
+              off + (ws.length + 1) * t.headSize from by
+            rw [Nat.add_mul, Nat.one_mul]
+            ac_rfl]
+        · rw [show E + (partOf t w).tailSize + tailSizes (List.map (partOf t) ws) =
+              E + tailSizes (partOf t w :: List.map (partOf t) ws) from by
+            simp [tailSizes, Nat.add_assoc]]
+        · rw [show E + (partOf t w).tailSize + tailSizes (List.map (partOf t) ws) =
+              E + tailSizes (partOf t w :: List.map (partOf t) ws) from by
+            simp [tailSizes, Nat.add_assoc]]
+      · -- static element: read in place, frontier unchanged
+        simp only [List.map_cons, decodeElems, hs]
+        simp only [List.map_cons] at hwf hb hE
+        simp only [List.append_assoc, List.cons_append] at hwf hb hE ⊢
+        have hre : xs ++ (partOf t w :: (ws.map (partOf t) ++ ys)) =
+            ((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys := by
+          simp [List.append_assoc]
+        have hwf' : WF (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) := by
+          rwa [← hre]
+        have hb' : (encodeParts (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) ++ rest).length <
+            2 ^ 256 := by
+          rwa [← hre]
+        have hoff' : off + t.headSize = headSizes (xs ++ [partOf t w]) := by
+          rw [headSizes_snoc_partOf t hv w xs off hoff]
+        have hE'' : E = tailOffset (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys)
             (xs ++ [partOf t w]).length := by
-        rw [← hre]
-        rw [tailOffset_snoc (partOf t w) xs (ws.map (partOf t) ++ ys) E hE]
-      have helem := decodeElem_roundtrip t hv w xs (ws.map (partOf t) ++ ys) off hoff E hE rest hwf hb
-      rw [helem]
-      dsimp only []
-      rw [hre,
-        ih (ws.length) rfl (xs ++ [partOf t w]) (off + t.headSize) hoff'
-          (E + (partOf t w).tailSize) hE' hwf' hb']
-      dsimp only []
-      simp only [Option.some.injEq]
-      apply Get2.Result.ext
-      · apply Subtype.ext
-        rfl
-      · rw [show off + t.headSize + ws.length * t.headSize =
-            off + (ws.length + 1) * t.headSize from by
-          rw [Nat.add_mul, Nat.one_mul]
-          ac_rfl]
-      · rw [show E + (partOf t w).tailSize + tailSizes (List.map (partOf t) ws) =
-            E + tailSizes (partOf t w :: List.map (partOf t) ws) from by
-          simp [tailSizes, Nat.add_assoc]]
-      · rw [show E + (partOf t w).tailSize + tailSizes (List.map (partOf t) ws) =
-            E + tailSizes (partOf t w :: List.map (partOf t) ws) from by
-          simp [tailSizes, Nat.add_assoc]]
+          rw [← hre]
+          rw [← tailOffset_snoc (partOf t w) xs (ws.map (partOf t) ++ ys) E hE]
+          simp [tailSize_partOf_static t w hs]
+        have hd := decode_static_at_offset t hs hv w xs (ws.map (partOf t) ++ ys) rest off hoff
+        rw [hd]
+        dsimp only []
+        rw [hre,
+          ih (ws.length) rfl (xs ++ [partOf t w]) (off + t.headSize) hoff' E hE'' hwf' hb']
+        dsimp only []
+        simp only [Option.some.injEq]
+        apply Get2.Result.ext
+        · apply Subtype.ext
+          rfl
+        · rw [show off + t.headSize + ws.length * t.headSize =
+              off + (ws.length + 1) * t.headSize from by
+            rw [Nat.add_mul, Nat.one_mul]
+            ac_rfl]
+        · rw [show E + tailSizes (List.map (partOf t) ws) =
+              E + tailSizes (partOf t w :: List.map (partOf t) ws) from by
+            simp [tailSizes, tailSize_partOf_static t w hs]]
+        · rw [show E + tailSizes (List.map (partOf t) ws) =
+              E + tailSizes (partOf t w :: List.map (partOf t) ws) from by
+            simp [tailSizes, tailSize_partOf_static t w hs]]
 termination_by 8 * sizeOf t + 2
 
 /-- **Roundtrip, tuples**: a canonical tuple reads back from its own

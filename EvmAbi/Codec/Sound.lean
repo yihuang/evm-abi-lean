@@ -332,54 +332,77 @@ theorem decodeElems_sound (t : Ty) (hv : t.Valid) (vs : List t.Val) (k : Nat)
   | cons w ws ih =>
       have hk' : k = ws.length + 1 := by rw [← hk, List.length_cons]
       subst hk'
-      simp only [List.map_cons, decodeElems, Get2.bind_run, Get2.pure_run] at h ⊢
-      cases he : (decodeElem t).run head tails E with
-      | none => simp only [he] at h; contradiction
-      | some p =>
-          obtain ⟨v, head0, tails0, E0⟩ := p
-          simp only [he] at h
-          cases hi : (decodeElems t ws.length).run head0 tails0 E0 with
-          | none => simp only [hi] at h; contradiction
-          | some q =>
-              obtain ⟨⟨ws', hws'⟩, head1, tails1, E1⟩ := q
-              simp only [hi] at h
-              have hpair := Option.some.inj h
-              have hvs' : v :: ws' = w :: ws := congrArg (fun p => p.val.val) hpair
-              have hhd1 : head1 = head' := congrArg (fun p => p.head) hpair
-              have htl1 : tails1 = tails' := congrArg (fun p => p.tails) hpair
-              injection hvs' with hv hws''
-              subst hv
-              subst hws''
-              have hE1 : E1 = E' := congrArg (fun p => p.frontier) hpair
-              rw [hhd1, htl1, hE1] at hi
-              have hih : head0 = encodeHeads E0 (ws'.map (partOf t)) ++ head' ∧
-                  tails0 = encodeTails (ws'.map (partOf t)) ++ tails' ∧
-                  E' = E0 + tailSizes (ws'.map (partOf t)) :=
-                ih ws'.length hws' E0 head0 tails0 hi
-              cases hs0 : t.isStatic
-              · have hsf : t.isStatic = false := hs0
+      cases hs : t.isStatic
+      · -- dynamic element: the monadic walk
+        simp only [List.map_cons, decodeElems, Get2.bind_run, Get2.pure_run, hs] at h ⊢
+        cases he : (decodeElem t).run head tails E with
+        | none => simp only [he] at h; contradiction
+        | some p =>
+            obtain ⟨v, head0, tails0, E0⟩ := p
+            simp only [he] at h
+            cases hi : (decodeElems t ws.length).run head0 tails0 E0 with
+            | none => simp only [hi] at h; contradiction
+            | some q =>
+                obtain ⟨⟨ws', hws'⟩, head1, tails1, E1⟩ := q
+                simp only [hi] at h
+                have hpair := Option.some.inj h
+                have hvs' : v :: ws' = w :: ws := congrArg (fun p => p.val.val) hpair
+                have hhd1 : head1 = head' := congrArg (fun p => p.head) hpair
+                have htl1 : tails1 = tails' := congrArg (fun p => p.tails) hpair
+                injection hvs' with hv hws''
+                subst hv
+                subst hws''
+                have hE1 : E1 = E' := congrArg (fun p => p.frontier) hpair
+                rw [hhd1, htl1, hE1] at hi
+                have hih : head0 = encodeHeads E0 (ws'.map (partOf t)) ++ head' ∧
+                    tails0 = encodeTails (ws'.map (partOf t)) ++ tails' ∧
+                    E' = E0 + tailSizes (ws'.map (partOf t)) :=
+                  ih ws'.length hws' E0 head0 tails0 hi
                 obtain ⟨hhead, htail, hE0'⟩ :=
-                  decodeElem_sound_dynamic t hv v head tails E hsf he
+                  decodeElem_sound_dynamic t hv v head tails E hs he
                 refine ⟨?_, ?_, ?_⟩
                 · rw [hhead, hih.1, hE0']
-                  rw [partOf_dynamic t v hsf, encodeHeads_cons_dynamic]
+                  rw [partOf_dynamic t v hs, encodeHeads_cons_dynamic]
                   simp [Part.tailSize]
                 · rw [htail, hih.2.1]
-                  rw [partOf_dynamic t v hsf, encodeTails_cons_dynamic, List.append_assoc]
+                  rw [partOf_dynamic t v hs, encodeTails_cons_dynamic, List.append_assoc]
                   rfl
                 · rw [hih.2.2, hE0']
                   simp [tailSizes, Nat.add_assoc]
-              · have hst : t.isStatic = true := hs0
-                obtain ⟨hhead, htl0, hE0⟩ :=
-                  decodeElem_sound_static t hv v head tails E hst he
+      · -- static element: read in place, frontier unchanged
+        simp only [List.map_cons, decodeElems, hs] at h ⊢
+        cases hd : decode t head with
+        | none => simp only [hd] at h; contradiction
+        | some p =>
+            obtain ⟨v, c, rest0⟩ := p
+            simp only [hd] at h
+            cases hi : (decodeElems t ws.length).run rest0 tails E with
+            | none => simp only [hi] at h; contradiction
+            | some q =>
+                obtain ⟨⟨ws', hws'⟩, head1, tails1, E1⟩ := q
+                simp only [hi] at h
+                have hpair := Option.some.inj h
+                have hvs' : v :: ws' = w :: ws := congrArg (fun p => p.val.val) hpair
+                have hhd1 : head1 = head' := congrArg (fun p => p.head) hpair
+                have htl1 : tails1 = tails' := congrArg (fun p => p.tails) hpair
+                injection hvs' with hv hws''
+                subst hv
+                subst hws''
+                have hE1 : E1 = E' := congrArg (fun p => p.frontier) hpair
+                rw [hhd1, htl1, hE1] at hi
+                have hih : rest0 = encodeHeads E (ws'.map (partOf t)) ++ head' ∧
+                    tails = encodeTails (ws'.map (partOf t)) ++ tails' ∧
+                    E' = E + tailSizes (ws'.map (partOf t)) :=
+                  ih ws'.length hws' E rest0 tails hi
+                have hsnd := decode_sound t hv v head rest0 c hd
                 refine ⟨?_, ?_, ?_⟩
-                · rw [hhead, hih.1, hE0]
-                  rw [partOf_static t v hst, encodeHeads_cons_static, List.append_assoc]
+                · rw [← hsnd.1, hih.1]
+                  rw [partOf_static t v hs, encodeHeads_cons_static, List.append_assoc]
                   rfl
-                · rw [← htl0, hih.2.1]
-                  rw [partOf_static t v hst, encodeTails_cons_static]
-                · rw [hih.2.2, hE0]
-                  simp [tailSizes, tailSize_partOf_static t v hst]
+                · rw [hih.2.1]
+                  rw [partOf_static t v hs, encodeTails_cons_static]
+                · rw [hih.2.2]
+                  simp [tailSizes, tailSize_partOf_static t v hs]
 termination_by 8 * sizeOf t + 2
 
 /-- **Soundness, tuples**: a canonical tuple that reads back has consumed

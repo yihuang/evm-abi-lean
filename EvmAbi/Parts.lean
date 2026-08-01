@@ -82,7 +82,16 @@ def putTails : List Part → Builder
   | ⟨_, _, false⟩ :: ps => putTails ps
   | ⟨_, tail, true⟩ :: ps => tail ++ putTails ps
 
-/-- Full tuple builder: the head section followed by the tails. -/
+/-- Full tuple builder: the head section followed by the tails.
+
+The composition materializes each dynamic tail twice (`putHeads`
+computes `tail.toList.length` for the offset words, then `toList`
+materializes it again).  An earlier single-materialization form that
+materialized every tail up front measured ~30% slower on dynamic arrays:
+holding all tails live at once roughly doubles peak memory and GC
+pressure versus the transient size pass, so the classical composition
+stays.  Removing the second pass for real needs a size-carrying
+`Builder`/`Part` (or a `ByteArray` payload), not eager materialization. -/
 def putParts (ps : List Part) : Builder :=
   putHeads (headSizes ps) ps ++ putTails ps
 
@@ -147,7 +156,7 @@ theorem encodeTails_cons_dynamic (head tail : Builder) (ys : List Part) :
 
 theorem length_encodeParts (ps : List Part) :
     (encodeParts ps).length = headSizes ps + tailSizes ps := by
-  simp [encodeParts, putParts]
+  rw [encodeParts_unfold, List.length_append, length_encodeHeads, length_encodeTails]
 
 theorem headSizes_append (xs ys : List Part) :
     headSizes (xs ++ ys) = headSizes xs + headSizes ys := by
