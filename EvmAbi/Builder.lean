@@ -180,10 +180,14 @@ its buffer in advance, and why the offset words the ABI layout computes from
 
 /-! ## word primitive -/
 
-/-- Write one 32-byte EVM word, big-endian. -/
-def putWord (w : UInt256) : Builder := ofList (bytesOfWord w)
+/-- Write one 32-byte EVM word, big-endian.  A `chunk`, not a `bytes` leaf:
+`UInt256.toBEByteArray` writes the word straight into a `ByteArray` (and
+`Binary.Fast` gives it eight bytes per bignum operation), so no 32-cell
+cons list is allocated per word — and ABI encodings are mostly words. -/
+def putWord (w : UInt256) : Builder := chunk (UInt256.toBEByteArray w)
 
-@[simp] theorem toList_putWord (w : UInt256) : (putWord w).toList = bytesOfWord w := rfl
+@[simp] theorem toList_putWord (w : UInt256) : (putWord w).toList = bytesOfWord w :=
+  UInt256.toList_toBEByteArray w
 
 /-! ## execution -/
 
