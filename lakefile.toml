@@ -21,5 +21,5 @@ root = "Bench"
 
 [[require]]
 name = "binary"
-git = "https://github.com/mmsqe/lean-endianness.git"
-rev = "4ac885b0561a06661b67ad3dfdafb52d65a0b460"
+git = "https://github.com/yihuang/lean-binary.git"
+rev = "main"
