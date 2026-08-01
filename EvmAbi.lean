@@ -10,6 +10,7 @@ import EvmAbi.Codec.Roundtrip
 import EvmAbi.Codec.Sound
 import EvmAbi.Codec.Strict
 import EvmAbi.Codec.ByteArray
+import EvmAbi.ValBA
 import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.HumanReadable

@@ -4,6 +4,7 @@ import EvmAbi.Dynamic
 import EvmAbi.Align
 import EvmAbi.Word
 import EvmAbi.Parts
+import EvmAbi.ValBA
 
 namespace EvmAbi
 
@@ -49,6 +50,63 @@ def partsOfTuple : (ts : List Ty) → TupleVal ts → List Part
 termination_by ts => (sizeOf ts, 2)
 end
 
+/-! ## the `ValBA` encoder
+
+The same layout over packed values: `putBA` is `put` with the payload
+clauses replaced by `chunk` leaves, so `run` emits a memcpy per payload
+and never walks a length.  (A full `toList_putBA` agreement — `putBA`
+denotes `put` of the `ValBA.toList` denotation, so the `List UInt8`
+theorems transport — is the natural next step; the decoder side already
+has it.) -/
+
+/-- Write dynamic `bytes` from a packed payload: the length word (its size
+is cached — no list walk), the payload as a `chunk`, and the padding as a
+`zeros` run. -/
+def putBytesBA (bs : ByteArray) : Builder :=
+  putUint bs.size ++ Builder.chunk bs ++ Builder.zeros ((32 - bs.size % 32) % 32)
+
+@[simp] theorem toList_putBytesBA (bs : ByteArray) :
+    (putBytesBA bs).toList = encodeBytes bs.data.toList := by
+  simp [putBytesBA, encodeBytes, pad32, ← Binary.ByteArray.size_eq_toList_length, List.append_assoc]
+
+/-- Write fixed-size `bytesN` from a packed payload. -/
+def putBytesNBA (bs : ByteArray) : Builder :=
+  Builder.chunk bs ++ Builder.zeros (32 - bs.size)
+
+@[simp] theorem toList_putBytesNBA (bs : ByteArray) :
+    (putBytesNBA bs).toList = encodeBytesN bs.data.toList := by
+  simp [putBytesNBA, encodeBytesN, ← Binary.ByteArray.size_eq_toList_length]
+
+mutual
+/-- ABI encoder over packed values: same layout as `put`, `chunk` leaves
+for the payloads. -/
+def putBA : (t : Ty) → ValBA t → Builder
+  | .uint _, ⟨n, _⟩ => putUint n
+  | .int _, ⟨i, _⟩ => putInt i
+  | .bool, b => putBool b
+  | .address, ⟨n, _⟩ => putAddress n
+  | .bytesN _, ⟨bs, _⟩ => putBytesNBA bs
+  | .bytes, ⟨bs, _⟩ => putBytesBA bs
+  | .string, ⟨s, _⟩ => putString s
+  | .array t, ⟨vs, _⟩ => putUint vs.length ++ putParts (vs.map (partOfBA t))
+  | .fixedArray t _, ⟨vs, _⟩ => putParts (vs.map (partOfBA t))
+  | .tuple ts, vs => putParts (partsOfTupleBA ts vs)
+termination_by t => (sizeOf t, 0)
+
+/-- A packed value seen as a head/tail part. -/
+def partOfBA (t : Ty) (v : ValBA t) : Part :=
+  match t.isStatic with
+  | true => ⟨putBA t v, ∅, false⟩
+  | false => ⟨∅, putBA t v, true⟩
+termination_by (sizeOf t, 1)
+
+/-- A packed tuple value seen as a list of parts. -/
+def partsOfTupleBA : (ts : List Ty) → TupleValBA ts → List Part
+  | [], _ => []
+  | t :: ts, (v, vs) => partOfBA t v :: partsOfTupleBA ts vs
+termination_by ts => (sizeOf ts, 2)
+end
+
 /-- ABI encoder (type-indexed): the materialization of `put`.  This is the
 *specification* — `List UInt8` is the type the proofs are stated over —
 and it is not what you run; see `encodeByteArray`. -/
@@ -75,6 +133,9 @@ theorem encodeByteArray_eq (t : Ty) (v : t.Val) :
     (encodeByteArray t v).size = (encode t v).length := by
   rw [encodeByteArray, Builder.size_run, Builder.size_eq_length_toList]
   rfl
+
+def encodeByteArrayBA (t : Ty) (v : ValBA t) : ByteArray := (putBA t v).run
+
 
 /-! ## helper lemmas -/
 

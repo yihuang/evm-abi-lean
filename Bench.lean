@@ -31,6 +31,16 @@ so the builder only pays off in compiled code.
 open EvmAbi
 open EvmAbi.Ty
 
+/-- A `bytes` payload as a packed `ByteArray` (the `ValBA` value family). -/
+def mkBytesBA (n : Nat) : ByteArray :=
+  (List.replicate n 7).toByteArray
+
+def mkBytesBA256 : {bs : ByteArray // bs.size < 2 ^ 256} := ⟨mkBytesBA 256, by native_decide⟩
+
+/-- A flat `bytes[]` of packed payloads. -/
+def flatValBA (n : Nat) (h : n < 2 ^ 256) : {vs : List (ValBA .bytes) // vs.length < 2 ^ 256} :=
+  ⟨List.replicate n mkBytesBA256, by simpa using h⟩
+
 /-- A `bytes` value of `n` bytes. -/
 def mkBytes (n : Nat) (h : n < 2 ^ 256) : Ty.Val .bytes :=
   ⟨List.replicate n 7, by simpa using h⟩
@@ -82,6 +92,20 @@ def benchDecode (label : String) (ba : ByteArray) : IO Unit := do
   timeIt "fast  decodeStrictBA       " (fun _ =>
     if (decodeStrictBA flatTy ba).isSome then ba.size else 0)
 
+def benchValBA (n : Nat) (h : n < 2 ^ 256) : IO Unit := do
+  let v := flatVal n h
+  let vba := flatValBA n h
+  let ba := encodeByteArray flatTy v
+  IO.println s!"-- {n} elements ({ba.size} bytes)"
+  timeIt "decodeStrictBA (List)  " (fun _ =>
+    if (decodeStrictBA flatTy ba).isSome then ba.size else 0)
+  timeIt "decodeStrictBAVal (BA) " (fun _ =>
+    if (decodeStrictBAVal flatTy ba).isSome then ba.size else 0)
+  timeIt "encodeByteArray (List) " (fun _ => (encodeByteArray flatTy v).size)
+  timeIt "encodeByteArrayBA (BA) " (fun _ => (encodeByteArrayBA flatTy vba).size)
+  IO.println s!"  agree: {(encodeByteArrayBA flatTy vba) == (encodeByteArray flatTy v)} ∧ {(decodeStrictBAVal flatTy ba).isSome == (decodeStrictBA flatTy ba).isSome}" 
+
+/-- A `bytes` value of `n` bytes, packed. -/
 def main : IO Unit := do
   IO.println "== flat bytes[], 256-byte elements (constant factor) =="
   benchTy "-- 500 elements"  flatTy (flatVal 500 (by decide))
@@ -101,3 +125,6 @@ def main : IO Unit := do
   benchDecode "-- 2000 elements" (encodeByteArray flatTy (flatVal 2000 (by decide)))
   IO.println s!"agree(flat)   = {(encode flatTy v).toByteArray == encodeByteArray flatTy v}"
   IO.println s!"agree(nested) = {(encode (nest 20) w).toByteArray == encodeByteArray (nest 20) w}"
+  IO.println "== ValBA (packed payloads) vs Val (List payloads) =="
+  benchValBA 500 (by decide)
+  benchValBA 2000 (by decide)

@@ -461,28 +461,30 @@ values, and the `decreasing_tactic` discharges every goal.
 
 ## 6. Future Work
 
-### ByteArray Decoder
+### Runtime Value Family (`ValBA`) — done
 
-Both directions now have a verified `ByteArray` path — the encoder in
-§3.7, the decoder in `EvmAbi.Codec.ByteArray`, where `GetBA` is `Get2` with
-the two cursors as naturals into one shared buffer.  Every definition is
-paired with an agreement lemma under `off ↦ ba.data.toList.drop off`
-(`decodeBA_eq`, `decodeElemBA_eq`, `decodeElemsBA_eq`, `decodeTupleBA_eq`,
-`decodeStrictBA_eq`), so the roundtrip, soundness and capstone families
-transport rather than being reproved.  Measured 2.9x on `bytes[]`.
+The decoder still reads payloads through `windowList`, which copies a
+field's bytes into a `List UInt8` because that is what `Ty.Val .bytes`
+is.  `EvmAbi.ValBA` is the value family with packed payloads
+(`ValBA .bytes = {bs : ByteArray // …}`), and `EvmAbi.Codec.ByteArray`
+and `EvmAbi.Codec` write their runtime walkers against it:
+`decodeStrictBAVal` decodes with one `extract` (a memcpy) per payload
+instead of ~two allocations per byte, and `encodeByteArrayBA` emits a
+`chunk` memcpy instead of a per-byte push and never walks a length.
 
-Two things are worth knowing before touching that module.  The `array`
-clause of both decoders matches *dependently* on its length word — the
-`some k` branch needs the match equation for the `Ty.Val` bound — so
-neither scrutinee can be rewritten in place; `decode_array_pos` / `_none`
-resolve the match against a known word first.  And windowed reads must
-clamp to the buffer, because the length is attacker-chosen and
-`ByteArray.extract` sizes its copy from the range it is given.
+`ValBA.toList` maps every packed value to its `Ty.Val` denotation, and
+the decoder agreement family (`decodeBAVal_eq`, `decodeElemBAVal_eq`, …,
+`decodeStrictBAVal_eq`) says every `ValBA` decode is the `…BA` decode
+under that map, so the `List` capstones transport by one rewrite.  The
+encoder side has the defs (`putBA` / `encodeByteArrayBA`) and is
+byte-identical to the spec (checked by the benchmark); a full
+`toList_putBA` agreement is the natural next step.
 
-What remains is below the codec: `decodeBA` still reads payloads through
-`windowList`, which copies the field's bytes into a list because that is
-what a `bytes` value is.  Making `Ty.Val`'s payloads `ByteArray` would
-remove the last copy, at the cost of a different value family.
+Measured on flat `bytes[]` (500/2000 elements, same machine): decode
+1118/4436 µs → **82/338 µs** (≈13×, at parity with go-ethereum's
+reflection decoder); encode 618/2507 µs → **283/1173 µs**.  The two
+value families are one value family materialized two ways, like `encode`
+and `encodeByteArray`.
 
 ### Faster Word Encoding — done, upstream
 
