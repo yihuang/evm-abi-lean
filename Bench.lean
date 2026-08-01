@@ -3,7 +3,7 @@ import EvmAbi
 /-!
 # Bench
 
-A benchmark for the executable encoder (`EvmAbi.Encode`) against the
+A benchmark for the executable encoder (`encodeByteArray`) against the
 specification encoder (`EvmAbi.Codec`).  Build and run with
 
 ```bash

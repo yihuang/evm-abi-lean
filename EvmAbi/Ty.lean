@@ -23,7 +23,7 @@ Two technical points shape this module:
   `Valid (uint 8)` would no longer be a `Prop` one can inhabit by
   `⟨by decide, by decide⟩`.  All list-quantifying companions therefore come
   as structurally-recursive mutual siblings: `Valid/AllValid`,
-  `Val/TupleVal`, `IsStatic/allStatic`, `headSize/headSizeSum`.
+  `Val/TupleVal`, `isStatic/allStatic`, `headSize/headSizeSum`.
 
 * **`Val` is `@[reducible]`** so the dependent matches in `encode`/`decode`
   see through the type index.  The dynamic-payload length bounds (every
@@ -62,18 +62,61 @@ inductive Ty where
 
 namespace Ty
 
+/-! ## Staticness and head sizes -/
+
+/- A type is *static* when its encoding has a fixed size determined by the
+type alone, embedded inline in any head it appears in.  `allStatic` is the
+structural list sibling. -/
+mutual
+/-- Staticness predicate. -/
+def isStatic : Ty → Bool
+  | uint _ | int _ | bool | address | bytesN _ => true
+  | bytes | string | array _ => false
+  | fixedArray t _ => t.isStatic
+  | tuple ts => allStatic ts
+
+/-- Every type in the list is static. -/
+def allStatic : List Ty → Bool
+  | [] => true
+  | t :: ts => t.isStatic && allStatic ts
+end
+
+/- The number of bytes a type occupies in the head section: for static
+types the full encoding size, for dynamic types the 32 bytes of the offset
+word.  `headSizeSum` is the structural list sibling. -/
+mutual
+/-- Head size of a type. -/
+def headSize : Ty → Nat
+  | fixedArray t n => if t.isStatic then n * t.headSize else 32
+  | tuple ts => if allStatic ts then headSizeSum ts else 32
+  | _ => 32
+
+/-- Sum of the head sizes of a list of types. -/
+def headSizeSum : List Ty → Nat
+  | [] => 0
+  | t :: ts => t.headSize + headSizeSum ts
+end
+
 /-! ## Validity -/
 
 /- Spec-level validity of a type: size parameters in range, and every
 sub-type valid.  Codec theorems assume it; invalid types still encode, but
 nothing is promised.  `AllValid` is the structural list sibling (see the
-module doc). -/
+module doc).
+
+The array clause also demands that the element type occupy at least one
+byte of head (`0 < t.headSize`).  A zero-head element type — `()`, or
+`T[0]` — is degenerate: its array's whole encoding is the length word, so
+a 32-byte buffer would name arbitrarily many elements and the decoder's
+element walk would not be bounded by the buffer at all.  The specification
+has no such types (Solidity has neither unit tuples nor zero-length fixed
+arrays), and the condition lets `decode` reject them up front. -/
 mutual
 /-- Validity of a single type. -/
 def Valid : Ty → Prop
   | uint m | int m => 8 ≤ m ∧ m ≤ 256 ∧ m % 8 = 0
   | bytesN m => 1 ≤ m ∧ m ≤ 32
-  | array t => t.Valid
+  | array t => t.Valid ∧ 0 < t.headSize
   | fixedArray t _ => t.Valid
   | tuple ts => AllValid ts
   | _ => True
@@ -83,6 +126,10 @@ def AllValid : List Ty → Prop
   | [] => True
   | t :: ts => t.Valid ∧ AllValid ts
 end
+
+/-- The array clause of `Valid`, unfolded: a valid array has a valid
+element type that occupies at least one byte of head. -/
+theorem valid_array {t : Ty} : (Ty.array t).Valid ↔ t.Valid ∧ 0 < t.headSize := Iff.rfl
 
 /-- `AllValid` unwrapped to a pointwise statement. -/
 theorem AllValid.forall_mem {ts : List Ty} (h : AllValid ts) : ∀ t ∈ ts, t.Valid := by
@@ -102,7 +149,11 @@ def decValid : (t : Ty) → Decidable t.Valid
   | uint m | int m => inferInstanceAs (Decidable (8 ≤ m ∧ m ≤ 256 ∧ m % 8 = 0))
   | bytesN m => inferInstanceAs (Decidable (1 ≤ m ∧ m ≤ 32))
   | bool | address | bytes | string => inferInstanceAs (Decidable True)
-  | array t => decValid t
+  | array t =>
+      match decValid t, Nat.decLt 0 t.headSize with
+      | isTrue ht, isTrue hh => isTrue ⟨ht, hh⟩
+      | isFalse hf, _ => isFalse fun h => hf h.1
+      | _, isFalse hf => isFalse fun h => hf h.2
   | fixedArray t _ => decValid t
   | tuple ts => decAllValid ts
 
@@ -118,41 +169,6 @@ end
 
 instance (t : Ty) : Decidable t.Valid := decValid t
 instance (ts : List Ty) : Decidable (AllValid ts) := decAllValid ts
-
-/-! ## Staticness and head sizes -/
-
-/- A type is *static* when its encoding has a fixed size determined by the
-type alone, embedded inline in any head it appears in.  `allStatic` is the
-structural list sibling. -/
-mutual
-/-- Staticness predicate. -/
-def IsStatic : Ty → Bool
-  | uint _ | int _ | bool | address | bytesN _ => true
-  | bytes | string | array _ => false
-  | fixedArray t _ => t.IsStatic
-  | tuple ts => allStatic ts
-
-/-- Every type in the list is static. -/
-def allStatic : List Ty → Bool
-  | [] => true
-  | t :: ts => t.IsStatic && allStatic ts
-end
-
-/- The number of bytes a type occupies in the head section: for static
-types the full encoding size, for dynamic types the 32 bytes of the offset
-word.  `headSizeSum` is the structural list sibling. -/
-mutual
-/-- Head size of a type. -/
-def headSize : Ty → Nat
-  | fixedArray t n => if t.IsStatic then n * t.headSize else 32
-  | tuple ts => if allStatic ts then headSizeSum ts else 32
-  | _ => 32
-
-/-- Sum of the head sizes of a list of types. -/
-def headSizeSum : List Ty → Nat
-  | [] => 0
-  | t :: ts => t.headSize + headSizeSum ts
-end
 
 /-! ## Packed sizes -/
 

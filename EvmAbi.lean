@@ -2,15 +2,16 @@ import EvmAbi.Bytes
 import EvmAbi.Align
 import EvmAbi.Word
 import EvmAbi.Ty
+import EvmAbi.Builder
 import EvmAbi.Static
 import EvmAbi.Dynamic
 import EvmAbi.Codec
+import EvmAbi.Codec.Roundtrip
+import EvmAbi.Codec.Sound
+import EvmAbi.Codec.Strict
 import EvmAbi.Parts
 import EvmAbi.Packed
-import EvmAbi.Canonical
 import EvmAbi.HumanReadable
-import EvmAbi.Builder
-import EvmAbi.Encode
 
 /-!
 # EvmAbi
@@ -26,24 +27,30 @@ the historical build order, nodes 1–8):
 * `EvmAbi.Align`   — 32-byte alignment arithmetic (`Aligned`)
 * `EvmAbi.Word`    — reading/writing 32-byte words (`UInt256`) at aligned offsets
 * `EvmAbi.Ty`      — the full ABI type universe + type-indexed value family
+* `EvmAbi.Builder` — the builder/reader layer: a chunk-tree `Builder` with
+                  `O(1)` concatenation and a cached size, whose `run` fills a
+                  pre-sized `ByteArray` in one pass and whose `toList` is the
+                  denotation the proofs see; and the dual-cursor `Get2`
+                  prefix-reader monad.  Decouples ABI layout logic from byte
+                  plumbing at both ends
 * `EvmAbi.Static`  — static primitives: `uintM`, `intM`, `bool`, `address`,
-                  `bytesN`, with roundtrips
+                  `bytesN`, with roundtrips (list form)
 * `EvmAbi.Dynamic` — dynamic `bytes` / `string` with roundtrips, prefix decoder
-* `EvmAbi.Codec`   — `Ty`-indexed encode/decode for all types + unified roundtrip
+* `EvmAbi.Codec`   — `Ty`-indexed `encode` (the specification, `List UInt8`)
+                  and `encodeByteArray` (the same builder, run into a
+                  `ByteArray`), plus the linear decoder `decode`
+                  (`Get2` walkers) plus the bound-free static delegation
+                  `decode_static_append`; the roundtrip / soundness /
+                  strict-API families live in `EvmAbi.Codec.Roundtrip` /
+                  `EvmAbi.Codec.Sound` / `EvmAbi.Codec.Strict`
+                  (`IsCanonical` / `decodeStrict`: canonical buffers are
+                  exactly the image of `encode`)
 * `EvmAbi.Parts`   — head/tail combinator: `Part`, `encodeParts`, offset theorems
 * `EvmAbi.Packed`  — packed ABI (`abi.encodePacked`, Solidity's non-standard
                   packed mode): tight scalars, in-place dynamic payloads,
                   padded array elements; static packed roundtrip
-* `EvmAbi.Canonical` — canonical-layout validation: `validate`, `IsCanonical`,
-                  `decodeCanonical`, and the C1–C3 theorems (encodings
-                  validate; canonical input lenient-decodes; canonical
-                  buffers are exactly the image of `encode`)
 * `EvmAbi.HumanReadable` — parser for Solidity-style human-readable ABI
                   signatures into `Ty` and `AbiItem` representations
-* `EvmAbi.Builder` — byte-string builder: `O(1)` concatenation, `run` fills
-                  a pre-sized `ByteArray` in one pass, `toList` denotation
-* `EvmAbi.Encode`  — the executable encoder: `encodeB` / `encodeByteArray`,
-                  proved to denote `encode`, with the roundtrip transported
 
 `EvmAbi.HumanReadable.Meta` — the `ty!` / `item!` / `params!` macros — is
 deliberately *not* re-exported here: it needs `import Lean`, and this library is

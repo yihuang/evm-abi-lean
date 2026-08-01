@@ -1,5 +1,6 @@
 import Binary.UInt256
 import EvmAbi.Word
+import EvmAbi.Builder
 
 /-!
 # EvmAbi.Static
@@ -50,18 +51,25 @@ def decodeInt (buf : List UInt8) : Option Int :=
   (decodeUint buf).map fun (n : Nat) =>
     if n < 2 ^ 255 then (n : Int) else (n : Int) - 2 ^ 256
 
-/-- **Roundtrip for `intM`**: decode after encode is the identity in range. -/
-theorem decodeInt_encodeInt {M : Nat} (hM0 : 0 < M) (hM : M ≤ 256)
+/-- The `M`-bit two's-complement value bounds fit inside the full
+256-bit range, so the `M`-bit encoding decodes back through the 256-bit
+word decoder.  Shared by `decodeInt_encodeInt` and `decodeInt_append`. -/
+theorem intM_bounds_lt_255 {M : Nat} (hM0 : 0 < M) (hM : M ≤ 256)
     (hl : -(2 ^ (M - 1)) ≤ i) (hu : i < 2 ^ (M - 1)) :
-    decodeInt (encodeInt i) = some i := by
+    -(2 : Int) ^ 255 ≤ i ∧ i < (2 : Int) ^ 255 := by
   have hb : (2 : Int) ^ (M - 1) ≤ 2 ^ 255 := by
     have e : (2 : Int) ^ (M - 1) = ((2 ^ (M - 1) : Nat) : Int) :=
       (Int.natCast_pow 2 (M - 1)).symm
     have hle : (2 : Nat) ^ (M - 1) ≤ 2 ^ 255 :=
       Nat.pow_le_pow_right (n := 2) (by decide) (by omega)
     rw [e]; exact Int.ofNat_le.mpr hle
-  have hub : i < (2 : Int) ^ 255 := by omega
-  have hlb : -(2 : Int) ^ 255 ≤ i := by omega
+  constructor <;> omega
+
+/-- **Roundtrip for `intM`**: decode after encode is the identity in range. -/
+theorem decodeInt_encodeInt {M : Nat} (hM0 : 0 < M) (hM : M ≤ 256)
+    (hl : -(2 ^ (M - 1)) ≤ i) (hu : i < 2 ^ (M - 1)) :
+    decodeInt (encodeInt i) = some i := by
+  obtain ⟨hlb, hub⟩ := intM_bounds_lt_255 (M := M) hM0 hM hl hu
   by_cases hi : 0 ≤ i
   · have hn : i.toNat < 2 ^ 256 := by omega
     rw [encodeInt, if_pos hi, decodeInt, decodeUint_encodeUint hn, Option.map_some,
@@ -122,5 +130,50 @@ theorem decodeBytesN_length {n : Nat} {buf bs : List UInt8}
       subst h
       exact hc.1
   · contradiction
+
+/-! ## Builder form (roadmap node 9)
+
+The same primitives in builder form (`EvmAbi.Builder`): puts compose
+with `Builder.append` in `O(1)` and materialize via `toList`, matching
+the list-based API above through the `toList_*` lemmas.
+-/
+
+/-- Write a `uintM` word. -/
+def putUint (n : Nat) : Builder := Builder.putWord (UInt256.ofNat n)
+
+@[simp] theorem toList_putUint (n : Nat) : (putUint n).toList = encodeUint n := by
+  simp [putUint, encodeUint]
+
+
+/-- Write an `intM` word (two's complement). -/
+def putInt (i : Int) : Builder :=
+  putUint (if 0 ≤ i then i.toNat else 2 ^ 256 - (-i).toNat)
+
+@[simp] theorem toList_putInt (i : Int) : (putInt i).toList = encodeInt i := by
+  simp [putInt, encodeInt]
+
+
+/-- Write a `bool` word. -/
+def putBool (b : Bool) : Builder := putUint (if b then 1 else 0)
+
+@[simp] theorem toList_putBool (b : Bool) : (putBool b).toList = encodeBool b := by
+  simp [putBool, encodeBool]
+
+
+/-- Write an `address` word. -/
+def putAddress (a : Nat) : Builder := putUint a
+
+@[simp] theorem toList_putAddress (a : Nat) : (putAddress a).toList = encodeAddress a := by
+  simp [putAddress, encodeAddress]
+
+
+/-- Write fixed-size bytes (`bytesN`): left-aligned, right zero-padded
+to 32 bytes.  The padding is a `zeros` run, so it is never materialised. -/
+def putBytesN (bs : List UInt8) : Builder :=
+  Builder.ofList bs ++ Builder.zeros (32 - bs.length)
+
+@[simp] theorem toList_putBytesN (bs : List UInt8) : (putBytesN bs).toList = encodeBytesN bs := by
+  simp [putBytesN, encodeBytesN]
+
 
 end EvmAbi

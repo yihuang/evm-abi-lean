@@ -1,4 +1,5 @@
 import Binary.ByteArray
+import EvmAbi.Word
 
 /-!
 # EvmAbi.Builder
@@ -145,7 +146,7 @@ Each is `O(1)` except `bytes`, which measures the list it is handed once. -/
 def empty : Builder := ⟨.empty, 0, rfl⟩
 
 /-- A literal byte list. -/
-def bytes (bs : List UInt8) : Builder := ⟨.bytes bs, bs.length, rfl⟩
+def ofList (bs : List UInt8) : Builder := ⟨.bytes bs, bs.length, rfl⟩
 
 /-- A contiguous chunk, kept as-is. -/
 def chunk (ba : ByteArray) : Builder := ⟨.chunk ba, ba.size, ByteArray.size_eq_toList_length ba⟩
@@ -159,14 +160,15 @@ def append (a b : Builder) : Builder :=
     simp [Chunks.toList, a.size_eq, b.size_eq]⟩
 
 instance : Append Builder := ⟨Builder.append⟩
+instance : EmptyCollection Builder := ⟨Builder.empty⟩
 
 /-! ## denotation -/
 
 /-- The byte string a builder denotes. -/
 def toList (b : Builder) : List UInt8 := b.chunks.toList
 
-@[simp] theorem toList_empty : (Builder.empty).toList = [] := rfl
-@[simp] theorem toList_bytes (bs : List UInt8) : (Builder.bytes bs).toList = bs := rfl
+@[simp] theorem toList_empty : (∅ : Builder).toList = [] := rfl
+@[simp] theorem toList_ofList (bs : List UInt8) : (Builder.ofList bs).toList = bs := rfl
 @[simp] theorem toList_chunk (ba : ByteArray) : (Builder.chunk ba).toList = ba.data.toList := rfl
 @[simp] theorem toList_zeros (n : Nat) : (Builder.zeros n).toList = List.replicate n 0 := rfl
 @[simp] theorem toList_append (a b : Builder) : (a ++ b).toList = a.toList ++ b.toList := rfl
@@ -175,6 +177,13 @@ def toList (b : Builder) : List UInt8 := b.chunks.toList
 its buffer in advance, and why the offset words the ABI layout computes from
 `size` are the offsets the specification demands. -/
 @[simp] theorem size_eq_length_toList (b : Builder) : b.size = b.toList.length := b.size_eq
+
+/-! ## word primitive -/
+
+/-- Write one 32-byte EVM word, big-endian. -/
+def putWord (w : UInt256) : Builder := ofList (bytesOfWord w)
+
+@[simp] theorem toList_putWord (w : UInt256) : (putWord w).toList = bytesOfWord w := rfl
 
 /-! ## execution -/
 
@@ -197,5 +206,59 @@ theorem run_eq_toByteArray (b : Builder) : b.run = b.toList.toByteArray := by
   rw [← Array.toList_inj, data_toList_run, List.toList_data_toByteArray]
 
 end Builder
+
+/-! ## Get2: the dual-cursor reader -/
+
+namespace Get2
+
+/-- The result of a `Get2` run: the decoded value together with the
+advanced head and tail cursors and the new expected tail frontier. -/
+@[ext]
+structure Result (α : Type) where
+  /-- The decoded value. -/
+  val : α
+  /-- Remaining head cursor. -/
+  head : List UInt8
+  /-- Remaining tail cursor. -/
+  tails : List UInt8
+  /-- New expected tail frontier. -/
+  frontier : Nat
+
+end Get2
+
+/-- A dual-cursor prefix reader: consumes from a *head cursor* (the head
+section of a canonical layout) and a *tail cursor* (the tails), threading
+the expected tail frontier `E`.  Each component step advances one or both
+cursors monotonically — no re-dropping from the front of the buffer — so
+canonical layouts decode in a single pass.  The frontier is the absolute
+position the next dynamic tail must occupy; a dynamic component's offset
+word must equal it exactly. -/
+structure Get2 (α : Type) where
+  run : List UInt8 → List UInt8 → Nat → Option (Get2.Result α)
+
+namespace Get2
+
+instance : Monad Get2 where
+  pure a := ⟨fun head tails E => some ⟨a, head, tails, E⟩⟩
+  bind x f := ⟨fun head tails E =>
+    match x.run head tails E with
+    | none => none
+    | some r => (f r.val).run r.head r.tails r.frontier⟩
+
+/-- Failure, cursors untouched. -/
+def fail : Get2 α := ⟨fun _ _ _ => none⟩
+
+@[simp] theorem pure_run (a : α) (head tails : List UInt8) (E : Nat) :
+    (pure a : Get2 α).run head tails E = some ⟨a, head, tails, E⟩ := rfl
+
+@[simp] theorem bind_run (x : Get2 α) (f : α → Get2 β) (head tails : List UInt8) (E : Nat) :
+    (x >>= f).run head tails E = (match x.run head tails E with
+      | none => none
+      | some r => (f r.val).run r.head r.tails r.frontier) := rfl
+
+@[simp] theorem fail_run (head tails : List UInt8) (E : Nat) :
+    (fail : Get2 α).run head tails E = none := rfl
+
+end Get2
 
 end EvmAbi

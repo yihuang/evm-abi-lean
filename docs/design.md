@@ -66,21 +66,26 @@ complete type grammar.
    well-formedness (`WF`).  The ABI codec is built on top of this library,
    keeping layout arithmetic isolated from type-specific encoding logic.
 
-5. **Prefix-tolerant primitive decoders.**  Every base-type decoder is
-   proved to read its value from the front of a buffer and ignore a trailing
-   suffix (`decode_encode_append_static`).  This property is essential for
+5. **Appended-buffer read lemmas.**  Every primitive decoder is proved to
+   read its value from the front of a buffer and ignore a trailing suffix
+   (`decodeUint_append` and friends).  This property is essential for
    decoding compound types: a component's encoding is embedded inside a
    larger buffer, and the decoder must not be confused by data that follows.
 
-6. **Canonical-layout validation.**  Beyond the lenient decoder, an
-   executable checker `validate` verifies that a buffer uses the strict ABI
-   layout (offsets contiguous, in order, immediately after the head) and
-   returns the number of bytes consumed.  The predicate `IsCanonical`
-   additionally rejects trailing garbage; `decodeCanonical` combines both
-   checks.  The C1–C3 theorem packages (`EvmAbi.Canonical`) prove
-   completeness (every `encode` validates), soundness (validating buffers
-   are precisely the image of `encode`), and a unified roundtrip for the
-   strict decoder.
+6. **The linear canonical decoder.**  The decoder `decode` walks a buffer
+   with two monotonic cursors (the head section and the tails), threading
+   an *expected tail frontier*: a dynamic component's offset word must
+   point to tails laid out contiguously, in order, immediately after the
+   head — so every byte is touched at most once, and the frontier check
+   doubles as the strictness check.  The walkers (`decodeElem`,
+   `decodeElems`, `decodeTuple`) are `Get2` programs (`EvmAbi.Builder`).
+   The predicate `IsCanonical` (exact consumption, no trailing garbage)
+   and the strict decoder `decodeStrict` are built on top; the theorem
+   families are the roundtrips (`decode_roundtrip`: every `encode`
+   decodes back), the soundness (`decode_sound`: the decoder only
+   produces encodings), and the capstones `isCanonical_iff` /
+   `decodeStrict_eq_some_iff` (canonical buffers are precisely the image
+   of `encode`).
 
 7. **Packed ABI encoding.**  `EvmAbi.Packed` implements Solidity's
    non-standard packed mode: scalars are concatenated at their tight
@@ -91,12 +96,14 @@ complete type grammar.
    encoding is ambiguous without lengths, so only the static fragment is
    decodable — `roundtrip_packed_static` proves its roundtrip.
 
-8. **Executable encoder with a proved bridge.**  A `Builder` abstraction
-   (`O(1)` concatenation, cached size, one-pass fill into a pre-sized
-   `ByteArray`) carries a second encoder whose only tie to the verified one
-   is `toList_encodeB : (encodeB t v).toList = encode t v`.  Proofs stay on
-   `List UInt8`; execution never builds one.  2.9× faster on flat values and
-   asymptotically faster on nested ones (§3.7).
+8. **One encoder, two materializations.**  The encoder is written against
+   a `Builder` abstraction (`O(1)` concatenation, cached size, one-pass fill
+   into a pre-sized `ByteArray`).  `encode = (put t v).toList` is the
+   specification the proofs are stated over; `encodeByteArray = (put t v).run`
+   is the same builder run for real, and
+   `data_toList_encodeByteArray : (encodeByteArray t v).data.toList = encode t v`
+   ties them.  Proofs stay on `List UInt8`; execution never builds one.
+   2.9× faster on flat values and asymptotically faster on nested ones (§3.7).
 
 ## 3. Core Design
 
@@ -106,11 +113,17 @@ The type grammar is an inductive `Ty` with ten constructors.  Four
 auxiliary predicates/functions are defined alongside it:
 
 - **`Valid`** — size-parameter constraints (e.g., `uintM` requires `8∣M`,
-  `8≤M≤256`).  Defined as a `Prop` with a `Decidable` instance.
+  `8≤M≤256`).  Defined as a `Prop` with a `Decidable` instance.  A dynamic
+  array additionally requires `0 < t.headSize` of its element type: an
+  element occupying no head (`()`, `T[0]`) would let a 32-byte length word
+  name arbitrarily many elements, leaving the decoder's element walk
+  bounded by nothing.  The specification has no such types, and `decode`
+  and the human-readable parser both reject them.
 
-- **`IsStatic`** — whether the encoding size is fixed by the type.  Used by
-  the head/tail layout: static elements sit inline in the head; dynamic
-  elements contribute an offset word.
+- **`isStatic`** — whether the encoding size is fixed by the type (a `Bool`
+  predicate, lowercase per Lean convention).  Used by the head/tail layout:
+  static elements sit inline in the head; dynamic elements contribute an
+  offset word.
 
 - **`headSize`** — bytes occupied in the head section.  Static types take
   their full encoding size; dynamic types take 32 (the offset word).
@@ -158,17 +171,27 @@ Encoding and decoding are defined by structural recursion on `Ty`:
   codecs from `Static`/`Dynamic`.  Compound types construct a `Part` list
   (via `partOf` / `partsOfTuple`) and delegate to `encodeParts`.
 
-- **`decode t buf`** dispatches on the type.  Base types call their
-  standalone decoders.  Compound types invoke `readElem` / `decodeElems` /
-  `decodeTuple`, which walk the buffer element-by-element.
+- **`decode t buf`** is the linear canonical decoder, in prefix form: it
+  returns the value together with the bytes it consumed and the untouched
+  remainder (`Option (t.Val × Nat × List UInt8)`), so nested components
+  are prefixes of their parent's buffer.  Its walkers (`decodeElem` /
+  `decodeElems` / `decodeTuple`) are `Get2` programs: a head cursor and a
+  tail cursor advance monotonically while an expected tail frontier is
+  threaded — a dynamic component's offset word must equal the frontier
+  exactly, and static components decode inline from the head.
 
-- **`readElem t buf off`** reads one element at head offset `off`.  For
-  static types it decodes in place.  For dynamic types it reads the offset
-  word at `off`, follows it, and decodes the tail.
+  The consumed count is what keeps the walk linear.  It is computed
+  *structurally* — 32 for the word types, the count `decodeBytesPrefix`
+  already reports for the payload types, and the walker's own final
+  frontier for the compound types — so `decodeElem` advances the frontier
+  by an addition rather than by measuring the cursors.  Deriving it as
+  `tails.length - rest.length` instead would cost `O(remaining)` per
+  dynamic component, i.e. `O(n²)` for the whole buffer.
 
 The codec is **mutually recursive** with its component-level helpers
 (`partOf`, `decodeElems`, etc.), each assigned an explicit `termination_by`
-measure.
+measure.  `decodeStrict` is `decode` plus an exact-consumption check (no
+trailing garbage).
 
 ### 3.4 Head/Tail Combinator (`Parts.lean`)
 
@@ -199,60 +222,74 @@ nested arrays are not supported.  The module provides:
 
 - **Type-indexed packed codec** — `encodePacked : (t : Ty) → t.Val →
   List UInt8` (total) and `decodePacked : (t : Ty) → List UInt8 →
-  Option t.Val`.  Scalars pack tight; `bytes`/`string` pack as their raw
-  payload; array elements are standard-encoded (`encode`, padded words)
-  and read back with the standard `decode`; tuples concatenate — the
+  Option t.Val`.  The codec mirrors the standard one: the encoder is a
+  `Builder` chunk tree (`putPacked`, materialized once by `toList`)
+  and the decoder is a single linear pass with `Get2` walkers
+  (`decodePackedElem` / `decodePackedTuple`; the tail cursor and frontier
+  are inert in packed layouts).  Scalars pack tight; `bytes`/`string`
+  pack as their raw payload; array elements are standard-encoded
+  (`encode`, padded words) and read back by the standard `decodeElems`
+  (bound-free for static element types); tuples concatenate — the
   `.tuple` arm models the flat argument list of a multi-argument
   `abi.encodePacked(a, b, …)` call, and on nested tuples is a documented
   non-Solidity extension.  `PackedSupported` marks the conformant
   fragment.
 
 - **Static roundtrip** — `roundtrip_packed_static`: every static value
-  decodes from its own packed encoding.  Array elements ride on the
-  standard codec's `decode_encode_append_static`; only the scalar and
-  tuple walks need packed-specific lemmas.
+  decodes from its own packed encoding.  The lemmas are stated in `Get2`
+  `.run` form (`decodePackedElem_append` / `decodePackedTuple_append`),
+  and array elements ride on the standard codec's bound-free static
+  roundtrip (`decodeElems_static_append`).
 
 Dynamic types encode but do not decode: packed encoding provides no
 mechanism to delimit variable-length elements, so `decodePacked` returns
 `none` for them rather than guessing.
 
-### 3.6 Roundtrip Proof Structure
+### 3.6 Decoder Proof Structure
 
-The proof is organized into five packages (A–E) in `Codec.lean`:
+The decoder's theorems live in `Codec.lean` alongside the encoder; each
+theorem family is a self-contained `mutual` block, so the later families
+were moved to sibling modules: `Codec.Roundtrip`, `Codec.Sound`,
+`Codec.Strict`.
 
-| Package | Content |
-|---|---|
-| A | Head sizes, static encoding lengths (`encode_length_static`) |
-| B | Alignment and well-formedness (`encode_length_aligned`, `wf_map_partOf`) |
-| C | **Static prefix roundtrip** — `decode_encode_append_static` for every static type, plus the step `readElem_partOf_append_static` and the walkers `decodeElems_static_append` / `decodeTuple_static_append` |
-| D | **Full prefix roundtrip** — `decode_encode_append`, the step `readElem_partOf_append`, and the walkers `decodeElems_append` / `decodeTuple_append` for all types, dynamic elements included |
-| E | **Top-level roundtrip** — `roundtrip` derived from Package D by supplying `rest := []` |
+| Section | Module | Content |
+|---|---|---|
+| Encoder packages A/B | `Codec` | Head sizes, static encoding lengths, alignment (`encode_length_static`, `wf_map_partOf`) |
+| Package C | `Codec` | Appended-buffer read lemmas (`decodeUint_append`, …) and the layout lemmas `drop_headPartOf_static` |
+| Package D | `Codec` | Locating dynamic tails (`drop_tail_partOf_dynamic`, `natAt_offset_partOf_dynamic`) |
+| Decoder helpers | `Codec` | Head-size and word-recovery lemmas the decoder proofs need |
+| **Static delegation** | `Codec` | `decode_static_append` family — static types carry no offset words, so the roundtrips are bound-free |
+| **Roundtrip** | `Codec.Roundtrip` | `decode_roundtrip` family — every encoding decodes back, leaving the suffix untouched |
+| **Soundness** | `Codec.Sound` | `decode_sound` family — the decoder only produces encodings |
+| **Strict API** | `Codec.Strict` | `decodeStrict`, `IsCanonical`, and the capstones |
 
-**Package C (static prefix)** is the first major milestone.  It proves that
-a static value decodes from the front of its encoding even when arbitrary
-data follows.  The proof is by induction on `Ty`; the array and tuple cases
-use `decodeElems_static_append` and `decodeTuple_static_append`, which in
-turn call `decode_encode_append_static` for each component.
+**Static delegation** is the first milestone: for static types the frontier
+never moves and the tail cursor is never read, so the roundtrips hold
+without the `2^256` bound.  The array and tuple cases use
+`decodeElems_static_append` / `decodeTuple_static_append`.
 
-**Package D (full prefix)** extends Package C to dynamic types.  For dynamic
-components, `readElem` resolves the offset word and decodes from the tail,
-using the Parts theorems `wordAt_offset_append` and
-`drop_tailOffset_append` to locate the data.  The proof is again by
-structural induction, now with the additional hypotheses `LenBound` (dynamic
-payload sizes) and `hb` (total buffer size < `2^256`).
+**Roundtrip** extends this to dynamic types: a dynamic component's offset
+word equals the frontier for free on encodings (the `putParts` offset
+correctness theorems), so the frontier check costs nothing.  The proof
+threads the frontier invariant `E = tailOffset …` and advances it by each
+component's tail size (`tailOffset_snoc`), needing the `hb` bound only so
+offset words cannot wrap.
 
-Both packages factor their per-component work into a *step* lemma
-(`readElem_partOf_append`, `readElem_partOf_append_static`) that the element
-and tuple walkers share.  The step owns the static/dynamic case split; the
-walkers only enumerate parts and advance the head offset via
-`headSizes_snoc_partOf`, which holds for static and dynamic components alike.
-`Canonical.lean` follows the same shape in packages C1 and C3
-(`validateElem_encode_append`, `segments_of_validateElem`).
+**Soundness** is the mirror: whenever the decoder succeeds, the consumed
+front of the buffer is exactly the encoding of the decoded value —
+`decode t buf = some (v, rest)` implies `encode t v ++ rest = buf`.
+
+Both families factor their per-component work into a *step* lemma
+(`decodeElem_roundtrip`, `decodeElem_sound_static`/`_dynamic`) that the
+element and tuple walkers share.  The step owns the static/dynamic case
+split; the walkers only enumerate parts and advance the head offset via
+`headSizes_snoc_partOf`, which holds for static and dynamic components
+alike.
 
 **Package E** instantiates the prefix roundtrip with an empty suffix,
 yielding the user-facing `roundtrip` theorem.
 
-### 3.7 Builder and Executable Encoder (`Builder.lean`, `Encode.lean`)
+### 3.7 Builder and Executable Encoder (`Builder.lean`)
 
 `List UInt8` is the right specification type and the wrong runtime type: a
 cons cell and a boxed `UInt8` per byte, and — worse — `encode` is built from
@@ -286,22 +323,32 @@ exactly that and was *slower* than the specification encoder.  `size_eq` is a
 `ByteArray.push`, both `@[extern]` primitives — one linear pass, no
 intermediate lists.
 
-**`Encode.lean`** mirrors the encoder clause for clause: `PartB`/
-`encodePartsB` mirror `Part`/`encodeParts` (with `PartB.toPart` as the
-denotation), and `encodeB`/`partOfB`/`partsOfTupleB` mirror
-`encode`/`partOf`/`partsOfTuple` with the same termination measures.  The
-mirror is a *separate* definition rather than a refactor of `encode`, so no
-existing proof changes; one mutual induction ties them together:
+There is no second encoder to keep in step: `put` — the `Builder`-valued
+encoder `Codec.lean` already defines — *is* the executable one.  The two
+entry points are its two materializations,
 
 ```lean
-theorem toList_encodeB (t : Ty) (v : t.Val) : (encodeB t v).toList = encode t v
+def encode          (t : Ty) (v : t.Val) : List UInt8 := (put t v).toList
+def encodeByteArray (t : Ty) (v : t.Val) : ByteArray  := (put t v).run
 ```
 
-That is the entire bridge.  `encodeByteArray t v = (encodeB t v).run` then
-satisfies `(encodeByteArray t v).data.toList = encode t v`, so every result
-about `encode` transports by rewriting — `decode_encodeByteArray`,
-`decode_encodeByteArray_static`, `isCanonical_encodeByteArray` and
-`decodeCanonical_encodeByteArray` are three lines each.
+and `Builder.data_toList_run` bridges them directly:
+
+```lean
+theorem data_toList_encodeByteArray (t : Ty) (v : t.Val) :
+    (encodeByteArray t v).data.toList = encode t v
+```
+
+That is the entire bridge — no mirrored definitions, no mutual induction
+relating them.  Every result about `encode` transports by rewriting, so
+`decode_encodeByteArray`, `decode_encodeByteArray_static`,
+`isCanonical_encodeByteArray` and `decodeStrict_encodeByteArray` are three
+lines each in `Codec/Strict.lean`.
+
+The one place the layout touches the builder's *representation* rather than
+its denotation is `Part.headSize`/`tailSize` and `putHeads`, which read the
+cached `size`.  `Builder.size_eq_length_toList` rewrites that back to
+`toList.length`, so every statement stays on the specification side.
 
 Measured by `Bench.lean` (compiled; the win rests on the `@[extern]`
 `ByteArray` primitives, so interpreted runs show the opposite): 2.9× on flat
@@ -331,7 +378,8 @@ concatenated.  A strict decoder that validates trailing padding (e.g.,
 the next element's data follows immediately.
 
 **Solution.**  Every base-type decoder is proved **prefix-tolerant**: for
-any `rest : List UInt8`, `decode t (encode t v ++ rest) = some v`.  For
+any `rest : List UInt8`, `decode t (encode t v ++ rest)` returns `v`, the
+bytes it consumed, and `rest` untouched.  For
 `bytes` and `string`, a separate prefix decoder `decodeBytesPrefix` returns
 the decoded data *and* the number of bytes consumed, making composition
 explicit.
@@ -355,37 +403,35 @@ facts feed directly into the offset-word correctness lemmas from `Parts`
 ### 4.4 Mutual Recursion and Termination
 
 **Problem.**  The codec involves multiple mutually-recursive functions
-(`encode`/`partOf`/`partsOfTuple`, `decode`/`readElem`/`decodeElems`/
-`decodeTuple`), each defined by pattern matching on `Ty` or `List Ty`.
+(`encode`/`partOf`/`partsOfTuple`, and the decoder `decode` with its `Get2`
+walkers `decodeElem`/`decodeElems`/`decodeTuple`), each defined by pattern
+matching on `Ty` or `List Ty`.
 The default `decreasing_tactic` cannot always see through the list
 destructuring.
 
 **Solution.**  Every mutual block carries an explicit `termination_by`
 measure (typically `sizeOf` with a constant offset to distinguish sibling
-levels).  The measures are chosen so that recursive calls occur at strictly
-smaller values, and the `decreasing_tactic` discharges every goal.
+levels — the decoder's walkers sit at offsets `+1`/`+2`/`+3` above the
+prefix `decode`, so a component step can call it on the same type).  The
+measures are chosen so that recursive calls occur at strictly smaller
+values, and the `decreasing_tactic` discharges every goal.
 
 ## 5. Architecture Diagram
 
 ```
-┌──────────────────────────┐    ┌──────────────────────┐
-│       Encode.lean         │───▶│    Builder.lean       │
-│ encodeB / encodeByteArray │    │  Chunks / Builder     │
-│ toList_encodeB — the      │    │  cached size, run     │
-│ bridge to the spec;       │    │  (ABI-agnostic)       │
-│ roundtrip etc. transported│    └──────────────────────┘
-└─────────────┬────────────┘
-              │                 ┌──────────────────────┐
-              │                 │     Packed.lean       │
-              │                 │  encodePacked /       │
-              │                 │  decodePacked (mutual)│
-              │                 └──────────┬───────────┘
-              │                            │
-┌─────────────▼────────────────────────────▼───┐
+┌──────────────────────────────────────────────┐
+│                 Packed.lean                   │
+│  encodePacked / decodePacked (mutual)         │
+│  packed static roundtrip; array elements      │
+│  reuse the linear decoder                     │
+└──────────────────────┬───────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────┐
 │                  Codec.lean                   │
-│  encode / decode (mutual)                     │
-│  readElem / decodeElems / decodeTuple (mutual)│
-│  Packages A–E (roundtrip proofs)              │
+│  encode (mutual with partOf / partsOfTuple)   │
+│  decode (Get2 walkers decodeElem/Elems/Tuple) │
+│  roundtrip / soundness / static delegation    │
+│  strict API (decodeStrict, IsCanonical)       │
 └──────────┬──────────────┬────────────────────┘
            │              │
     ┌──────▼──────┐  ┌───▼──────────┐
@@ -399,6 +445,17 @@ smaller values, and the `decreasing_tactic` discharges every goal.
     │  (universe)  │  │  Align.lean   │
     │              │  │  Bytes.lean   │
     └─────────────┘  └───────────────┘
+
+              ┌──────────────────────────┐
+              │      Builder.lean         │
+              │  Chunks / Builder:        │
+              │  O(1) ++, cached size,    │
+              │  toList denotation,       │
+              │  run -> ByteArray;        │
+              │  Get2 dual-cursor reader  │
+              │  (ABI-agnostic)           │
+              └──────────────────────────┘
+   used by Static/Dynamic/Parts to build, and by Codec to read
 ```
 
 ## 6. Future Work
@@ -406,14 +463,14 @@ smaller values, and the `decreasing_tactic` discharges every goal.
 ### ByteArray Decoder
 
 The encoder now has a verified `ByteArray` path (§3.7); the decoder does
-not.  `decode` consumes a `List UInt8` and `readElem` reaches its component
-with `buf.drop off`, which is `O(off)` — so decoding an `n`-component tuple
-is quadratic, the same shape of problem the builder solved on the encoding
-side.  The natural counterpart is a cursor — a `(ByteArray, offset)` pair
-with `O(1)` positioning — and a bridging theorem in the same style as
-`toList_encodeB`, relating `decodeCursor t ⟨ba, off⟩` to
-`decode t (ba.data.toList.drop off)`, so the roundtrip transports rather
-than being reproved.
+not.  `decode` is already *linear* — two monotonic cursors, and a frontier
+advanced by the byte count the decoder reports rather than by measuring a
+cursor — but it still consumes a `List UInt8`, so the caller pays to unpack
+the calldata it received as a `ByteArray`.  The natural counterpart is a
+cursor — a `(ByteArray, offset)` pair with `O(1)` positioning — and a
+bridging theorem in the same style as `data_toList_encodeByteArray`,
+relating `decodeCursor t ⟨ba, off⟩` to `decode t (ba.data.toList.drop off)`,
+so the roundtrip transports rather than being reproved.
 
 ### Faster Word Encoding — done, upstream
 

@@ -120,4 +120,34 @@ theorem size_toUTF8_lt_of_decodeBytesPrefix {buf bs : List UInt8} {n : Nat} {s :
   rw [Binary.ByteArray.size_eq_toList_length, toUTF8_of_fromUTF8? hs]
   simpa [List.data_toByteArray] using length_lt_of_decodeBytesPrefix hp
 
+/-! ## Builder form (roadmap node 9)
+
+Dynamic `bytes` in builder form — the first composite encoder of the
+layer: `putBytes` sequences two builders (`O(1)`) and materializes via
+`toList` to `encodeBytes`.
+-/
+
+/-- Write dynamic `bytes`: the length word, the data, then the padding as
+a `zeros` run — the padding is never materialised. -/
+def putBytes (bs : List UInt8) : Builder :=
+  putUint bs.length ++ Builder.ofList bs ++ Builder.zeros ((32 - bs.length % 32) % 32)
+
+@[simp] theorem toList_putBytes (bs : List UInt8) :
+    (putBytes bs).toList = encodeBytes bs := by
+  simp [putBytes, encodeBytes, pad32, List.append_assoc]
+
+/-- Write a `string` as dynamic `bytes` over its UTF-8 encoding.  The
+payload is kept as the `ByteArray` `String.toUTF8` already produced, so it
+is never unpacked into a cons list. -/
+def putString (s : String) : Builder :=
+  putUint s.toUTF8.size ++ Builder.chunk s.toUTF8 ++
+    Builder.zeros ((32 - s.toUTF8.size % 32) % 32)
+
+@[simp] theorem toList_putString (s : String) : (putString s).toList = encodeString s := by
+  have hsz : s.toUTF8.size = s.toUTF8.data.toList.length :=
+    Binary.ByteArray.size_eq_toList_length _
+  simp only [putString, encodeString, encodeBytes, pad32, hsz, toList_putUint,
+    Builder.toList_append, Builder.toList_chunk, Builder.toList_zeros, List.append_assoc]
+
+
 end EvmAbi
