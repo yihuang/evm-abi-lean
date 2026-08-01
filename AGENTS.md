@@ -24,6 +24,11 @@ are their theorems; `IsCanonical` / `decodeStrict` and the capstones
 encoder (`putPacked`) and `Get2` walkers (`decodePackedElem` /
 `decodePackedTuple`) — and reads array elements via the bound-free static
 delegation (`decodeElems` / `decode_static_append`).
+`EvmAbi.Codec.ByteArray` mirrors the decoder over offsets — `GetBA` is
+`Get2` with the two cursors as naturals into one buffer — and pairs every
+definition with an agreement lemma under `off ↦ ba.data.toList.drop off`,
+so the list families transport rather than being restated.  Reads there go
+through `natAtBA` / `windowList`, never through a slice.
 `EvmAbi.Codec` holds the codec proper (defs, helper packages, static
 delegation); the theorem families live in `EvmAbi.Codec.Roundtrip` /
 `EvmAbi.Codec.Sound` / `EvmAbi.Codec.Strict` (each family is one self-
@@ -54,6 +59,18 @@ contained `mutual` block).
   `∅`-neutrality — state it of `toList` instead (see
   `encodeHeads_append` / `encodeTails_append`, which are proved by
   induction at the list level for exactly this reason).
+* **Windows are clamped.**  `windowList` and anything like it must clamp
+  their end to `ba.size`: the length is a word off the wire, and
+  `ByteArray.extract` sizes its copy from the range it is handed, so an
+  unclamped window asks the allocator for up to `2 ^ 256` bytes.  `take`
+  clamps on the list side, so clamping costs nothing in the spec.
+* **The `array` clause matches dependently.**  Both decoders read the
+  length word with `match hk : … with` because the `some k` branch needs
+  `hk` for the `Ty.Val` bound, so neither scrutinee can be rewritten in
+  place (`motive is not type correct`).  Resolve the match once against a
+  known word with the `decode_array_pos` / `_none` pair — the device
+  `decode_bytes_pos` already uses — and work with the plain match that
+  leaves.
 * **Never measure a cursor.**  `decode` returns the bytes it consumed
   (`Option (t.Val × Nat × List UInt8)`) and `decodeElem` advances the
   frontier by that count.  `List.length` on a cursor is `O(remaining)`,

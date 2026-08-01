@@ -160,10 +160,21 @@ worth 4.1× to the specification encoder and 5.0× to `encodeByteArray` on the
 `uint256[]` row — and, because it sits below both, it is why the builder's own
 advantage there is only 1.3×.
 
-The decoder is linear already — `decode` walks two monotonic cursors and
-advances the tail frontier by the byte count it reports, never by measuring
-a cursor — but it is still `List UInt8`-based.  A cursor-based `ByteArray`
-decoder is the natural follow-up and would bridge back the same way.
+The decoder has the same two forms.  `decode` walks two `List UInt8`
+cursors; `decodeStrictBA` walks the same layout as two *offsets* into one
+shared `ByteArray`, reading words with an indexed read and materialising
+only the payloads that a `bytes`/`string`/`bytesN` value actually is:
+
+```lean4
+theorem decodeStrictBA_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) :
+    decodeStrictBA t ba = decodeStrict t ba.data.toList
+```
+
+so the capstones hold of it too (`decodeStrictBA_eq_some_iff`,
+`isCanonicalBA_iff`).  Compiled, decoding a `bytes[]`:
+
+    500 elements  (160KB)   3460 -> 1177 us    2.9x
+    2000 elements (640KB)  13945 -> 4799 us    2.9x
 
 ## Human-Readable ABI
 
@@ -270,11 +281,12 @@ The proof is built in incremental layers, each reusable independently:
 | **7. Dynamic primitives** | `Dynamic` | Standalone codecs for `bytes`, `string`; prefix-tolerant decoder variant |
 | **8. Head/tail combinator** | `Parts` | The core ABI layout abstraction (`Part`, `encodeParts`, offset-correctness theorems); type-independent |
 | **9. Full codec** | `Codec` + `Codec.Roundtrip` / `Codec.Sound` / `Codec.Strict` | `Ty`-indexed `encode` (the `List UInt8` specification) and `encodeByteArray` (the same builder run into a `ByteArray`); the linear decoder `decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); bound-free static delegation in `Codec`; roundtrip and soundness families in their own files; strict API `decodeStrict`/`IsCanonical`, the capstones, and the executable encoder's transported theorems in `Codec.Strict` |
-| **10. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
-| **11. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
-| **12. Compile-time macros** | `HumanReadable.Meta` | `ty!`, `item!`, `params!` — parse string literals at elaboration time |
-| **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, builder and executable-encoder checks, human-readable ABI tests |
-| **Bench** | `Bench` | `lake build bench` — `encode` vs `encodeByteArray` on flat and deeply nested values |
+| **10. ByteArray decoder** | `Codec.ByteArray` | The same walk over *offset* cursors: `GetBA`, `decodeBA`, `decodeStrictBA`/`IsCanonicalBA`, the primitive reads at an offset (`natAtBA`, `windowList`), and the agreement lemmas (`decodeBA_eq`, `decodeStrictBA_eq`) that carry every list theorem across |
+| **11. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
+| **12. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
+| **13. Compile-time macros** | `HumanReadable.Meta` | `ty!`, `item!`, `params!` — parse string literals at elaboration time |
+| **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, builder and executable-encoder checks, offset-decoder checks (including degenerate and truncated buffers), human-readable ABI tests |
+| **Bench** | `Bench` | `lake build bench` — `encode` vs `encodeByteArray` on flat and deeply nested values, and `decodeStrict` vs `decodeStrictBA` |
 
 The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:
 the combinatorial heart of the ABI offset arithmetic is proved once on `List Part`,

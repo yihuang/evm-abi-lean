@@ -7,9 +7,9 @@ import EvmAbi.Static
 import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.Codec.Strict
+import EvmAbi.Codec.ByteArray
 import EvmAbi.Parts
 import EvmAbi.Packed
-import EvmAbi.Builder
 import EvmAbi.HumanReadable
 import EvmAbi.HumanReadable.Meta
 
@@ -360,6 +360,96 @@ example : (Ty.tuple []).Valid := by decide
 example : (decodeStrict (.array (.tuple [])) (encodeUint (2 ^ 64))).isNone = true := by
   native_decide
 
+/-! ## Primitive reads at a `ByteArray` offset
+
+Each agrees with its list counterpart on the suffix — that is
+`decodeUintBA_eq` and friends — and the window is clamped to the buffer, so
+a length word off the wire cannot size an allocation. -/
+
+/-- Head section of `(uint256, bytes)`: a word then an offset word. -/
+def baBuf : ByteArray :=
+  encodeByteArray (.tuple [.uint 256, .bytes])
+    (⟨7, by decide⟩, (⟨[1, 2, 3], by decide⟩, ()))
+
+example : decodeUintBA baBuf 0 = decodeUint (baBuf.data.toList.drop 0) := by native_decide
+example : decodeUintBA baBuf 32 = decodeUint (baBuf.data.toList.drop 32) := by native_decide
+example : decodeBoolBA baBuf 0 = decodeBool (baBuf.data.toList.drop 0) := by native_decide
+example : decodeBytesPrefixBA baBuf 64 = decodeBytesPrefix (baBuf.data.toList.drop 64) := by
+  native_decide
+
+-- reading past the end is `none`, not a crash
+example : decodeUintBA baBuf 1000 = none := by native_decide
+
+-- an attacker-chosen length must not size the copy: the window clamps, so
+-- this is 32 bytes and not a request for `2 ^ 200`
+example : (windowList baBuf 0 (2 ^ 200)).length = baBuf.size := by native_decide
+
+/-! ## The offset-cursor decoder
+
+`decodeStrictBA` walks the buffer by offset instead of converting it to a
+list and slicing.  `decodeStrictBA_eq` says the two agree, so these check
+the computation matches the theorem — on the spec vectors, and on the same
+non-canonical inputs the list decoder rejects. -/
+
+example : decodeStrictBA specSamTy (encodeByteArray specSamTy specSamVal) = some specSamVal :=
+  decodeStrictBA_encodeByteArray specSamTy (by native_decide) specSamVal (by native_decide)
+
+example : (decodeStrictBA specFTy (encodeByteArray specFTy specFVal)).isSome = true := by
+  native_decide
+example : (decodeStrictBA specGTy (encodeByteArray specGTy specGVal)).isSome = true := by
+  native_decide
+
+-- the offset walk and the list walk decide the same buffers
+example : (decodeStrictBA specSamTy specSamBytes.toByteArray).isSome =
+    (decodeStrict specSamTy specSamBytes).isSome := by native_decide
+
+example : IsCanonicalBA specSamTy specSamBytes.toByteArray := by native_decide
+
+-- and the capstones themselves, as theorems (no computation)
+example : ∃ v, encodeByteArray specSamTy v = encodeByteArray specSamTy specSamVal :=
+  (isCanonicalBA_iff specSamTy (by native_decide) _ (by native_decide)).mp
+    (by unfold IsCanonicalBA
+        rw [decodeStrictBA_encodeByteArray specSamTy (by native_decide) specSamVal
+          (by native_decide)]
+        rfl)
+
+example : decodeStrictBA specGTy (encodeByteArray specGTy specGVal) = some specGVal :=
+  (decodeStrictBA_eq_some_iff specGTy (by native_decide) _ specGVal (by native_decide)).mpr rfl
+
+-- the non-canonical vectors are rejected by the offset walk too
+example : (decodeStrictBA ncTy ncSharedTail.toByteArray).isNone = true := by native_decide
+example : (decodeStrictBA ncTy ncSwapped.toByteArray).isNone = true := by native_decide
+example : (decodeStrictBA ncTy ncGap.toByteArray).isNone = true := by native_decide
+example : (decodeStrictBA ncTy ncIntoHead.toByteArray).isNone = true := by native_decide
+example : (decodeStrictBA ncTy ncMisaligned.toByteArray).isNone = true := by native_decide
+
+-- trailing garbage: the exact-consumption check is now `n = ba.size`
+example : (decodeStrictBA specSamTy (specSamBytes ++ [0]).toByteArray).isNone = true := by
+  native_decide
+
+-- degenerate inputs behave the same on both paths
+example : (decodeStrictBA (.uint 256) ByteArray.empty).isNone = true := by native_decide
+example : (decodeStrictBA (.tuple []) ByteArray.empty).isSome = true := by native_decide
+example : (decodeStrictBA (.array (.uint 256))
+    (encodeByteArray (.array (.uint 256)) ⟨[], by decide⟩)).isSome = true := by native_decide
+example : (decodeStrictBA .bytes (encodeByteArray .bytes ⟨[], by decide⟩)).isSome = true := by
+  native_decide
+
+-- the zero-head guard and the window clamp hold on the offset path too
+example : (decodeStrictBA (.array (.tuple [])) (encodeUint (2 ^ 64)).toByteArray).isNone = true := by
+  native_decide
+example : (decodeStrictBA .bytes (encodeUint (2 ^ 200)).toByteArray).isNone = true := by
+  native_decide
+
+-- truncating an encoding anywhere is rejected by both, identically
+example :
+  let t : Ty := .tuple [.bytes, .uint 8]
+  let v : t.Val := (⟨[1, 2, 3], by decide⟩, (⟨9, by decide⟩, ()))
+  let ba := encodeByteArray t v
+  ∀ i ∈ [0, 1, 31, 32, 63, 64, 95, 96, 127],
+    (decodeStrictBA t (ba.extract 0 i)).isSome = (decodeStrict t (ba.extract 0 i).data.toList).isSome
+:= by native_decide
+
 /-! ## Packed ABI: primitive encodings -/
 
 -- uint8: 1 byte
@@ -550,7 +640,7 @@ example : decodePacked (.tuple (List.replicate 1024 (.uint 8)))
 #eval (decodePacked (.tuple (List.replicate 8192 (.uint 8)))
     (encodePacked (.tuple (List.replicate 8192 (.uint 8))) (repU8 8192))).isSome  -- true
 
-/-! ## Builder (node 13)
+/-! ## Builder
 
 The builder denotes the byte list it stands for, and `run` produces exactly
 those bytes.  `Builder` is structurally recursive, so `decide` evaluates it. -/
@@ -568,11 +658,12 @@ example : (Builder.ofList [1, 2] ++ Builder.zeros 2).run.data.toList = [1, 2, 0,
   native_decide
 example : (Builder.chunk "hi".toUTF8).run.data.toList = [0x68, 0x69] := by native_decide
 
-/-! ## Executable encoder (node 14)
+/-! ## Executable encoder
 
-`encodeByteArray` is the `Builder`-based encoder run into a `ByteArray`.  It
-agrees with the specification encoder on the Solidity spec vectors — and by
-`data_toList_encodeByteArray`, on *every* value, with no computation. -/
+`encodeByteArray` runs the very builder `encode` materializes, into a
+`ByteArray`.  It agrees with the specification encoder on the Solidity spec
+vectors — and by `data_toList_encodeByteArray`, on *every* value, with no
+computation. -/
 
 #eval (encodeByteArray specSamTy specSamVal).size    -- 320
 

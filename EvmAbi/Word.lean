@@ -66,4 +66,47 @@ theorem natAt_lt {buf : List UInt8} {i n : Nat} (h : natAt buf i = some n) :
       rw [← h]
       exact UInt256.toNat_lt w
 
+/-! ## Reading a word straight out of a `ByteArray`
+
+`natAt` slices: `drop` walks the buffer to the offset and `take` allocates a
+fresh 32-cell list.  A reader that walks `k` words of one buffer therefore
+costs `O(k · n)`.  `natAtBA` reads the same word by index —
+`Binary.decodeBEBytesFrom`, which `Binary.Fast` implements without ever
+touching `ba.data.toList` — so it is `O(1)` in the buffer.
+
+`natAtBA_eq` is the bridge: the two agree, with the offset in bytes rather
+than in words, so anything proved about `natAt` transports. -/
+
+/-- Read the 32-byte word at *byte* offset `off` of a `ByteArray`, without
+slicing it; `none` when fewer than 32 bytes remain. -/
+def natAtBA (ba : ByteArray) (off : Nat) : Option Nat :=
+  if off + 32 ≤ ba.size then some (decodeBEBytesFrom ba off 32) else none
+
+/-- **Bridge**: the indexed read is the list read at the same position. -/
+theorem natAtBA_eq (ba : ByteArray) (off : Nat) :
+    natAtBA ba off = natAt (ba.data.toList.drop off) 0 := by
+  have hlen : ((ba.data.toList.drop off).take 32).length = min 32 (ba.size - off) := by
+    rw [List.length_take, List.length_drop, ← ByteArray.size_eq_toList_length]
+  simp only [natAtBA, natAt, wordAt, Nat.mul_zero, List.drop_zero, hlen]
+  by_cases h : off + 32 ≤ ba.size
+  · rw [if_pos h, if_pos (by omega : min 32 (ba.size - off) = 32)]
+    have h32 : ((ba.data.toList.drop off).take 32).length = UInt256.byteSize := by
+      rw [hlen]; show min 32 (ba.size - off) = 32; omega
+    -- exactly `byteSize` bytes fit, so nothing truncates on the way in
+    have hnt : (UInt256.ofBEBytes ((ba.data.toList.drop off).take 32)).toNat =
+        decodeBEU ((ba.data.toList.drop off).take 32) := by
+      show (UInt256.ofNat (decodeBEU _)).toNat = _
+      rw [UInt256.toNat_ofNat]
+      apply Nat.mod_eq_of_lt
+      have hb := decodeBEU_lt ((ba.data.toList.drop off).take 32)
+      rwa [h32] at hb
+    simp only [Option.map_some, Option.some.injEq, decodeBEBytesFrom]
+    exact hnt.symm
+  · rw [if_neg h, if_neg (by omega : ¬ min 32 (ba.size - off) = 32)]
+    rfl
+
+/-- A word read out of a `ByteArray` is below `2 ^ 256`, like any word. -/
+theorem natAtBA_lt {ba : ByteArray} {off n : Nat} (h : natAtBA ba off = some n) :
+    n < 2 ^ 256 := natAt_lt (by rwa [← natAtBA_eq])
+
 end EvmAbi

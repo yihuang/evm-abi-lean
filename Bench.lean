@@ -3,8 +3,9 @@ import EvmAbi
 /-!
 # Bench
 
-A benchmark for the executable encoder (`encodeByteArray`) against the
-specification encoder (`EvmAbi.Codec`).  Build and run with
+A benchmark for the executable codec — `encodeByteArray` and
+`decodeStrictBA` — against the `List UInt8` specification each is proved
+equal to.  Build and run with
 
 ```bash
 lake build bench && ./.lake/build/bin/bench
@@ -73,6 +74,14 @@ def benchTy (label : String) (t : Ty) (v : t.Val) : IO Unit := do
   timeIt "spec  encode ++ toByteArray" (fun _ => (encode t v).toByteArray.size)
   timeIt "fast  encodeByteArray      " (fun _ => (encodeByteArray t v).size)
 
+/-- Decode the same buffer both ways; the `bytes` count is the buffer size. -/
+def benchDecode (label : String) (ba : ByteArray) : IO Unit := do
+  IO.println s!"{label} ({ba.size} bytes)"
+  timeIt "spec  decodeStrict   (list)" (fun _ =>
+    if (decodeStrict flatTy ba.data.toList).isSome then ba.size else 0)
+  timeIt "fast  decodeStrictBA       " (fun _ =>
+    if (decodeStrictBA flatTy ba).isSome then ba.size else 0)
+
 def main : IO Unit := do
   IO.println "== flat bytes[], 256-byte elements (constant factor) =="
   benchTy "-- 500 elements"  flatTy (flatVal 500 (by decide))
@@ -85,5 +94,10 @@ def main : IO Unit := do
   -- the two encoders must agree byte for byte — this is `encodeByteArray_eq`
   let v := flatVal 50 (by decide)
   let w := nestVal 20
+  IO.println "== decode: list cursors vs offset cursors =="
+  -- `decodeStrict` converts the buffer to a list and slices it; `decodeStrictBA`
+  -- walks the same buffer by offset.  Same theorem, same answer.
+  benchDecode "-- 500 elements"  (encodeByteArray flatTy (flatVal 500 (by decide)))
+  benchDecode "-- 2000 elements" (encodeByteArray flatTy (flatVal 2000 (by decide)))
   IO.println s!"agree(flat)   = {(encode flatTy v).toByteArray == encodeByteArray flatTy v}"
   IO.println s!"agree(nested) = {(encode (nest 20) w).toByteArray == encodeByteArray (nest 20) w}"

@@ -262,6 +262,7 @@ were moved to sibling modules: `Codec.Roundtrip`, `Codec.Sound`,
 | **Roundtrip** | `Codec.Roundtrip` | `decode_roundtrip` family — every encoding decodes back, leaving the suffix untouched |
 | **Soundness** | `Codec.Sound` | `decode_sound` family — the decoder only produces encodings |
 | **Strict API** | `Codec.Strict` | `decodeStrict`, `IsCanonical`, and the capstones |
+| **Offset decoder** | `Codec.ByteArray` | `GetBA` / `decodeBA` / `decodeStrictBA` — the same walk with the cursors as offsets into one buffer — and the agreement family (`decodeBA_eq`, `decodeStrictBA_eq`) that carries the four rows above onto it |
 
 **Static delegation** is the first milestone: for static types the frontier
 never moves and the tail cursor is never read, so the roundtrips hold
@@ -462,15 +463,26 @@ values, and the `decreasing_tactic` discharges every goal.
 
 ### ByteArray Decoder
 
-The encoder now has a verified `ByteArray` path (§3.7); the decoder does
-not.  `decode` is already *linear* — two monotonic cursors, and a frontier
-advanced by the byte count the decoder reports rather than by measuring a
-cursor — but it still consumes a `List UInt8`, so the caller pays to unpack
-the calldata it received as a `ByteArray`.  The natural counterpart is a
-cursor — a `(ByteArray, offset)` pair with `O(1)` positioning — and a
-bridging theorem in the same style as `data_toList_encodeByteArray`,
-relating `decodeCursor t ⟨ba, off⟩` to `decode t (ba.data.toList.drop off)`,
-so the roundtrip transports rather than being reproved.
+Both directions now have a verified `ByteArray` path — the encoder in
+§3.7, the decoder in `EvmAbi.Codec.ByteArray`, where `GetBA` is `Get2` with
+the two cursors as naturals into one shared buffer.  Every definition is
+paired with an agreement lemma under `off ↦ ba.data.toList.drop off`
+(`decodeBA_eq`, `decodeElemBA_eq`, `decodeElemsBA_eq`, `decodeTupleBA_eq`,
+`decodeStrictBA_eq`), so the roundtrip, soundness and capstone families
+transport rather than being reproved.  Measured 2.9x on `bytes[]`.
+
+Two things are worth knowing before touching that module.  The `array`
+clause of both decoders matches *dependently* on its length word — the
+`some k` branch needs the match equation for the `Ty.Val` bound — so
+neither scrutinee can be rewritten in place; `decode_array_pos` / `_none`
+resolve the match against a known word first.  And windowed reads must
+clamp to the buffer, because the length is attacker-chosen and
+`ByteArray.extract` sizes its copy from the range it is given.
+
+What remains is below the codec: `decodeBA` still reads payloads through
+`windowList`, which copies the field's bytes into a list because that is
+what a `bytes` value is.  Making `Ty.Val`'s payloads `ByteArray` would
+remove the last copy, at the cost of a different value family.
 
 ### Faster Word Encoding — done, upstream
 

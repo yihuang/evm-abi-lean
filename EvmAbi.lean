@@ -9,6 +9,7 @@ import EvmAbi.Codec
 import EvmAbi.Codec.Roundtrip
 import EvmAbi.Codec.Sound
 import EvmAbi.Codec.Strict
+import EvmAbi.Codec.ByteArray
 import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.HumanReadable
@@ -45,6 +46,11 @@ the historical build order, nodes 1–8):
                   `EvmAbi.Codec.Sound` / `EvmAbi.Codec.Strict`
                   (`IsCanonical` / `decodeStrict`: canonical buffers are
                   exactly the image of `encode`)
+* `EvmAbi.Codec.ByteArray` — the same decoder over **offset cursors**: two
+                  naturals into one shared `ByteArray` instead of two
+                  sub-lists of a converted copy, with `decodeBA_eq` /
+                  `decodeStrictBA_eq` proving it is the list walk on the
+                  same bytes, so every theorem transports
 * `EvmAbi.Parts`   — head/tail combinator: `Part`, `encodeParts`, offset theorems
 * `EvmAbi.Packed`  — packed ABI (`abi.encodePacked`, Solidity's non-standard
                   packed mode): tight scalars, in-place dynamic payloads,

@@ -4,9 +4,9 @@ import EvmAbi.Word
 /-!
 # EvmAbi.Builder
 
-A byte-string **builder** (roadmap node 13): the bridge between the
-`List UInt8` the proofs are stated over and the contiguous `ByteArray`
-execution wants.
+The write and read layer.  `Builder` bridges the `List UInt8` the proofs
+are stated over and the contiguous `ByteArray` execution wants; `Get2` is
+its dual on the reading side, a prefix reader over two cursors.
 
 `List UInt8` is the right *specification* type — `++` is associative on the
 nose, `take`/`drop` have a rich algebra — and the wrong *runtime* type: a cons
@@ -34,10 +34,17 @@ data_toList_run : b.run.data.toList = b.toList
 ```
 
 is what makes the layer useful: any `List UInt8` statement transports to the
-`ByteArray` that `run` produces without reproving anything.  `EvmAbi.Encode`
-builds the ABI encoder on this and inherits the whole roundtrip stack.
+`ByteArray` that `run` produces without reproving anything.  `EvmAbi.Codec`
+writes its `put` against this one builder, so `encode = (put t v).toList` and
+`encodeByteArray = (put t v).run` are the same encoder materialized two ways
+— there is no second encoder to keep in step.
 
-ABI-agnostic: depends only on the Lean 4 core library and `Binary.ByteArray`.
+One caveat for proofs: `append` is a *constructor*, so it is associative and
+`empty`-neutral only up to `toList`.  Never state a `Builder`-valued equation
+that needs those laws; state it of the denotation.
+
+ABI-agnostic apart from the one word primitive (`putWord`): otherwise just
+the Lean 4 core library and `Binary.ByteArray`.
 -/
 namespace EvmAbi
 
