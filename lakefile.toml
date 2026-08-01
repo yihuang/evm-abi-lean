@@ -22,4 +22,4 @@ root = "Bench"
 [[require]]
 name = "binary"
 git = "https://github.com/mmsqe/lean-endianness.git"
-rev = "16dbbee248f00c969fa40c95d3a257da782457a4"
+rev = "4ac885b0561a06661b67ad3dfdafb52d65a0b460"
