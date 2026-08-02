@@ -5,37 +5,53 @@ Working notes for AI agents editing this repository: Lean 4 ABI codec
 
 ## Architecture in one paragraph
 
-The library is a proof-first ABI codec.  `put` builds a `Ty.Val` into a
-`Builder` (`EvmAbi.Builder`: a chunk tree with `O(1)` `++` and a cached
-size); it is materialized two ways — `encode = (put t v).toList` is the
-`List UInt8` *specification* every theorem is stated over, and
-`encodeByteArray = (put t v).run` is the same builder filled into a
-pre-sized `ByteArray`, bridged by `data_toList_encodeByteArray`.
-`decode` (the linear canonical decoder)
-reads canonical layouts back with two monotonic cursors threaded through
-the **`Get2` monad** (`EvmAbi.Builder`); `decodeStrict` is `decode` plus an
-exact-consumption check.  The `Get2` walkers (`decodeElem`, `decodeElems`,
-`decodeTuple`) are the heart; the roundtrip family
-(`decode_roundtrip`: encode ⇒ decode), soundness family (`decode_sound`:
-decode ⇒ encode) and bound-free static delegation (`decode_static_append`)
-are their theorems; `IsCanonical` / `decodeStrict` and the capstones
-(`isCanonical_iff`, `decodeStrict_eq_some_iff`) form the strict API.
+The library is a proof-first ABI codec with two layers.  The **spec layer**
+(`EvmAbi.Spec`, implemented by `EvmAbi.Codec` and its `Roundtrip`/`Sound`/
+`Strict` families) is the proof surface: `Spec.put` builds a `Ty.Val` into
+a `Builder` (`EvmAbi.Builder`: a chunk tree with `O(1)` `++` and a cached
+size), materialized two ways — `Spec.encode = (put t v).toList` is the
+`List UInt8` specification every theorem is stated over, and
+`Spec.encodeByteArray = (put t v).run` fills the same builder into a
+pre-sized `ByteArray`, bridged by `Spec.data_toList_encodeByteArray`.
+`Spec.decode` is the linear canonical decoder reading with two monotonic
+cursors threaded through the **`Get2` monad** (`EvmAbi.Builder`);
+`Spec.decodeStrict` is `Spec.decode` plus an exact-consumption check.  The
+`Get2` walkers (`Spec.decodeElem`, `Spec.decodeElems`, `Spec.decodeTuple`)
+are the heart; the roundtrip family (`Spec.decode_roundtrip`: encode ⇒
+decode), soundness family (`Spec.decode_sound`: decode ⇒ encode) and
+bound-free static delegation (`Spec.decode_static_append`) are their
+theorems; `Spec.IsCanonical` / `Spec.decodeStrict` and the capstones
+(`Spec.isCanonical_iff`, `Spec.decodeStrict_eq_some_iff`) form the strict
+API.
+
+The **runtime layer** (`EvmAbi.Codec.Runtime`) is what users run: `encode`
+over `ValBA` values into a `ByteArray`, `decode` / `decodeStrict` over a
+`ByteArray` into `ValBA` values, and `IsCanonical`.  It is tied to the spec
+by `toList_putBA` (runtime encoder denotes the spec encoder of the
+denotation), `ValBA.toList`, and the decoder agreement family in
+`EvmAbi.Codec.ByteArray`; a private `decodeBA` walker there is a proof
+bridge and is not public API.
 `EvmAbi.Packed` (`decodePacked`) mirrors the codec shape — a `Builder`
 encoder (`putPacked`) and `Get2` walkers (`decodePackedElem` /
 `decodePackedTuple`) — and reads array elements via the bound-free static
-delegation (`decodeElems` / `decode_static_append`).
+delegation (`Spec.decodeElems` / `Spec.decode_static_append`).
 `EvmAbi.Codec.ByteArray` mirrors the decoder over offsets — `GetBA` is
 `Get2` with the two cursors as naturals into one buffer — and pairs every
 definition with an agreement lemma under `off ↦ ba.data.toList.drop off`,
 so the list families transport rather than being restated.  Reads there go
-through `natAtBA` / `windowList`, never through a slice.
-`EvmAbi.Codec` holds the codec proper (defs, helper packages, static
-delegation); the theorem families live in `EvmAbi.Codec.Roundtrip` /
-`EvmAbi.Codec.Sound` / `EvmAbi.Codec.Strict` (each family is one self-
-contained `mutual` block).
+through `natAtBA` / `windowList`, never through a slice.  `EvmAbi.Codec`
+holds the spec codec proper (defs, helper packages, static delegation); the
+theorem families live in `EvmAbi.Codec.Roundtrip` / `EvmAbi.Codec.Sound` /
+`EvmAbi.Codec.Strict` (each family is one self-contained `mutual` block).
 
 ## Style rules
 
+* **Naming:** the runtime API is primary and unsuffixed (`encode`,
+  `decode`, `decodeStrict`, `IsCanonical`); the list/spec API lives in the
+  `Spec` namespace (`Spec.encode`, `Spec.decodeStrict`, …).  New
+  `ByteArray`/`ValBA` work goes in `EvmAbi.Codec.Runtime` or
+  `EvmAbi.Codec.ByteArray` and must ship with its agreement lemma against
+  the `Spec` counterpart.
 * **Small lemmas, short proofs.**  If a proof grows past ~30 lines or
   fights the goal, split it: per-constructor lemmas, per-step lemmas,
   shared helpers.  Do not force-debug one big proof.

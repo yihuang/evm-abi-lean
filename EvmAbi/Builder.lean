@@ -281,4 +281,51 @@ def fail : Get2 α := ⟨fun _ _ _ => none⟩
 
 end Get2
 
+/-! ## GetBA: the dual-cursor reader over one `ByteArray` -/
+
+namespace GetBA
+
+/-- The result of a `GetBA` run: the value, the advanced cursor *offsets*,
+and the new expected tail frontier. -/
+structure Result (α : Type) where
+  /-- The decoded value. -/
+  val : α
+  /-- Remaining head cursor, as an offset. -/
+  head : Nat
+  /-- Remaining tail cursor, as an offset. -/
+  tails : Nat
+  /-- New expected tail frontier. -/
+  frontier : Nat
+
+/-- The offsets read as the sub-lists they stand for — the translation the
+agreement lemmas are stated over. -/
+def Result.toList (ba : ByteArray) (r : Result α) : Get2.Result α :=
+  ⟨r.val, ba.data.toList.drop r.head, ba.data.toList.drop r.tails, r.frontier⟩
+
+end GetBA
+
+/-- A dual-cursor prefix reader over one `ByteArray`: the `Get2` analogue
+with the two cursors as offsets into a shared buffer. -/
+structure GetBA (α : Type) where
+  run : ByteArray → Nat → Nat → Nat → Option (GetBA.Result α)
+
+namespace GetBA
+
+instance : Monad GetBA where
+  pure a := ⟨fun _ ho to E => some ⟨a, ho, to, E⟩⟩
+  bind x f := ⟨fun ba ho to E =>
+    match x.run ba ho to E with
+    | none => none
+    | some r => (f r.val).run ba r.head r.tails r.frontier⟩
+
+@[simp] theorem pure_run (a : α) (ba : ByteArray) (ho to E : Nat) :
+    (pure a : GetBA α).run ba ho to E = some ⟨a, ho, to, E⟩ := rfl
+
+@[simp] theorem bind_run (x : GetBA α) (f : α → GetBA β) (ba : ByteArray) (ho to E : Nat) :
+    (x >>= f).run ba ho to E = (match x.run ba ho to E with
+      | none => none
+      | some r => (f r.val).run ba r.head r.tails r.frontier) := rfl
+
+end GetBA
+
 end EvmAbi

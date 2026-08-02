@@ -6,26 +6,29 @@ Conforms to the [Solidity ABI Specification](https://docs.soliditylang.org/en/la
 
 ## Core Theorems
 
+All theorems in this section are stated in `namespace EvmAbi.Spec`.
+
 ### Roundtrip (bijection)
 
-The central result is that `encode` and `decode` form a **bijection** between
-the value space of a valid ABI type and the image of `encode` within the
-`2^256`-byte universe.  The strict roundtrip — decode after encode is the
+The central result is that `Spec.encode` and `Spec.decode` form a **bijection** between
+the value space of a valid ABI type and the image of `Spec.encode` within the
+`2^256`-byte universe.  The strict roundtrip — decoding after encoding is the
 identity on a complete buffer — is:
 
 ```lean4
+-- in `namespace EvmAbi.Spec`
 theorem decodeStrict_encode (t : Ty) (hv : t.Valid) (v : t.Val)
-    (hb : (encode t v).length < 2 ^ 256) : decodeStrict t (encode t v) = some v
+    (hb : (Spec.encode t v).length < 2 ^ 256) : Spec.decodeStrict t (Spec.encode t v) = some v
 ```
 
-`decode` is the linear canonical decoder in *prefix form*: it returns the
+`Spec.decode` is the linear canonical decoder in *prefix form*: it returns the
 value together with the number of bytes it consumed and the untouched
 remainder, so nested components are prefixes of their parent's buffer
-(`decode t (encode t v ++ rest) = some (v, (encode t v).length, rest)`).
+(`Spec.decode t (Spec.encode t v ++ rest) = some (v, (Spec.encode t v).length, rest)`).
 The count is computed structurally, never by measuring the buffers, which
 is what lets the walk advance its tail frontier in `O(1)` per component.
 
-Injectivity of `encode` is an immediate corollary (`encode_of_decodeStrict`):
+Injectivity of `Spec.encode` is an immediate corollary (`Spec.encode_of_decodeStrict`):
 if two values encode to the same buffer, decoding that buffer recovers
 both, so they coincide.
 
@@ -35,7 +38,7 @@ dispensed with entirely:
 ```lean4
 theorem decode_static_append (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
     (v : t.Val) (rest : List UInt8) :
-    decode t (encode t v ++ rest) = some (v, t.headSize, rest)
+    Spec.decode t (Spec.encode t v ++ rest) = some (v, t.headSize, rest)
 ```
 
 No `sorry`.  All types (`uintM`, `intM`, `bool`, `address`, `bytesM`, `bytes`, `string`,
@@ -43,12 +46,12 @@ No `sorry`.  All types (`uintM`, `intM`, `bool`, `address`, `bytesM`, `bytes`, `
 
 ### Strictness
 
-Strictness is intrinsic to the decoder, not a separate layer: `decode` walks
+Strictness is intrinsic to the decoder, not a separate layer: `Spec.decode` walks
 a buffer with two monotonic cursors (head section, tails) threading an
 *expected tail frontier*, and a dynamic component's offset word must equal
 the frontier exactly — so tails are forced to be laid out *contiguously, in
-order, immediately after the head section*.  `decodeStrict` is `decode`
-plus an exact-consumption check (no trailing garbage), and `IsCanonical`
+order, immediately after the head section*.  `Spec.decodeStrict` is `Spec.decode`
+plus an exact-consumption check (no trailing garbage), and `Spec.IsCanonical`
 the corresponding predicate.
 
 The capstone theorems characterise the bijection in purely extensional terms:
@@ -57,18 +60,18 @@ The capstone theorems characterise the bijection in purely extensional terms:
 -- Under the buffer bound, canonical buffers are exactly the encodings.
 theorem isCanonical_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
     (hb : buf.length < 2 ^ 256) :
-    IsCanonical t buf ↔ ∃ v, encode t v = buf
+    Spec.IsCanonical t buf ↔ ∃ v, Spec.encode t v = buf
 
 -- The strict decoder succeeds exactly on encodings — no side condition on the
 -- value, since every t.Val carries its own bounds.
 theorem decodeStrict_eq_some_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
     (v : t.Val) (hb : buf.length < 2 ^ 256) :
-    decodeStrict t buf = some v ↔ encode t v = buf
+    Spec.decodeStrict t buf = some v ↔ Spec.encode t v = buf
 ```
 
 The negative test suite in `Tests.lean` shows that non-canonical inputs
 (swapped tails, gaps, duplicate offsets, misaligned offsets, trailing
-garbage) are all rejected by `decodeStrict`.
+garbage) are all rejected by `Spec.decodeStrict`.
 
 ### Packed ABI
 
@@ -104,13 +107,14 @@ The `.tuple` arm is the flat argument list of a multi-argument
 *nested* tuples or arrays it is a total-function extension with no
 Solidity counterpart, documented and tested as such.
 
-### Executable encoder
+### Runtime codec
 
-`encode` returns a `List UInt8`.  That is the right type for the proofs — `++`
-is associative on the nose and `take`/`drop` have a rich algebra — and the
-wrong one for execution: a cons cell and a boxed byte per byte, and a nest of
-`++`s that re-copies a value's bytes once per level of nesting, so a `d`-deep
-value costs `O(n · d)`.
+The names users run are unsuffixed: `encode` takes a `ValBA` value (packed
+`ByteArray` payloads) and returns a `ByteArray`; `decode` / `decodeStrict`
+take a `ByteArray` and return `ValBA` values; `IsCanonical` is the
+corresponding predicate.  The list-based specification lives in the `Spec`
+namespace (`Spec.encode`, `Spec.decodeStrict`, …) and is the surface every
+theorem is stated over.
 
 `EvmAbi.Builder` is what the encoder is written against, so there is only
 one encoder.  A `Builder` is a tree of byte runs paired with its cached byte
@@ -121,27 +125,41 @@ the head/tail layout asks for every tail's size while writing the offset
 words, so a `size` that walked the tree would put the `O(n · d)` cost
 straight back.
 
-`encode` and `encodeByteArray` are the same `put`, materialized two ways:
+`Spec.encode` returns a `List UInt8`.  That is the right type for the proofs — `++`
+is associative on the nose and `take`/`drop` have a rich algebra — and the
+wrong one for execution: a cons cell and a boxed byte per byte, and a nest of
+`++`s that re-copies a value's bytes once per level of nesting, so a `d`-deep
+value costs `O(n · d)`.  `Spec.encode` and `Spec.encodeByteArray` are the same
+`Spec.put`, materialized two ways:
 
 ```lean4
-def encode (t : Ty) (v : t.Val) : List UInt8 := (put t v).toList   -- specification
-def encodeByteArray (t : Ty) (v : t.Val) : ByteArray := (put t v).run   -- execution
+def Spec.encode (t : Ty) (v : t.Val) : List UInt8 := (Spec.put t v).toList   -- specification
+def Spec.encodeByteArray (t : Ty) (v : t.Val) : ByteArray := (Spec.put t v).run
 
 -- so the bytes it produces are exactly the specified ones
+-- in `namespace EvmAbi.Spec`
 theorem data_toList_encodeByteArray (t : Ty) (v : t.Val) :
-    (encodeByteArray t v).data.toList = encode t v
+    (Spec.encodeByteArray t v).data.toList = Spec.encode t v
 ```
 
-That theorem is the whole bridge: every result already proved about `encode`
-transports without reproving anything, so the roundtrip, the static
-roundtrip, canonicity and the strict roundtrip are one-line corollaries at
-the end of `EvmAbi.Codec.Strict`, e.g. `decode_encodeByteArray`.
+The runtime encoder is the same layout over `ValBA` values, and
+`toList_putBA` proves it denotes the spec encoder of the denotation:
+
+```lean4
+def encode (t : Ty) (v : ValBA t) : ByteArray := (putBA t v).run
+
+theorem toList_putBA (t : Ty) (v : ValBA t) :
+    (putBA t v).toList = Spec.encode t (ValBA.toList t v)
+```
+
+so the roundtrip, the static roundtrip, canonicity and the strict roundtrip
+transport to the runtime encoder without reproving anything.
 
 Measured with `lake build bench && ./.lake/build/bin/bench` (Apple M-series;
 compiled only — the builder rests on the `@[extern]` `ByteArray.push` and
 `ByteArray.emptyWithCapacity`, so interpreted runs do not show the win):
 
-| shape | `encode` + `toByteArray` | `encodeByteArray` | speedup |
+| shape | `Spec.encode` + `toByteArray` | `Spec.encodeByteArray` | speedup |
 |---|---|---|---|
 | `bytes[]`, 500 × 256 B | 2744 µs | 954 µs | 2.9× |
 | `bytes[]`, 2000 × 256 B | 10928 µs | 3740 µs | 2.9× |
@@ -156,22 +174,26 @@ Both columns also depend on how fast one 32-byte word is produced, which is
 `lean-binary`'s job: its `Binary.Fast` peels eight bytes at a time through a
 `UInt64` instead of one at a time through bignum division, and registers the
 result with `@[csimp]`, so this library needed no change to benefit.  That is
-worth 4.1× to the specification encoder and 5.0× to `encodeByteArray` on the
+worth 4.1× to the specification encoder and 5.0× to `Spec.encodeByteArray` on the
 `uint256[]` row — and, because it sits below both, it is why the builder's own
 advantage there is only 1.3×.
 
-The decoder has the same two forms.  `decode` walks two `List UInt8`
-cursors; `decodeStrictBA` walks the same layout as two *offsets* into one
-shared `ByteArray`, reading words with an indexed read and materialising
-only the payloads that a `bytes`/`string`/`bytesN` value actually is:
+The decoder has the same two forms.  `Spec.decode` walks two `List UInt8`
+cursors; `decodeStrict` (runtime) walks the same layout as two *offsets*
+into one shared `ByteArray`, reading words with an indexed read and
+materialising only the payloads that a `bytes`/`string`/`bytesN` value
+actually is:
 
 ```lean4
+theorem decodeStrictBAVal_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) :
+    (decodeStrict t ba).map (ValBA.toList t) = decodeStrictBA t ba
+
 theorem decodeStrictBA_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) :
-    decodeStrictBA t ba = decodeStrict t ba.data.toList
+    decodeStrictBA t ba = Spec.decodeStrict t ba.data.toList
 ```
 
-so the capstones hold of it too (`decodeStrictBA_eq_some_iff`,
-`isCanonicalBA_iff`).  Compiled, decoding a `bytes[]`:
+so the capstones hold of the runtime decoder too.  Compiled, decoding a
+`bytes[]`:
 
     500 elements  (160KB)   3460 -> 1177 us    2.9x
     2000 elements (640KB)  13945 -> 4799 us    2.9x
@@ -235,7 +257,7 @@ let p := params! "address spender, uint256 amount"
 The macros fail at **compile time** if the string is not a valid
 human-readable ABI signature, catching typos before any code runs.
 They can be used anywhere a term is expected — `def`, `let`, `example`,
-`theorem`, or as arguments to `encode`/`decode`.
+`theorem`, or as arguments to `Spec.encode`/`Spec.decode`.
 
 ### Supported syntax
 
@@ -280,13 +302,13 @@ The proof is built in incremental layers, each reusable independently:
 | **6. Static primitives** | `Static` | Standalone codecs for `uintM`, `intM`, `bool`, `address`, `bytesN`; strict bool/bytesN decoders |
 | **7. Dynamic primitives** | `Dynamic` | Standalone codecs for `bytes`, `string`; prefix-tolerant decoder variant |
 | **8. Head/tail combinator** | `Parts` | The core ABI layout abstraction (`Part`, `encodeParts`, offset-correctness theorems); type-independent |
-| **9. Full codec** | `Codec` + `Codec.Roundtrip` / `Codec.Sound` / `Codec.Strict` | `Ty`-indexed `encode` (the `List UInt8` specification) and `encodeByteArray` (the same builder run into a `ByteArray`); the linear decoder `decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); bound-free static delegation in `Codec`; roundtrip and soundness families in their own files; strict API `decodeStrict`/`IsCanonical`, the capstones, and the executable encoder's transported theorems in `Codec.Strict` |
-| **10. ByteArray decoder** | `Codec.ByteArray` | The same walk over *offset* cursors: `GetBA`, `decodeBA`, `decodeStrictBA`/`IsCanonicalBA`, the primitive reads at an offset (`natAtBA`, `windowList`), and the agreement lemmas (`decodeBA_eq`, `decodeStrictBA_eq`) that carry every list theorem across |
+| **9. Spec codec** | `Codec` + `Codec.Roundtrip` / `Codec.Sound` / `Codec.Strict` | `Ty`-indexed `Spec.encode` (the `List UInt8` specification) and `Spec.encodeByteArray` (the same builder run into a `ByteArray`); the linear decoder `Spec.decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); bound-free static delegation in `Codec`; roundtrip and soundness families in their own files; strict API `Spec.decodeStrict`/`Spec.IsCanonical` and the capstones |
+| **10. Runtime codec** | `Codec.Runtime` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), the `ValBA` walkers, the `toList_putBA` encoder bridge, and the agreement lemmas (`decodeBAVal_eq`, `decodeStrictBAVal_eq`, `decodeStrictBA_eq`) that carry the `Spec` theorems across |
 | **11. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
 | **12. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
 | **13. Compile-time macros** | `HumanReadable.Meta` | `ty!`, `item!`, `params!` — parse string literals at elaboration time |
 | **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, builder and executable-encoder checks, offset-decoder checks (including degenerate and truncated buffers), human-readable ABI tests |
-| **Bench** | `Bench` | `lake build bench` — `encode` vs `encodeByteArray` on flat and deeply nested values, and `decodeStrict` vs `decodeStrictBA` |
+| **Bench** | `Bench` | `lake build bench` — `Spec.encode` vs `Spec.encodeByteArray` vs runtime `encode`, and `Spec.decodeStrict` vs `decodeStrict` |
 
 The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:
 the combinatorial heart of the ABI offset arithmetic is proved once on `List Part`,
@@ -305,11 +327,11 @@ open EvmAbi.HumanReadable.Meta
 -- construct a type via human-readable ABI
 let t : Ty := ty! "(uint256, bool)"
 let v : t.Val := (⟨42, by decide⟩, (true, ()))
-let enc := encode t v
+let enc := Spec.encode t v
 -- enc = word(42) ++ word(1)
 
 -- strict roundtrip
-example : decodeStrict t (encode t v) = some v :=
+example : Spec.decodeStrict t (Spec.encode t v) = some v :=
   decodeStrict_encode t (by
     simp [Valid, AllValid])
     v

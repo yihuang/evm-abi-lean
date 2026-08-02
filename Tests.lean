@@ -8,6 +8,7 @@ import EvmAbi.Dynamic
 import EvmAbi.Codec
 import EvmAbi.Codec.Strict
 import EvmAbi.Codec.ByteArray
+import EvmAbi.Codec.Runtime
 import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.HumanReadable
@@ -99,52 +100,52 @@ example : decodeBytesN 2 ([0x12, 0x34] ++ List.replicate 29 0 ++ [1]) = none := 
 
 -- Ty-level roundtrips by computation
 
-example : decodeStrict (.uint 8) (encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ := by
+example : Spec.decodeStrict (.uint 8) (Spec.encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ := by
   native_decide
 
-example : decodeStrict (.int 16) (encode (.int 16) ⟨-1000, by decide⟩) = some ⟨-1000, by decide⟩ := by
+example : Spec.decodeStrict (.int 16) (Spec.encode (.int 16) ⟨-1000, by decide⟩) = some ⟨-1000, by decide⟩ := by
   native_decide
 
-example : decodeStrict .bool (encode .bool true) = some true := by native_decide
+example : Spec.decodeStrict .bool (Spec.encode .bool true) = some true := by native_decide
 
-example : decodeStrict (.bytesN 5) (encode (.bytesN 5) ⟨[1,2,3,4,5], rfl⟩)
+example : Spec.decodeStrict (.bytesN 5) (Spec.encode (.bytesN 5) ⟨[1,2,3,4,5], rfl⟩)
     = some ⟨[1,2,3,4,5], rfl⟩ := by native_decide
 
-example : decodeStrict .bytes (encode .bytes ⟨[0x61, 0x62, 0x63], by decide⟩)
+example : Spec.decodeStrict .bytes (Spec.encode .bytes ⟨[0x61, 0x62, 0x63], by decide⟩)
     = some ⟨[0x61, 0x62, 0x63], by decide⟩ := by native_decide
 
-example : decodeStrict .string (encode .string ⟨"Hello, world!", by native_decide⟩)
+example : Spec.decodeStrict .string (Spec.encode .string ⟨"Hello, world!", by native_decide⟩)
     = some ⟨"Hello, world!", by native_decide⟩ := by native_decide
 
 -- The same instances via library theorems (no computation)
 
-example : decodeStrict (.uint 8) (encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ :=
-  decodeStrict_encode (.uint 8) (by native_decide) _ (by native_decide)
+example : Spec.decodeStrict (.uint 8) (Spec.encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ :=
+  Spec.decodeStrict_encode (.uint 8) (by native_decide) _ (by native_decide)
 
-example : decodeStrict (.int 8) (encode (.int 8) ⟨-5, by decide⟩) = some ⟨-5, by decide⟩ :=
-  decodeStrict_encode (.int 8) (by native_decide) _ (by native_decide)
+example : Spec.decodeStrict (.int 8) (Spec.encode (.int 8) ⟨-5, by decide⟩) = some ⟨-5, by decide⟩ :=
+  Spec.decodeStrict_encode (.int 8) (by native_decide) _ (by native_decide)
 
-example : decodeStrict .bool (encode .bool false) = some false :=
-  decodeStrict_encode .bool (by native_decide) _ (by native_decide)
+example : Spec.decodeStrict .bool (Spec.encode .bool false) = some false :=
+  Spec.decodeStrict_encode .bool (by native_decide) _ (by native_decide)
 
-example : decodeStrict .bytes (encode .bytes ⟨[1, 2, 3], by decide⟩) =
+example : Spec.decodeStrict .bytes (Spec.encode .bytes ⟨[1, 2, 3], by decide⟩) =
     some ⟨[1, 2, 3], by decide⟩ :=
-  decodeStrict_encode .bytes (by native_decide) _ (by native_decide)
+  Spec.decodeStrict_encode .bytes (by native_decide) _ (by native_decide)
 
-example : decodeStrict .string (encode .string ⟨"hello", by native_decide⟩) =
+example : Spec.decodeStrict .string (Spec.encode .string ⟨"hello", by native_decide⟩) =
     some ⟨"hello", by native_decide⟩ :=
-  decodeStrict_encode .string (by native_decide) _ (by native_decide)
+  Spec.decodeStrict_encode .string (by native_decide) _ (by native_decide)
 
 -- encodeStatic_length
 
-example : (encode (.uint 256) ⟨42, by decide⟩).length = 32 := by
-  rw [encode_length_static (.uint 256) rfl (by native_decide) ⟨42, by decide⟩]
+example : (Spec.encode (.uint 256) ⟨42, by decide⟩).length = 32 := by
+  rw [Spec.encode_length_static (.uint 256) rfl (by native_decide) ⟨42, by decide⟩]
   simp [headSize]
 
--- encode_length_aligned
+-- Spec.encode_length_aligned
 
-example : Aligned (encode .bytes ⟨[1, 2, 3], by decide⟩).length :=
-  encode_length_aligned .bytes (by native_decide) _
+example : Aligned (Spec.encode .bytes ⟨[1, 2, 3], by decide⟩).length :=
+  Spec.encode_length_aligned .bytes (by native_decide) _
 
 /-! ## Head/tail combinator (node 7) -/
 
@@ -179,7 +180,7 @@ example : (encodeParts demoParts).drop (tailOffset demoParts 1) =
     (tail := Builder.ofList (encodeBytes [1, 2, 3]))
     (ys := [⟨Builder.ofList (encodeUint 2), ∅, false⟩])
 
--- end-to-end: prefix-decode the dynamic bytes value at its tail offset
+-- end-to-end: prefix-Spec.decode the dynamic bytes value at its tail offset
 example : decodeBytesPrefix ((encodeParts demoParts).drop 96) = some ([1, 2, 3], 64) := by
   native_decide
 
@@ -241,50 +242,50 @@ level (without the selector): `sam("dave", true, [1,2,3])`,
 computation; `sam` and `f` are additionally re-proved through the library
 roundtrip theorem (no computation). -/
 
-example : encode specSamTy specSamVal = specSamBytes := by native_decide
-example : encode specFTy specFVal = specFBytes := by native_decide
-example : encode specGTy specGVal = specGBytes := by native_decide
+example : Spec.encode specSamTy specSamVal = specSamBytes := by native_decide
+example : Spec.encode specFTy specFVal = specFBytes := by native_decide
+example : Spec.encode specGTy specGVal = specGBytes := by native_decide
 
-example : decodeStrict specSamTy (encode specSamTy specSamVal) = some specSamVal :=
-  decodeStrict_encode specSamTy (by native_decide) specSamVal (by native_decide)
+example : Spec.decodeStrict specSamTy (Spec.encode specSamTy specSamVal) = some specSamVal :=
+  Spec.decodeStrict_encode specSamTy (by native_decide) specSamVal (by native_decide)
 
-example : decodeStrict specFTy (encode specFTy specFVal) = some specFVal :=
-  decodeStrict_encode specFTy (by native_decide) specFVal (by native_decide)
+example : Spec.decodeStrict specFTy (Spec.encode specFTy specFVal) = some specFVal :=
+  Spec.decodeStrict_encode specFTy (by native_decide) specFVal (by native_decide)
 
 -- the spec encodings are canonical (strictly decodable, no trailing garbage)
-example : IsCanonical specSamTy specSamBytes := by native_decide
-example : IsCanonical specFTy specFBytes := by native_decide
-example : IsCanonical specGTy specGBytes := by native_decide
+example : Spec.IsCanonical specSamTy specSamBytes := by native_decide
+example : Spec.IsCanonical specFTy specFBytes := by native_decide
+example : Spec.IsCanonical specGTy specGBytes := by native_decide
 
 -- and are strictly decodable (checked via `.isSome` since the dependent
 -- return type has no `DecidableEq` instance)
-example : (decodeStrict specSamTy specSamBytes).isSome = true := by native_decide
-example : (decodeStrict specFTy specFBytes).isSome = true := by native_decide
-example : (decodeStrict specGTy specGBytes).isSome = true := by native_decide
+example : (Spec.decodeStrict specSamTy specSamBytes).isSome = true := by native_decide
+example : (Spec.decodeStrict specFTy specFBytes).isSome = true := by native_decide
+example : (Spec.decodeStrict specGTy specGBytes).isSome = true := by native_decide
 
 -- the same instances via library theorems (no computation)
 
-example : IsCanonical specSamTy (encode specSamTy specSamVal) :=
-  isCanonical_encode specSamTy (by native_decide) specSamVal (by native_decide)
+example : Spec.IsCanonical specSamTy (Spec.encode specSamTy specSamVal) :=
+  Spec.isCanonical_encode specSamTy (by native_decide) specSamVal (by native_decide)
 
-example : decodeStrict specSamTy (encode specSamTy specSamVal) = some specSamVal :=
-  decodeStrict_encode specSamTy (by native_decide) specSamVal (by native_decide)
+example : Spec.decodeStrict specSamTy (Spec.encode specSamTy specSamVal) = some specSamVal :=
+  Spec.decodeStrict_encode specSamTy (by native_decide) specSamVal (by native_decide)
 
 /-! ## C4: bounds are intrinsic, image characterization -/
 
 -- forward: a canonical buffer IS an encoding — no bound on the value side
-example : ∃ v, encode specSamTy v = specSamBytes :=
-  (isCanonical_iff specSamTy (by native_decide) specSamBytes (by native_decide)).mp
-    (by unfold IsCanonical; native_decide)
+example : ∃ v, Spec.encode specSamTy v = specSamBytes :=
+  (Spec.isCanonical_iff specSamTy (by native_decide) specSamBytes (by native_decide)).mp
+    (by unfold Spec.IsCanonical; native_decide)
 
 -- backward: canonicity of an encoding through the iff
-example : IsCanonical specSamTy (encode specSamTy specSamVal) :=
-  (isCanonical_iff specSamTy (by native_decide) _ (by native_decide)).mpr
+example : Spec.IsCanonical specSamTy (Spec.encode specSamTy specSamVal) :=
+  (Spec.isCanonical_iff specSamTy (by native_decide) _ (by native_decide)).mpr
     ⟨specSamVal, rfl⟩
 
 -- the strict roundtrip through the strict-decoder characterization
-example : decodeStrict specSamTy (encode specSamTy specSamVal) = some specSamVal :=
-  (decodeStrict_eq_some_iff specSamTy (by native_decide) _ specSamVal
+example : Spec.decodeStrict specSamTy (Spec.encode specSamTy specSamVal) = some specSamVal :=
+  (Spec.decodeStrict_eq_some_iff specSamTy (by native_decide) _ specSamVal
     (by native_decide)).mpr rfl
 
 /-! ## Canonical validation: negative vectors -/
@@ -314,40 +315,40 @@ def ncMisaligned : List UInt8 :=
 
 -- the strict decoder rejects all of them (offset words that violate the
 -- canonical layout: duplicate, swapped, gapped, head-pointing, misaligned)
-example : (decodeStrict ncTy ncSharedTail).isNone = true := by native_decide
-example : (decodeStrict ncTy ncSwapped).isNone = true := by native_decide
-example : (decodeStrict ncTy ncGap).isNone = true := by native_decide
-example : (decodeStrict ncTy ncIntoHead).isNone = true := by native_decide
-example : (decodeStrict ncTy ncMisaligned).isNone = true := by native_decide
+example : (Spec.decodeStrict ncTy ncSharedTail).isNone = true := by native_decide
+example : (Spec.decodeStrict ncTy ncSwapped).isNone = true := by native_decide
+example : (Spec.decodeStrict ncTy ncGap).isNone = true := by native_decide
+example : (Spec.decodeStrict ncTy ncIntoHead).isNone = true := by native_decide
+example : (Spec.decodeStrict ncTy ncMisaligned).isNone = true := by native_decide
 
 -- trailing garbage: the strict decoder rejects it
-example : (decodeStrict specSamTy (specSamBytes ++ [0])).isNone = true := by native_decide
+example : (Spec.decodeStrict specSamTy (specSamBytes ++ [0])).isNone = true := by native_decide
 
 /-! ## The consumed count is structural
 
-`decode` reports how many bytes it consumed, so `decodeElem` advances the
+`Spec.decode` reports how many bytes it consumed, so `decodeElem` advances the
 tail frontier in `O(1)` instead of measuring the cursors — the count is
 the encoding's length, and the remainder is untouched. -/
 
--- a prefix decode through trailing data reports the encoding length
+-- a prefix Spec.decode through trailing data reports the encoding length
 example :
-    decode .bytes (encodeBytes [1, 2, 3] ++ [0xFF]) =
+    Spec.decode .bytes (encodeBytes [1, 2, 3] ++ [0xFF]) =
       some (⟨[1, 2, 3], by decide⟩, 64, [0xFF]) := by native_decide
 
 example :
-    decode (.uint 8) (encode (.uint 8) ⟨7, by decide⟩ ++ [0xFF]) =
+    Spec.decode (.uint 8) (Spec.encode (.uint 8) ⟨7, by decide⟩ ++ [0xFF]) =
       some (⟨7, by decide⟩, 32, [0xFF]) := by native_decide
 
 -- a compound value's count is its whole layout, head plus tails
 example :
-    (decode specSamTy (specSamBytes ++ [0xFF])).map (fun p => (p.2.1, p.2.2)) =
+    (Spec.decode specSamTy (specSamBytes ++ [0xFF])).map (fun p => (p.2.1, p.2.2)) =
       some (specSamBytes.length, [0xFF]) := by native_decide
 
 /-! ## Zero-head element types are rejected
 
 An element type occupying no head bytes (`()`, `T[0]`) would let a
 32-byte length word name arbitrarily many elements, with the element walk
-bounded by nothing.  Such array types are invalid, and `decode` rejects
+bounded by nothing.  Such array types are invalid, and `Spec.decode` rejects
 them before reading the length word. -/
 
 example : ¬ (Ty.array (.tuple [])).Valid := by decide
@@ -357,7 +358,7 @@ example : ¬ (Ty.array (.fixedArray (.uint 8) 0)).Valid := by decide
 example : (Ty.tuple []).Valid := by decide
 
 -- a 32-byte buffer claiming 2^64 elements is rejected outright
-example : (decodeStrict (.array (.tuple [])) (encodeUint (2 ^ 64))).isNone = true := by
+example : (Spec.decodeStrict (.array (.tuple [])) (encodeUint (2 ^ 64))).isNone = true := by
   native_decide
 
 /-! ## Primitive reads at a `ByteArray` offset
@@ -368,7 +369,7 @@ a length word off the wire cannot size an allocation. -/
 
 /-- Head section of `(uint256, bytes)`: a word then an offset word. -/
 def baBuf : ByteArray :=
-  encodeByteArray (.tuple [.uint 256, .bytes])
+  Spec.encodeByteArray (.tuple [.uint 256, .bytes])
     (⟨7, by decide⟩, (⟨[1, 2, 3], by decide⟩, ()))
 
 example : decodeUintBA baBuf 0 = decodeUint (baBuf.data.toList.drop 0) := by native_decide
@@ -391,29 +392,29 @@ list and slicing.  `decodeStrictBA_eq` says the two agree, so these check
 the computation matches the theorem — on the spec vectors, and on the same
 non-canonical inputs the list decoder rejects. -/
 
-example : decodeStrictBA specSamTy (encodeByteArray specSamTy specSamVal) = some specSamVal :=
+example : decodeStrictBA specSamTy (Spec.encodeByteArray specSamTy specSamVal) = some specSamVal :=
   decodeStrictBA_encodeByteArray specSamTy (by native_decide) specSamVal (by native_decide)
 
-example : (decodeStrictBA specFTy (encodeByteArray specFTy specFVal)).isSome = true := by
+example : (decodeStrictBA specFTy (Spec.encodeByteArray specFTy specFVal)).isSome = true := by
   native_decide
-example : (decodeStrictBA specGTy (encodeByteArray specGTy specGVal)).isSome = true := by
+example : (decodeStrictBA specGTy (Spec.encodeByteArray specGTy specGVal)).isSome = true := by
   native_decide
 
 -- the offset walk and the list walk decide the same buffers
 example : (decodeStrictBA specSamTy specSamBytes.toByteArray).isSome =
-    (decodeStrict specSamTy specSamBytes).isSome := by native_decide
+    (Spec.decodeStrict specSamTy specSamBytes).isSome := by native_decide
 
 example : IsCanonicalBA specSamTy specSamBytes.toByteArray := by native_decide
 
 -- and the capstones themselves, as theorems (no computation)
-example : ∃ v, encodeByteArray specSamTy v = encodeByteArray specSamTy specSamVal :=
+example : ∃ v, Spec.encodeByteArray specSamTy v = Spec.encodeByteArray specSamTy specSamVal :=
   (isCanonicalBA_iff specSamTy (by native_decide) _ (by native_decide)).mp
     (by unfold IsCanonicalBA
         rw [decodeStrictBA_encodeByteArray specSamTy (by native_decide) specSamVal
           (by native_decide)]
         rfl)
 
-example : decodeStrictBA specGTy (encodeByteArray specGTy specGVal) = some specGVal :=
+example : decodeStrictBA specGTy (Spec.encodeByteArray specGTy specGVal) = some specGVal :=
   (decodeStrictBA_eq_some_iff specGTy (by native_decide) _ specGVal (by native_decide)).mpr rfl
 
 -- the non-canonical vectors are rejected by the offset walk too
@@ -431,8 +432,8 @@ example : (decodeStrictBA specSamTy (specSamBytes ++ [0]).toByteArray).isNone = 
 example : (decodeStrictBA (.uint 256) ByteArray.empty).isNone = true := by native_decide
 example : (decodeStrictBA (.tuple []) ByteArray.empty).isSome = true := by native_decide
 example : (decodeStrictBA (.array (.uint 256))
-    (encodeByteArray (.array (.uint 256)) ⟨[], by decide⟩)).isSome = true := by native_decide
-example : (decodeStrictBA .bytes (encodeByteArray .bytes ⟨[], by decide⟩)).isSome = true := by
+    (Spec.encodeByteArray (.array (.uint 256)) ⟨[], by decide⟩)).isSome = true := by native_decide
+example : (decodeStrictBA .bytes (Spec.encodeByteArray .bytes ⟨[], by decide⟩)).isSome = true := by
   native_decide
 
 -- the zero-head guard and the window clamp hold on the offset path too
@@ -445,9 +446,9 @@ example : (decodeStrictBA .bytes (encodeUint (2 ^ 200)).toByteArray).isNone = tr
 example :
   let t : Ty := .tuple [.bytes, .uint 8]
   let v : t.Val := (⟨[1, 2, 3], by decide⟩, (⟨9, by decide⟩, ()))
-  let ba := encodeByteArray t v
+  let ba := Spec.encodeByteArray t v
   ∀ i ∈ [0, 1, 31, 32, 63, 64, 95, 96, 127],
-    (decodeStrictBA t (ba.extract 0 i)).isSome = (decodeStrict t (ba.extract 0 i).data.toList).isSome
+    (decodeStrictBA t (ba.extract 0 i)).isSome = (Spec.decodeStrict t (ba.extract 0 i).data.toList).isSome
 := by native_decide
 
 /-! ## Packed ABI: primitive encodings -/
@@ -580,8 +581,8 @@ example : encodePacked (.array (.uint 16))
     ⟨[⟨3, by decide⟩, ⟨4, by decide⟩], by decide⟩ =
     encodeUint 3 ++ encodeUint 4 := by native_decide
 
--- Invalid widths (m % 8 ≠ 0) are rejected at decode — encodeBEU truncates
--- them, so accepting them would let a lossy encode "roundtrip".
+-- Invalid widths (m % 8 ≠ 0) are rejected at Spec.decode — encodeBEU truncates
+-- them, so accepting them would let a lossy Spec.encode "roundtrip".
 example : decodePacked (.uint 12) (encodePacked (.uint 12) ⟨4095, by decide⟩) = none := by
   native_decide
 
@@ -603,7 +604,7 @@ example : PackedSupported (.tuple [.uint 8, .bool]) = false := by native_decide
 The packed codec is structurally recursive, so plain `decide` (kernel
 reduction, no compiler in the trusted base) evaluates it.  These fail if
 the mutual blocks ever fall back to well-founded recursion (`Acc.rec`
-gets stuck under `decide`).  Array clauses defer to the standard `encode`
+gets stuck under `decide`).  Array clauses defer to the standard `Spec.encode`
 and stay `native_decide`-only. -/
 
 example : encodePacked .bool true = [1] := by decide
@@ -660,48 +661,48 @@ example : (Builder.chunk "hi".toUTF8).run.data.toList = [0x68, 0x69] := by nativ
 
 /-! ## Executable encoder
 
-`encodeByteArray` runs the very builder `encode` materializes, into a
+`Spec.encodeByteArray` runs the very builder `Spec.encode` materializes, into a
 `ByteArray`.  It agrees with the specification encoder on the Solidity spec
-vectors — and by `data_toList_encodeByteArray`, on *every* value, with no
+vectors — and by `Spec.data_toList_encodeByteArray`, on *every* value, with no
 computation. -/
 
-#eval (encodeByteArray specSamTy specSamVal).size    -- 320
+#eval (Spec.encodeByteArray specSamTy specSamVal).size    -- 320
 
-example : (encodeByteArray specSamTy specSamVal).data.toList = specSamBytes := by native_decide
-example : (encodeByteArray specFTy specFVal).data.toList = specFBytes := by native_decide
-example : (encodeByteArray specGTy specGVal).data.toList = specGBytes := by native_decide
+example : (Spec.encodeByteArray specSamTy specSamVal).data.toList = specSamBytes := by native_decide
+example : (Spec.encodeByteArray specFTy specFVal).data.toList = specFBytes := by native_decide
+example : (Spec.encodeByteArray specGTy specGVal).data.toList = specGBytes := by native_decide
 
-example : encodeByteArray specSamTy specSamVal = specSamBytes.toByteArray := by native_decide
+example : Spec.encodeByteArray specSamTy specSamVal = specSamBytes.toByteArray := by native_decide
 
 -- the same instances via the library theorem (no computation)
-example : (encodeByteArray specSamTy specSamVal).data.toList = encode specSamTy specSamVal :=
-  data_toList_encodeByteArray specSamTy specSamVal
+example : (Spec.encodeByteArray specSamTy specSamVal).data.toList = Spec.encode specSamTy specSamVal :=
+  Spec.data_toList_encodeByteArray specSamTy specSamVal
 
-example : encodeByteArray specGTy specGVal = (encode specGTy specGVal).toByteArray :=
-  encodeByteArray_eq specGTy specGVal
+example : Spec.encodeByteArray specGTy specGVal = (Spec.encode specGTy specGVal).toByteArray :=
+  Spec.encodeByteArray_eq specGTy specGVal
 
 -- and the roundtrip transported onto it
-example : decode specSamTy (encodeByteArray specSamTy specSamVal).data.toList =
-    some (specSamVal, (encode specSamTy specSamVal).length, []) :=
-  decode_encodeByteArray specSamTy (by native_decide) specSamVal (by native_decide)
+example : Spec.decode specSamTy (Spec.encodeByteArray specSamTy specSamVal).data.toList =
+    some (specSamVal, (Spec.encode specSamTy specSamVal).length, []) :=
+  Spec.decode_encodeByteArray specSamTy (by native_decide) specSamVal (by native_decide)
 
-example : decodeStrict specFTy (encodeByteArray specFTy specFVal).data.toList = some specFVal :=
-  decodeStrict_encodeByteArray specFTy (by native_decide) specFVal (by native_decide)
+example : Spec.decodeStrict specFTy (Spec.encodeByteArray specFTy specFVal).data.toList = some specFVal :=
+  Spec.decodeStrict_encodeByteArray specFTy (by native_decide) specFVal (by native_decide)
 
-example : (encodeByteArray specGTy specGVal).size = (encode specGTy specGVal).length :=
-  size_encodeByteArray specGTy specGVal
+example : (Spec.encodeByteArray specGTy specGVal).size = (Spec.encode specGTy specGVal).length :=
+  Spec.size_encodeByteArray specGTy specGVal
 
 /-!
 ## Human-readable ABI
 
 User-facing APIs: compile-time macros (`ty!`, `item!`, `params!`) for
-`encode`/`decode`, and the curried runtime parsers (`Ty.parse`,
+`Spec.encode`/`Spec.decode`, and the curried runtime parsers (`Ty.parse`,
 `AbiItem.parse`).
 -/
 
 section HumanReadable
 
-/-! ### `ty!` — compile-time type → encode/decode roundtrip
+/-! ### `ty!` — compile-time type → Spec.encode/Spec.decode roundtrip
 
 A single composite type exercises every scalar, fixed-array, and dynamic
 payload in one roundtrip:
@@ -732,12 +733,12 @@ theorem composite_valid : composite.Valid := by decide
 
 -- printed as head words plus a length: the whole 576-byte buffer overflows
 -- the pretty printer's recursion limit and falls back to the raw printer
-#eval (encode composite compositeVal).take 64
+#eval (Spec.encode composite compositeVal).take 64
 
-example : (encode composite compositeVal).length = 576 := by native_decide
+example : (Spec.encode composite compositeVal).length = 576 := by native_decide
 
-example : decodeStrict composite (encode composite compositeVal) = some compositeVal :=
-  decodeStrict_encode composite composite_valid _ (by native_decide)
+example : Spec.decodeStrict composite (Spec.encode composite compositeVal) = some compositeVal :=
+  Spec.decodeStrict_encode composite composite_valid _ (by native_decide)
 
 /-! ### Widths outside the spec are rejected
 
@@ -779,8 +780,8 @@ def structArrayVal : structArray.Val :=
   ⟨[(⟨0xAAAA, by decide⟩, (⟨1, by decide⟩, ())),
     (⟨0xBBBB, by decide⟩, (⟨2, by decide⟩, ()))], by decide⟩
 
-example : decodeStrict structArray (encode structArray structArrayVal) = some structArrayVal :=
-  decodeStrict_encode structArray structArray_valid _ (by native_decide)
+example : Spec.decodeStrict structArray (Spec.encode structArray structArrayVal) = some structArrayVal :=
+  Spec.decodeStrict_encode structArray structArray_valid _ (by native_decide)
 
 /-! ### `item!` — function/event/error signatures → call-data encoding -/
 
@@ -790,15 +791,15 @@ example :
   let item := item! "function transfer(address to, uint256 amount) returns (bool)"
   let t := item.inputsTy
   let v : t.Val := (⟨0xABCDEF, by decide⟩, (⟨1000, by decide⟩, ()))
-  decodeStrict t (encode t v) = some v
+  Spec.decodeStrict t (Spec.encode t v) = some v
 := by
-  intro item t v; apply decodeStrict_encode t (by native_decide) v (by native_decide)
+  intro item t v; apply Spec.decodeStrict_encode t (by native_decide) v (by native_decide)
 
 -- ERC-20 `balanceOf(address)` — single-argument function, view modifier
 
 #eval
   let item := item! "function balanceOf(address account) view returns (uint256)"
-  encode item.inputsTy (⟨0xABCDEF, by decide⟩, ())
+  Spec.encode item.inputsTy (⟨0xABCDEF, by decide⟩, ())
 
 -- A single argument stays wrapped in a tuple: for a dynamic argument the
 -- call-data block leads with the offset word, which the bare `bytes` encoding
@@ -809,7 +810,7 @@ example : (item! "function f(bytes data)").inputsTy = .tuple [.bytes] := rfl
 example :
   let t := (item! "function f(bytes data)").inputsTy
   let v : t.Val := (⟨[0x61, 0x62, 0x63], by decide⟩, ())
-  (encode t v).take 32 = encodeUint 0x20 := by native_decide
+  (Spec.encode t v).take 32 = encodeUint 0x20 := by native_decide
 
 -- custom error
 
@@ -885,16 +886,16 @@ example : (item! "constructor(address owner) public payable")
   let v : t.Val :=
     (⟨[0x64, 0x61, 0x76, 0x65], by decide⟩, (true,
       (⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩, ())))
-  encode t v
+  Spec.encode t v
 
 example :
   let t := ty! "(bytes, bool, uint256[])"
   let v : t.Val :=
     (⟨[0x64, 0x61, 0x76, 0x65], by decide⟩, (true,
       (⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩, ())))
-  decodeStrict t (encode t v) = some v
+  Spec.decodeStrict t (Spec.encode t v) = some v
 := by
-  intro t v; apply decodeStrict_encode t (by native_decide) v (by native_decide)
+  intro t v; apply Spec.decodeStrict_encode t (by native_decide) v (by native_decide)
 
 end HumanReadable
 
@@ -909,5 +910,22 @@ example : (putBytes [1, 2, 3]).toList = encodeBytes [1, 2, 3] := by native_decid
 
 -- Builder composition: O(1) sequencing, materialized once.
 #eval (putUint 42 ++ putBool true ++ putBytes [1, 2, 3]).toList.length  -- 128
+
+/-! ## Runtime API (primary names)
+
+`encode`, `decode`, `decodeStrict` and `IsCanonical` are the user-facing
+runtime codec: `ValBA` values in, `ByteArray` out and back.  The `Spec`
+namespace holds the list-based specification they are proved against. -/
+
+example : (decodeStrict (.uint 8) (encode (.uint 8) ⟨200, by decide⟩)) =
+    some ⟨200, by decide⟩ := by native_decide
+
+example : (decodeStrict .bytes (encode .bytes ⟨"hi".toUTF8, by native_decide⟩)) =
+    some ⟨"hi".toUTF8, by native_decide⟩ := by native_decide
+
+example : IsCanonical .bool (encode .bool true) := by native_decide
+
+example : (encode .bool true).data.toList = Spec.encode .bool true := by
+  simp [ValBA.toList, data_toList_encode]
 
 end EvmAbi

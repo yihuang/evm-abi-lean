@@ -3,7 +3,7 @@ import EvmAbi
 /-!
 # Bench
 
-A benchmark for the executable codec — `encodeByteArray` and
+A benchmark for the executable codec — `Spec.encodeByteArray` and
 `decodeStrictBA` — against the `List UInt8` specification each is proved
 equal to.  Build and run with
 
@@ -19,7 +19,7 @@ Two shapes are measured, because they fail differently:
   end, while the builder writes into a pre-sized `ByteArray`.
 
 * **nested tuples** `(bytes, (bytes, (…)))` — this measures the asymptotics.
-  `encode` concatenates with `++` at every level, so a `d`-deep value has
+  `Spec.encode` concatenates with `++` at every level, so a `d`-deep value has
   its bytes re-copied `d` times (`O(n · d)`); the builder makes
   concatenation an `O(1)` constructor, so it stays linear.
 
@@ -81,29 +81,29 @@ def timeIt (label : String) (act : Unit → Nat) : IO Unit := do
 
 def benchTy (label : String) (t : Ty) (v : t.Val) : IO Unit := do
   IO.println label
-  timeIt "spec  encode ++ toByteArray" (fun _ => (encode t v).toByteArray.size)
-  timeIt "fast  encodeByteArray      " (fun _ => (encodeByteArray t v).size)
+  timeIt "spec  Spec.encode ++ toByteArray" (fun _ => (Spec.encode t v).toByteArray.size)
+  timeIt "fast  Spec.encodeByteArray      " (fun _ => (Spec.encodeByteArray t v).size)
 
 /-- Decode the same buffer both ways; the `bytes` count is the buffer size. -/
 def benchDecode (label : String) (ba : ByteArray) : IO Unit := do
   IO.println s!"{label} ({ba.size} bytes)"
-  timeIt "spec  decodeStrict   (list)" (fun _ =>
-    if (decodeStrict flatTy ba.data.toList).isSome then ba.size else 0)
+  timeIt "spec  Spec.decodeStrict   (list)" (fun _ =>
+    if (Spec.decodeStrict flatTy ba.data.toList).isSome then ba.size else 0)
   timeIt "fast  decodeStrictBA       " (fun _ =>
     if (decodeStrictBA flatTy ba).isSome then ba.size else 0)
 
 def benchValBA (n : Nat) (h : n < 2 ^ 256) : IO Unit := do
   let v := flatVal n h
   let vba := flatValBA n h
-  let ba := encodeByteArray flatTy v
+  let ba := Spec.encodeByteArray flatTy v
   IO.println s!"-- {n} elements ({ba.size} bytes)"
   timeIt "decodeStrictBA (List)  " (fun _ =>
     if (decodeStrictBA flatTy ba).isSome then ba.size else 0)
-  timeIt "decodeStrictBAVal (BA) " (fun _ =>
-    if (decodeStrictBAVal flatTy ba).isSome then ba.size else 0)
-  timeIt "encodeByteArray (List) " (fun _ => (encodeByteArray flatTy v).size)
-  timeIt "encodeByteArrayBA (BA) " (fun _ => (encodeByteArrayBA flatTy vba).size)
-  IO.println s!"  agree: {(encodeByteArrayBA flatTy vba) == (encodeByteArray flatTy v)} ∧ {(decodeStrictBAVal flatTy ba).isSome == (decodeStrictBA flatTy ba).isSome}" 
+  timeIt "decodeStrict (BA)    " (fun _ =>
+    if (decodeStrict flatTy ba).isSome then ba.size else 0)
+  timeIt "Spec.encodeByteArray (List) " (fun _ => (Spec.encodeByteArray flatTy v).size)
+  timeIt "encode (BA)          " (fun _ => (encode flatTy vba).size)
+  IO.println s!"  agree: {(encode flatTy vba) == (Spec.encodeByteArray flatTy v)} ∧ {(decodeStrict flatTy ba).isSome == (decodeStrictBA flatTy ba).isSome}" 
 
 /-- A `bytes` value of `n` bytes, packed. -/
 def main : IO Unit := do
@@ -119,12 +119,12 @@ def main : IO Unit := do
   let v := flatVal 50 (by decide)
   let w := nestVal 20
   IO.println "== decode: list cursors vs offset cursors =="
-  -- `decodeStrict` converts the buffer to a list and slices it; `decodeStrictBA`
+  -- `Spec.decodeStrict` converts the buffer to a list and slices it; `decodeStrictBA`
   -- walks the same buffer by offset.  Same theorem, same answer.
-  benchDecode "-- 500 elements"  (encodeByteArray flatTy (flatVal 500 (by decide)))
-  benchDecode "-- 2000 elements" (encodeByteArray flatTy (flatVal 2000 (by decide)))
-  IO.println s!"agree(flat)   = {(encode flatTy v).toByteArray == encodeByteArray flatTy v}"
-  IO.println s!"agree(nested) = {(encode (nest 20) w).toByteArray == encodeByteArray (nest 20) w}"
+  benchDecode "-- 500 elements"  (Spec.encodeByteArray flatTy (flatVal 500 (by decide)))
+  benchDecode "-- 2000 elements" (Spec.encodeByteArray flatTy (flatVal 2000 (by decide)))
+  IO.println s!"agree(flat)   = {(Spec.encode flatTy v).toByteArray == Spec.encodeByteArray flatTy v}"
+  IO.println s!"agree(nested) = {(Spec.encode (nest 20) w).toByteArray == Spec.encodeByteArray (nest 20) w}"
   IO.println "== ValBA (packed payloads) vs Val (List payloads) =="
   benchValBA 500 (by decide)
   benchValBA 2000 (by decide)

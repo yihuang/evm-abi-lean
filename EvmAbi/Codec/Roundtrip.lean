@@ -20,6 +20,7 @@ namespace EvmAbi
 open Ty
 open Binary
 open Builder
+open EvmAbi.Spec
 
 /- ## roundtrip: the linear decoder recovers encodings -/
 

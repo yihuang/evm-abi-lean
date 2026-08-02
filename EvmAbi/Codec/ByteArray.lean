@@ -5,37 +5,24 @@ import EvmAbi.ValBA
 /-!
 # EvmAbi.Codec.ByteArray
 
-The codec's primitive reads, **at an offset in a `ByteArray`** instead of
-at the front of a `List UInt8`.
+The runtime decoder internals: primitive reads **at an offset in a
+`ByteArray`**, the `ValBA` walkers, and the agreement lemmas that transport
+the `EvmAbi.Spec` theorems onto them.  The public runtime API
+(`EvmAbi.encode`, `EvmAbi.decode`, `EvmAbi.decodeStrict`,
+`EvmAbi.IsCanonical`) lives in `EvmAbi.Codec.Runtime`.
 
-`decode` threads two `List UInt8` cursors: reaching a component means
-`drop`ping to it, and reading its word means `take`ing 32 bytes into a
-fresh list, so a caller holding real call data pays a full conversion up
-front and an allocation per word after that.  This module is the layer that
-removes the per-read part — every primitive here reads its own bytes and
-nothing else, and the only lists built are the payloads that `Ty.Val`
-genuinely is (`bytes`, `string`, `bytesN` data).
-
-Nothing is reproved.  Each definition is paired with an agreement lemma
-against its `EvmAbi.Codec` counterpart under the translation
-
-```
-offset `off`  ↦  ba.data.toList.drop off
-```
-
-so anything proved about the list primitives transports.
-
-These are what an offset-cursor walk is built from: give the `Get2` state
-three naturals over one shared buffer, read with these, and prove each
-walker agrees with its list counterpart under the same translation.  That
-walk is not here yet — `EvmAbi.Codec.Strict.decodeStrictBA` still converts
-at the boundary.
+Every primitive is paired with an agreement lemma against its `EvmAbi.Spec`
+counterpart under the translation `offset off ↦ ba.data.toList.drop off`,
+so anything proved about the list primitives transports.  The middle
+`decodeBA` walker family is private: it exists only as a proof bridge
+between the `ValBA` walkers and the list decoder.
 -/
 
 namespace EvmAbi
 
 open Ty
 open Binary
+open EvmAbi.Spec
 
 /-! ## windows
 
@@ -260,56 +247,7 @@ theorem decodeBytesNBAVal_eq (n : Nat) (ba : ByteArray) (off : Nat) :
   rw [decodeBytesNBAVal]
   cases h : decodeBytesNBA n ba off with
   | none => rfl
-  | some bs => simp [List.toList_data_toByteArray]
-
-/-! ## the reader
-
-`Get2`'s dual: the same three-component state, with the two cursors as
-offsets into one buffer rather than sub-lists of a copy. -/
-
-namespace GetBA
-
-/-- The result of a `GetBA` run: the value, the advanced cursor *offsets*,
-and the new expected tail frontier. -/
-structure Result (α : Type) where
-  /-- The decoded value. -/
-  val : α
-  /-- Remaining head cursor, as an offset. -/
-  head : Nat
-  /-- Remaining tail cursor, as an offset. -/
-  tails : Nat
-  /-- New expected tail frontier. -/
-  frontier : Nat
-
-/-- The offsets read as the sub-lists they stand for — the translation the
-agreement lemmas are stated over. -/
-def Result.toList (ba : ByteArray) (r : Result α) : Get2.Result α :=
-  ⟨r.val, ba.data.toList.drop r.head, ba.data.toList.drop r.tails, r.frontier⟩
-
-end GetBA
-
-/-- A dual-cursor prefix reader over one `ByteArray`. -/
-structure GetBA (α : Type) where
-  run : ByteArray → Nat → Nat → Nat → Option (GetBA.Result α)
-
-namespace GetBA
-
-instance : Monad GetBA where
-  pure a := ⟨fun _ ho to E => some ⟨a, ho, to, E⟩⟩
-  bind x f := ⟨fun ba ho to E =>
-    match x.run ba ho to E with
-    | none => none
-    | some r => (f r.val).run ba r.head r.tails r.frontier⟩
-
-@[simp] theorem pure_run (a : α) (ba : ByteArray) (ho to E : Nat) :
-    (pure a : GetBA α).run ba ho to E = some ⟨a, ho, to, E⟩ := rfl
-
-@[simp] theorem bind_run (x : GetBA α) (f : α → GetBA β) (ba : ByteArray) (ho to E : Nat) :
-    (x >>= f).run ba ho to E = (match x.run ba ho to E with
-      | none => none
-      | some r => (f r.val).run ba r.head r.tails r.frontier) := rfl
-
-end GetBA
+  | some bs => simp
 
 /-! ## the decoder
 
@@ -320,7 +258,7 @@ offsets.  It returns the value and the bytes consumed; the new position is
 mutual
 /-- **Canonical decoder over a `ByteArray`**: reads one canonical value of
 type `t` at offset `off`, returning it and the bytes it consumed. -/
-def decodeBA : (t : Ty) → ByteArray → Nat → Option (t.Val × Nat)
+private def decodeBA : (t : Ty) → ByteArray → Nat → Option (t.Val × Nat)
   | .uint m, ba, off => match decodeUintBA ba off with
       | some n => if h : n < 2 ^ m then some (⟨n, h⟩, 32) else none
       | none => none
@@ -368,7 +306,7 @@ def decodeBA : (t : Ty) → ByteArray → Nat → Option (t.Val × Nat)
 termination_by t => (sizeOf t, 0)
 
 /-- Read one component at its head slot. -/
-def decodeElemBA (t : Ty) : GetBA t.Val := ⟨fun ba ho to E =>
+private def decodeElemBA (t : Ty) : GetBA t.Val := ⟨fun ba ho to E =>
   match t.isStatic with
   | true => match decodeBA t ba ho with
       | some (v, n) => some ⟨v, ho + n, to, E⟩
@@ -383,7 +321,7 @@ def decodeElemBA (t : Ty) : GetBA t.Val := ⟨fun ba ho to E =>
 termination_by (sizeOf t, 1)
 
 /-- Read `k` consecutive canonical elements. -/
-def decodeElemsBA (t : Ty) (k : Nat) : GetBA ({ vs : List t.Val // vs.length = k }) :=
+private def decodeElemsBA (t : Ty) (k : Nat) : GetBA ({ vs : List t.Val // vs.length = k }) :=
   match k with
   | 0 => pure ⟨[], rfl⟩
   | k + 1 => do
@@ -393,7 +331,7 @@ def decodeElemsBA (t : Ty) (k : Nat) : GetBA ({ vs : List t.Val // vs.length = k
 termination_by (sizeOf t, k + 2)
 
 /-- Read a canonical tuple. -/
-def decodeTupleBA : (ts : List Ty) → GetBA (TupleVal ts)
+private def decodeTupleBA : (ts : List Ty) → GetBA (TupleVal ts)
   | [] => pure ()
   | t :: ts => do
       let v ← decodeElemBA t
@@ -868,15 +806,15 @@ theorem decodeBAVal_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) (off : Nat) :
           have hn : decodeBytesNBA m ba off = none := by
             rw [← decodeBytesNBAVal_eq m ba off, h]
             rfl
-          simp [h, hn]
+          simp [hn]
       | some w =>
           have hs : decodeBytesNBA m ba off = some w.data.toList := by
             rw [← decodeBytesNBAVal_eq m ba off, h]
             rfl
           rw [hs]
           by_cases hb : w.size = m
-          · simp [ValBA.toList, hb, ← ByteArray.size_eq_toList_length]
-          · simp [ValBA.toList, hb, ← ByteArray.size_eq_toList_length]
+          · simp [ValBA.toList, hb]
+          · simp [hb]
   | bytes =>
       rw [decodeBAVal, decodeBA]
       have hpe := decodeBytesPrefixBAVal_eq ba off
@@ -885,7 +823,7 @@ theorem decodeBAVal_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) (off : Nat) :
       rw [decodeBAVal, decodeBA]
       have hpe := decodeBytesPrefixBAVal_eq ba off
       repeat' split
-      all_goals (simp_all [ValBA.toList, dataToList_toByteArray]; try (obtain ⟨rfl, rfl⟩ := hpe); simp_all)
+      all_goals (simp_all [ValBA.toList]; try (obtain ⟨rfl, rfl⟩ := hpe); simp_all)
       all_goals
         first
         | exact fromUTF8?_data_eq hpe.1 (by assumption) (by assumption)
@@ -979,29 +917,29 @@ theorem decodeElemBAVal_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) (ho to E : N
               have hn : decodeBA t ba to = none := by
                 rw [← decodeBAVal_eq t hv ba to, hl]
                 rfl
-              simp [ValBA.toList, hoE, hl, hn]
+              simp [hoE, hn]
           | some q =>
               obtain ⟨v, n⟩ := q
               have hs' : decodeBA t ba to = some (ValBA.toList t v, n) := by
                 rw [← decodeBAVal_eq t hv ba to, hl]
                 rfl
               rw [hs']
-              simp [ValBA.toList, hoE]
-        · simp [ValBA.toList, hoE]
+              simp [hoE]
+        · simp [hoE]
   · simp only []
     cases hl : decodeBAVal t ba ho with
     | none =>
         have hn : decodeBA t ba ho = none := by
           rw [← decodeBAVal_eq t hv ba ho, hl]
           rfl
-        simp [hl, hn]
+        simp [hn]
     | some q =>
         obtain ⟨v, n⟩ := q
         have hs' : decodeBA t ba ho = some (ValBA.toList t v, n) := by
           rw [← decodeBAVal_eq t hv ba ho, hl]
           rfl
         rw [hs']
-        simp [ValBA.toList]
+        simp
 termination_by 8 * sizeOf t + 1
 
 /-- **Agreement**, element runs. -/
@@ -1060,15 +998,15 @@ theorem decodeStrictBAVal_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) :
       have hn : decodeBA t ba 0 = none := by
         rw [← decodeBAVal_eq t hv ba 0, h]
         rfl
-      simp [h, hn]
+      simp [hn]
   | some q =>
       obtain ⟨v, n⟩ := q
       have hs : decodeBA t ba 0 = some (ValBA.toList t v, n) := by
         rw [← decodeBAVal_eq t hv ba 0, h]
         rfl
       by_cases hn : n = ba.size
-      · simp [ValBA.toList, h, hs, hn]
-      · simp [ValBA.toList, h, hs, hn]
+      · simp [hs, hn]
+      · simp [hs, hn]
 
 /-! ## capstones, `ByteArray` end to end -/
 

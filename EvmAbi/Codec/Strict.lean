@@ -4,17 +4,19 @@ import EvmAbi.Codec.Sound
 /-!
 # EvmAbi.Codec.Strict
 
-The strict API: `decodeStrict` (canonical layout plus exact consumption, no
-trailing garbage), the predicate `IsCanonical`, and the capstones
-`isCanonical_iff` / `decodeStrict_eq_some_iff` — canonical buffers are
-exactly the image of `encode`, with no bound conjunct anywhere (the dynamic
-payload bounds are intrinsic to `Ty.Val`).
+The strict API, in `namespace EvmAbi.Spec`: `decodeStrict` (canonical
+layout plus exact consumption, no trailing garbage), the predicate
+`IsCanonical`, and the capstones `isCanonical_iff` /
+`decodeStrict_eq_some_iff` — canonical buffers are exactly the image of
+`encode`, with no bound conjunct anywhere (the dynamic payload bounds are
+intrinsic to `Ty.Val`).
 
 Depends on both theorem families: `decode_roundtrip` (encode ⇒ decode) and
 `decode_sound` (decode ⇒ encode).
 -/
 
 namespace EvmAbi
+namespace Spec
 
 open Ty
 open Binary
@@ -153,4 +155,5 @@ theorem decodeStrict_encodeByteArray (t : Ty) (hv : t.Valid) (v : t.Val)
   rw [data_toList_encodeByteArray]
   exact decodeStrict_encode t hv v hb
 
+end Spec
 end EvmAbi
