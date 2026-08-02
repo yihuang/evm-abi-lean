@@ -15,6 +15,7 @@ import EvmAbi.ValBA
 import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.Compile
+import EvmAbi.Compile.Decode
 import EvmAbi.HumanReadable
 
 /-!
@@ -61,6 +62,11 @@ the historical build order, nodes 1–8):
                   `dyn`/`finish` plus one element loop) whose every step is
                   proved against `putBA`, and `Denotes`, the contract a
                   compiled encoder satisfies
+* `EvmAbi.Compile.Decode` — the same for the decoder: the component readers
+                  (`elemStatic`/`elemDyn`), the chain `cons` and loop `elems`
+                  built on them, and the three compound clauses — all proved
+                  against `decodeBAVal` — plus `Reads`, the contract a compiled
+                  decoder satisfies
 * `EvmAbi.HumanReadable` — parser for Solidity-style human-readable ABI
                   signatures into `Ty` and `AbiItem` representations
 
