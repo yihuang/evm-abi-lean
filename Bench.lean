@@ -125,7 +125,27 @@ def benchValBA (payload : Nat) (p : payload < 2 ^ 256) (n : Nat) (h : n < 2 ^ 25
     if (decodeStrict flatTy ba).isSome then ba.size else 0)
   timeIt "Spec.encodeByteArray (List) " (fun _ => (Spec.encodeByteArray flatTy v).size)
   timeIt "encode (BA)          " (fun _ => (encode flatTy vba).size)
-  IO.println s!"  agree: {(encode flatTy vba) == (Spec.encodeByteArray flatTy v)} ∧ {(decodeStrict flatTy ba).isSome == (decodeStrictBA flatTy ba).isSome}" 
+  IO.println s!"  agree: {(encode flatTy vba) == (Spec.encodeByteArray flatTy v)} ∧ {(decodeStrict flatTy ba).isSome == (decodeStrictBA flatTy ba).isSome}"
+
+/-- `bytesN` payloads — the fixed-word decode.  `decodeStrictBA` reads each
+payload as a ≤32-cell cons list (`windowList`) and repacks it;
+`decodeStrict` now extracts the payload in one `copySlice` with the padding
+checked by index (`allZerosBA`), so this row isolates the list round-trip. -/
+def benchBytesN (n : Nat) (h : n < 2 ^ 256) : IO Unit := do
+  let t : Ty := .array (.bytesN 32)
+  let el : Ty.Val (.bytesN 32) := ⟨List.replicate 32 7, by simp⟩
+  let v : t.Val := ⟨List.replicate n el, by simpa using h⟩
+  let ba := Spec.encodeByteArray t v
+  let elba : ValBA (.bytesN 32) := ⟨(List.replicate 32 7).toByteArray, by
+    simp [Binary.ByteArray.size_eq_toList_length, List.length_replicate]⟩
+  let vba : ValBA t := ⟨List.replicate n elba, by simpa using h⟩
+  IO.println s!"-- bytes32[] × {n} ({ba.size} bytes)"
+  timeIt "decodeStrictBA (List)  " (fun _ =>
+    if (decodeStrictBA t ba).isSome then ba.size else 0)
+  timeIt "decodeStrict (BA)    " (fun _ =>
+    if (decodeStrict t ba).isSome then ba.size else 0)
+  timeIt "encode (BA)          " (fun _ => (encode t vba).size)
+  IO.println s!"  agree: {(decodeStrict t ba).isSome == (decodeStrictBA t ba).isSome}"
 
 /-! ## the compiled encoder (`EvmAbi.Compile.Meta`)
 
@@ -241,3 +261,5 @@ def main : IO Unit := do
     pairArray.ty (pairArray.encode (pairArrayVal 100 (by decide))) pairArray.decodeStrict
   benchCompiledDecode "-- bytes[], 100 × 256 B" 5000
     bytesArray.ty (bytesArray.encode (bytesArrayVal 100 (by decide))) bytesArray.decodeStrict
+  IO.println "== bytesN: fixed-word payloads (list round-trip vs one extract) =="
+  benchBytesN 2000 (by decide)

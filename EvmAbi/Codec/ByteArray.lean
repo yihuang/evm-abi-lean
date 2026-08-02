@@ -289,21 +289,62 @@ theorem decodeBytesPrefixBAVal_eq (ba : ByteArray) (off : Nat) :
       · rw [if_neg hc, if_neg hc]
         rfl
 
-/-- `bytesN` at an offset: the word is at most 32 bytes, so the list check
-is bounded and cheap, and only the result is repacked.  This is the last
-list on the `ValBA` path: the unbounded payloads — `decodeBytesPrefixBAVal`
-— go `ByteArray` to `ByteArray`. -/
+/-- `bytesN` at an offset, list-free: the payload word is at most 32 bytes,
+so every check is arithmetic — the word must be present
+(`off + 32 ≤ ba.size`), the payload must fit (`n ≤ 32`), and the rest of
+the word must be zero padding — and the payload comes back as one packed
+`extract`, exactly like `decodeBytesPrefixBAVal`. -/
 def decodeBytesNBAVal (n : Nat) (ba : ByteArray) (off : Nat) : Option ByteArray :=
-  (decodeBytesNBA n ba off).map (fun bs => bs.toByteArray)
+  if off + 32 ≤ ba.size ∧ n ≤ 32 ∧
+     allZerosBA ba (off + n) (32 - n) then
+    some (windowBA ba off n)
+  else none
 
-/-- The repacked `bytesN` payload denotes the list one. -/
+/-- The spec's `decodeBytesN` on the clamped 32-byte window is the packed,
+list-free condition: the word is present (`off + 32 ≤ ba.size`), the
+payload fits (`n ≤ 32`), and the rest of the word is zero padding. -/
+private theorem decodeBytesN_window_eq (n : Nat) (ba : ByteArray) (off : Nat) :
+    decodeBytesN n (windowList ba off 32) =
+      if off + 32 ≤ ba.size ∧ n ≤ 32 ∧ allZerosBA ba (off + n) (32 - n) then
+        some (windowList ba off n)
+      else none := by
+  -- a clamped window is idempotent under `take 32`
+  have hW : (windowList ba off 32).take 32 = windowList ba off 32 := by
+    simp [windowList_eq, List.take_take]
+  -- the packed padding check is exactly the window's tail
+  have hz : allZerosBA ba (off + n) (32 - n) = true ↔
+      (windowList ba off 32).drop n = List.replicate (32 - n) 0 := by
+    rw [allZerosBA_eq, windowList_eq, windowList_eq, ← drop_drop_ba, ← List.drop_take]
+  -- the spec's two checks are the three packed guards: the padding halves
+  -- are `hz`, and the length halves are `min` arithmetic, which `omega`
+  -- decides once the window is named
+  have hiff : ((windowList ba off 32).take n).length = n ∧
+        (windowList ba off 32).drop n = List.replicate (32 - n) 0 ↔
+      off + 32 ≤ ba.size ∧ n ≤ 32 ∧ allZerosBA ba (off + n) (32 - n) := by
+    constructor
+    · rintro ⟨h1, h2⟩
+      have h3 := congrArg List.length h2
+      simp only [windowList_eq, List.length_take, List.length_drop, List.length_replicate,
+        ← Binary.ByteArray.size_eq_toList_length] at h1 h3
+      exact ⟨by omega, by omega, hz.mpr h2⟩
+    · rintro ⟨hfit, hn32, hpad⟩
+      refine ⟨?_, hz.mp hpad⟩
+      simp only [windowList_eq, List.length_take, List.length_drop,
+        ← Binary.ByteArray.size_eq_toList_length]
+      omega
+  unfold decodeBytesN
+  rw [hW]
+  by_cases h : off + 32 ≤ ba.size ∧ n ≤ 32 ∧ allZerosBA ba (off + n) (32 - n)
+  · rw [if_pos (hiff.mpr h), if_pos h]
+    simp [windowList_eq, List.take_take, Nat.min_eq_left h.2.1]
+  · rw [if_neg (fun hs => h (hiff.mp hs)), if_neg h]
+
+/-- The packed `bytesN` payload denotes the list one. -/
 theorem decodeBytesNBAVal_eq (n : Nat) (ba : ByteArray) (off : Nat) :
     (decodeBytesNBAVal n ba off).map (fun w => w.data.toList) =
       decodeBytesNBA n ba off := by
-  rw [decodeBytesNBAVal]
-  cases h : decodeBytesNBA n ba off with
-  | none => rfl
-  | some bs => simp
+  rw [decodeBytesNBAVal, decodeBytesNBA, decodeBytesN_window_eq]
+  split <;> simp [windowBA_data_toList]
 
 /-! ## the decoder
 
