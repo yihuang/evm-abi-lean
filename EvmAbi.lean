@@ -70,7 +70,9 @@ the historical build order, nodes 1–8):
 * `EvmAbi.HumanReadable` — parser for Solidity-style human-readable ABI
                   signatures into `Ty` and `AbiItem` representations
 
-`EvmAbi.HumanReadable.Meta` — the `ty!` / `item!` / `params!` macros — is
-deliberately *not* re-exported here: it needs `import Lean`, and this library is
-otherwise free of the Lean frontend.  Import it explicitly to use the macros.
+`EvmAbi.HumanReadable.Meta` — the `ty!` / `item!` / `params!` macros — and
+`EvmAbi.Compile.Meta` — the `abi_encoder` / `abi_decoder` / `abi_codec`
+commands — are deliberately *not* re-exported here: they need `import Lean`,
+and this library is otherwise free of the Lean frontend.  Import them
+explicitly to use the macros.
 -/
