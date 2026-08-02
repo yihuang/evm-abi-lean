@@ -1,128 +1,240 @@
+import Binary.ByteArray
 import EvmAbi.Word
 
 /-!
 # EvmAbi.Builder
 
-The builder/reader layer (roadmap node 9): a *write* abstraction
-(`Builder`) and its dual *read* abstraction (`Get2`), decoupling the
-high-level ABI layout logic from low-level byte-list plumbing.
+The write and read layer.  `Builder` bridges the `List UInt8` the proofs
+are stated over and the contiguous `ByteArray` execution wants; `Get2` is
+its dual on the reading side, a prefix reader over two cursors.
 
-## Design
+`List UInt8` is the right *specification* type — `++` is associative on the
+nose, `take`/`drop` have a rich algebra — and the wrong *runtime* type: a cons
+cell and a boxed byte per byte, and a nest of `++`s that re-copies a value's
+bytes once per level of nesting.
 
-`Builder` is a difference list over byte strings (the Hughes /
-blaze-builder trick): a builder is a function `List UInt8 → List UInt8`
-that prepends its payload to an arbitrary suffix, together with a proof
-(`invariant`) that it really is such a prepend.  Sequencing writes is
-`O(1)` function composition; the payload is materialized once, at the
-boundary, by `toList`.
+The classic fix (Haskell's `Data.Binary.Builder`) is to make concatenation
+free by *not* concatenating.  `Chunks` is a tree whose `append` is a
+constructor, with leaves for a literal byte list, a `ByteArray` kept as-is (so
+`String.toUTF8` payloads are never unpacked), and a run of zero bytes (so
+padding is never materialised); `Builder.run` fills a pre-sized `ByteArray`
+from it in one pass.
 
-The proof layer already worked in this shape: every roundtrip theorem in
-`EvmAbi.Static` / `EvmAbi.Dynamic` / `EvmAbi.Codec` quantifies over a
-trailing `rest : List UInt8`.  `b.apply rest` *is* that trailing-suffix
-form, so the existing theorems port with unchanged statements.
+`Builder` pairs that tree with its **cached** byte count.  The cache is not a
+detail: the ABI head/tail layout asks for the size of every tail while writing
+the offset words, so a `size` that walked the tree would put the `O(n · depth)`
+cost straight back.  `size_eq` keeps the cache honest by construction and,
+being a `Prop`, is erased at run time.
 
-`Get2` is the reader dual: it consumes from two cursors — a *head*
-cursor over the head section and a *tail* cursor over the tails — and
-threads the expected tail frontier.  It is a monad, so the canonical
-decoder's walkers compose with `do`-notation while both cursors advance
-monotonically (each byte touched at most once).
+`Builder.toList` is the **denotation** — the only thing the proofs see, never
+called at run time — and
 
-The layer is deliberately dependency-free (Lean core + `Binary` only).
+```
+data_toList_run : b.run.data.toList = b.toList
+```
+
+is what makes the layer useful: any `List UInt8` statement transports to the
+`ByteArray` that `run` produces without reproving anything.  `EvmAbi.Codec`
+writes its `put` against this one builder, so `encode = (put t v).toList` and
+`encodeByteArray = (put t v).run` are the same encoder materialized two ways
+— there is no second encoder to keep in step.
+
+One caveat for proofs: `append` is a *constructor*, so it is associative and
+`empty`-neutral only up to `toList`.  Never state a `Builder`-valued equation
+that needs those laws; state it of the denotation.
+
+ABI-agnostic apart from the one word primitive (`putWord`): otherwise just
+the Lean 4 core library and `Binary.ByteArray`.
 -/
-
 namespace EvmAbi
 
 open Binary
 
-/-! ## Builder -/
+/-- The shape of a builder: a tree whose leaves are byte runs and whose
+`append` nodes cost `O(1)`.  Wrapped by `Builder`, which adds the cached
+byte count. -/
+inductive Chunks where
+  /-- The empty byte string. -/
+  | empty : Chunks
+  /-- A literal byte list. -/
+  | bytes (bs : List UInt8) : Chunks
+  /-- A contiguous chunk, kept as-is (used for `String.toUTF8` payloads). -/
+  | chunk (ba : ByteArray) : Chunks
+  /-- A run of `n` zero bytes (used for padding; never materialised). -/
+  | zeros (n : Nat) : Chunks
+  /-- Concatenation — a constructor, so it costs `O(1)`. -/
+  | append (a b : Chunks) : Chunks
 
-/-- A byte-string builder: a prepend function with the proof that it is
-determined by its materialization `apply []`. -/
+namespace Chunks
+
+/-! ## denotation
+
+`toList` is the specification: it says which byte string a tree stands for.
+Every theorem below is stated through it, and nothing at runtime ever calls
+it. -/
+
+/-- The byte string a chunk tree denotes. -/
+def toList : Chunks → List UInt8
+  | .empty => []
+  | .bytes bs => bs
+  | .chunk ba => ba.data.toList
+  | .zeros n => List.replicate n 0
+  | .append a b => a.toList ++ b.toList
+
+/-! ## execution
+
+`emit` appends a tree onto an accumulator with `ByteArray.push`; `Builder.run`
+pre-sizes the accumulator from the cached size, so the whole traversal is one
+linear pass with no reallocation.
+
+`acc ++ ba` per `.chunk` leaf looks quadratic — `putWord` makes every 32-byte
+word a chunk — but is not.  Compiled, `ByteArray.append` is `fastAppend`,
+`b.copySlice 0 a a.size b.size false`, which copies `b` *into* `a`, in place
+while `a` is uniquely referenced; `emit` threads `acc` linearly, so it is.
+Measured on `uint256[]`, encoding is linear in the element count over a 16×
+range.
+
+**Invariant**: nothing may hold a second reference to `acc` across an `emit`
+call.  Reading `acc.size` back for a check would silently make every chunk
+append a full copy again. -/
+
+/-- Push a literal byte list onto the accumulator. -/
+def emitBytes (acc : ByteArray) : List UInt8 → ByteArray
+  | [] => acc
+  | b :: bs => emitBytes (acc.push b) bs
+
+/-- Push `n` zero bytes onto the accumulator. -/
+def emitZeros (acc : ByteArray) : Nat → ByteArray
+  | 0 => acc
+  | n + 1 => emitZeros (acc.push 0) n
+
+/-- Append a chunk tree onto an accumulator. -/
+def emit (acc : ByteArray) : Chunks → ByteArray
+  | .empty => acc
+  | .bytes bs => emitBytes acc bs
+  | .chunk ba => acc ++ ba
+  | .zeros n => emitZeros acc n
+  | .append a b => emit (emit acc a) b
+
+theorem data_toList_emitBytes (acc : ByteArray) (bs : List UInt8) :
+    (emitBytes acc bs).data.toList = acc.data.toList ++ bs := by
+  induction bs generalizing acc with
+  | nil => simp [emitBytes]
+  | cons b bs ih => simp [emitBytes, ih, ByteArray.data_push]
+
+theorem data_toList_emitZeros (acc : ByteArray) (n : Nat) :
+    (emitZeros acc n).data.toList = acc.data.toList ++ List.replicate n 0 := by
+  induction n generalizing acc with
+  | zero => simp [emitZeros]
+  | succ n ih => simp [emitZeros, ih, ByteArray.data_push, List.replicate_succ]
+
+theorem data_toList_emit (acc : ByteArray) (c : Chunks) :
+    (emit acc c).data.toList = acc.data.toList ++ c.toList := by
+  induction c generalizing acc with
+  | empty => simp [emit, toList]
+  | bytes bs => simp [emit, toList, data_toList_emitBytes]
+  | chunk ba => simp [emit, toList]
+  | zeros n => simp [emit, toList, data_toList_emitZeros]
+  | append a b iha ihb => simp [emit, toList, iha, ihb, List.append_assoc]
+
+end Chunks
+
+/-- A byte-string builder: a chunk tree together with its byte count.
+
+The count is cached rather than computed because the ABI head/tail layout
+asks for the size of every tail while writing the offset words; recomputing
+it by walking the tree would reintroduce the very `O(n · depth)` cost the
+builder exists to remove.  `size_eq` is a `Prop`, so it is erased at
+runtime — a `Builder` is a chunk tree and a `Nat`. -/
 structure Builder where
-  /-- Run the builder onto a suffix. -/
-  apply : List UInt8 → List UInt8
-  /-- The builder is completely determined by the list `apply []`. -/
-  invariant : ∀ rest, apply rest = apply [] ++ rest
+  /-- The chunk tree. -/
+  chunks : Chunks
+  /-- Cached byte count. -/
+  size : Nat
+  /-- The cache is honest — maintained by every constructor below. -/
+  size_eq : size = chunks.toList.length
 
 namespace Builder
 
-/-- `O(1)` creation (the payload is copied once, at materialization).
-Lift a byte string to a builder. -/
-def ofList (bs : List UInt8) : Builder := ⟨(bs ++ ·), fun _ => by simp⟩
+/-! ## constructors
 
-/-- `O(1)`. The empty write. -/
-def empty : Builder := ⟨id, fun _ => rfl⟩
+Each is `O(1)` except `bytes`, which measures the list it is handed once. -/
 
-instance : EmptyCollection Builder := ⟨empty⟩
+/-- The empty builder. -/
+def empty : Builder := ⟨.empty, 0, rfl⟩
 
-/-- `O(1)`. Sequencing of writes. -/
-def append (a b : Builder) : Builder where
-  apply rest := a.apply (b.apply rest)
-  invariant rest := by
-    show a.apply (b.apply rest) = a.apply (b.apply []) ++ rest
-    rw [a.invariant, b.invariant, a.invariant (b.apply []), List.append_assoc]
+/-- A literal byte list. -/
+def ofList (bs : List UInt8) : Builder := ⟨.bytes bs, bs.length, rfl⟩
 
-instance : Append Builder := ⟨append⟩
+/-- A literal byte list whose length is already known.  `ofList` measures
+the list; this variant takes the measurement, so a caller that needs the
+length anyway — a `bytes` value's length word, say — walks the list once
+instead of twice.  The size cache is only honest because `h` is there. -/
+def ofListLen (bs : List UInt8) (len : Nat) (h : len = bs.length) : Builder :=
+  ⟨.bytes bs, len, h⟩
 
-/-- Materialize the payload: `O(size)`.  Specifications are stated about
-`toList`; `apply rest` is the continuation form used inside proofs. -/
-def toList (b : Builder) : List UInt8 := b.apply []
+/-- A contiguous chunk, kept as-is. -/
+def chunk (ba : ByteArray) : Builder := ⟨.chunk ba, ba.size, ByteArray.size_eq_toList_length ba⟩
 
-@[simp] theorem apply_append (a b : Builder) (rest : List UInt8) :
-    (a ++ b).apply rest = a.apply (b.apply rest) := rfl
+/-- A run of `n` zero bytes; nothing is materialised. -/
+def zeros (n : Nat) : Builder := ⟨.zeros n, n, by simp [Chunks.toList]⟩
 
-@[simp] theorem apply_ofList (bs rest : List UInt8) :
-    (ofList bs).apply rest = bs ++ rest := rfl
+/-- Concatenation: `O(1)`, and the size cache adds up. -/
+def append (a b : Builder) : Builder :=
+  ⟨.append a.chunks b.chunks, a.size + b.size, by
+    simp [Chunks.toList, a.size_eq, b.size_eq]⟩
 
-@[simp] theorem apply_empty (rest : List UInt8) : (∅ : Builder).apply rest = rest := rfl
+instance : Append Builder := ⟨Builder.append⟩
+instance : EmptyCollection Builder := ⟨Builder.empty⟩
 
-@[simp] theorem toList_ofList (bs : List UInt8) : (ofList bs).toList = bs := by
-  simp [toList]
+/-! ## denotation -/
 
-theorem toList_empty : (∅ : Builder).toList = [] := rfl
+/-- The byte string a builder denotes. -/
+def toList (b : Builder) : List UInt8 := b.chunks.toList
 
-@[simp] theorem toList_append (a b : Builder) :
-    (a ++ b).toList = a.toList ++ b.toList := by
-  show a.apply (b.apply []) = a.apply [] ++ b.apply []
-  exact a.invariant _
+@[simp] theorem toList_empty : (∅ : Builder).toList = [] := rfl
+@[simp] theorem toList_ofList (bs : List UInt8) : (Builder.ofList bs).toList = bs := rfl
+@[simp] theorem toList_ofListLen (bs : List UInt8) (len : Nat) (h : len = bs.length) :
+    (Builder.ofListLen bs len h).toList = bs := rfl
+@[simp] theorem toList_chunk (ba : ByteArray) : (Builder.chunk ba).toList = ba.data.toList := rfl
+@[simp] theorem toList_zeros (n : Nat) : (Builder.zeros n).toList = List.replicate n 0 := rfl
+@[simp] theorem toList_append (a b : Builder) : (a ++ b).toList = a.toList ++ b.toList := rfl
 
-@[simp] theorem toList_invariant (a : Builder) (rest : List UInt8) :
-    a.toList ++ rest = a.apply rest := by
-  rw [toList, ← a.invariant]
-
-@[simp] theorem length_apply (b : Builder) (rest : List UInt8) :
-    (b.apply rest).length = b.toList.length + rest.length := by
-  rw [b.invariant rest, List.length_append]
-  rfl
-
-/-- Extensionality: builders with equal behaviour are equal. -/
-@[ext] theorem ext {a b : Builder} (h : ∀ rest, a.apply rest = b.apply rest) : a = b := by
-  obtain ⟨fa, ha⟩ := a
-  obtain ⟨fb, hb⟩ := b
-  have hfb : fa = fb := by
-    funext rest
-    exact h rest
-  subst hfb
-  rfl
-
-theorem empty_append (b : Builder) : ∅ ++ b = b := by
-  ext rest; rfl
-
-theorem append_empty (b : Builder) : b ++ ∅ = b := by
-  ext rest; rfl
-
-theorem append_assoc (a b c : Builder) : (a ++ b) ++ c = a ++ (b ++ c) := rfl
+/-- The cached size agrees with the denotation — this is why `run` can size
+its buffer in advance, and why the offset words the ABI layout computes from
+`size` are the offsets the specification demands. -/
+@[simp] theorem size_eq_length_toList (b : Builder) : b.size = b.toList.length := b.size_eq
 
 /-! ## word primitive -/
 
-/-- Write one 32-byte EVM word, big-endian. -/
-def putWord (w : UInt256) : Builder := ofList (bytesOfWord w)
+/-- Write one 32-byte EVM word, big-endian.  A `chunk`, not a `bytes` leaf:
+`UInt256.toBEByteArray` writes the word straight into a `ByteArray` (and
+`Binary.Fast` gives it eight bytes per bignum operation), so no 32-cell
+cons list is allocated per word — and ABI encodings are mostly words. -/
+def putWord (w : UInt256) : Builder := chunk (UInt256.toBEByteArray w)
 
-@[simp] theorem toList_putWord (w : UInt256) : (putWord w).toList = bytesOfWord w := by
-  simp [putWord]
+@[simp] theorem toList_putWord (w : UInt256) : (putWord w).toList = bytesOfWord w :=
+  UInt256.toList_toBEByteArray w
 
-theorem apply_putWord (w : UInt256) (rest : List UInt8) :
-    (putWord w).apply rest = bytesOfWord w ++ rest := rfl
+/-! ## execution -/
+
+/-- Run a builder into a contiguous `ByteArray`, sized exactly in advance. -/
+def run (b : Builder) : ByteArray := Chunks.emit (ByteArray.emptyWithCapacity b.size) b.chunks
+
+/-- **The bridge**: running a builder produces exactly the bytes it denotes.
+Every `List UInt8` statement about `b.toList` transports to `b.run`. -/
+@[simp] theorem data_toList_run (b : Builder) : b.run.data.toList = b.toList := by
+  have h : (ByteArray.emptyWithCapacity b.size).data.toList = [] := rfl
+  rw [run, Chunks.data_toList_emit, h, List.nil_append, toList]
+
+@[simp] theorem size_run (b : Builder) : b.run.size = b.size := by
+  rw [ByteArray.size_eq_toList_length, data_toList_run, size_eq_length_toList]
+
+/-- The other direction: `run` is `List.toByteArray` of the denotation, so a
+builder and the list it denotes are interchangeable at the I/O boundary. -/
+theorem run_eq_toByteArray (b : Builder) : b.run = b.toList.toByteArray := by
+  apply ByteArray.data_inj
+  rw [← Array.toList_inj, data_toList_run, List.toList_data_toByteArray]
 
 end Builder
 
@@ -179,5 +291,52 @@ def fail : Get2 α := ⟨fun _ _ _ => none⟩
     (fail : Get2 α).run head tails E = none := rfl
 
 end Get2
+
+/-! ## GetBA: the dual-cursor reader over one `ByteArray` -/
+
+namespace GetBA
+
+/-- The result of a `GetBA` run: the value, the advanced cursor *offsets*,
+and the new expected tail frontier. -/
+structure Result (α : Type) where
+  /-- The decoded value. -/
+  val : α
+  /-- Remaining head cursor, as an offset. -/
+  head : Nat
+  /-- Remaining tail cursor, as an offset. -/
+  tails : Nat
+  /-- New expected tail frontier. -/
+  frontier : Nat
+
+/-- The offsets read as the sub-lists they stand for — the translation the
+agreement lemmas are stated over. -/
+def Result.toList (ba : ByteArray) (r : Result α) : Get2.Result α :=
+  ⟨r.val, ba.data.toList.drop r.head, ba.data.toList.drop r.tails, r.frontier⟩
+
+end GetBA
+
+/-- A dual-cursor prefix reader over one `ByteArray`: the `Get2` analogue
+with the two cursors as offsets into a shared buffer. -/
+structure GetBA (α : Type) where
+  run : ByteArray → Nat → Nat → Nat → Option (GetBA.Result α)
+
+namespace GetBA
+
+instance : Monad GetBA where
+  pure a := ⟨fun _ ho to E => some ⟨a, ho, to, E⟩⟩
+  bind x f := ⟨fun ba ho to E =>
+    match x.run ba ho to E with
+    | none => none
+    | some r => (f r.val).run ba r.head r.tails r.frontier⟩
+
+@[simp] theorem pure_run (a : α) (ba : ByteArray) (ho to E : Nat) :
+    (pure a : GetBA α).run ba ho to E = some ⟨a, ho, to, E⟩ := rfl
+
+@[simp] theorem bind_run (x : GetBA α) (f : α → GetBA β) (ba : ByteArray) (ho to E : Nat) :
+    (x >>= f).run ba ho to E = (match x.run ba ho to E with
+      | none => none
+      | some r => (f r.val).run ba r.head r.tails r.frontier) := rfl
+
+end GetBA
 
 end EvmAbi

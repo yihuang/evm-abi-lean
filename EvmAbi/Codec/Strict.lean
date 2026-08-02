@@ -4,17 +4,19 @@ import EvmAbi.Codec.Sound
 /-!
 # EvmAbi.Codec.Strict
 
-The strict API: `decodeStrict` (canonical layout plus exact consumption, no
-trailing garbage), the predicate `IsCanonical`, and the capstones
-`isCanonical_iff` / `decodeStrict_eq_some_iff` — canonical buffers are
-exactly the image of `encode`, with no bound conjunct anywhere (the dynamic
-payload bounds are intrinsic to `Ty.Val`).
+The strict API, in `namespace EvmAbi.Spec`: `decodeStrict` (canonical
+layout plus exact consumption, no trailing garbage), the predicate
+`IsCanonical`, and the capstones `isCanonical_iff` /
+`decodeStrict_eq_some_iff` — canonical buffers are exactly the image of
+`encode`, with no bound conjunct anywhere (the dynamic payload bounds are
+intrinsic to `Ty.Val`).
 
 Depends on both theorem families: `decode_roundtrip` (encode ⇒ decode) and
 `decode_sound` (decode ⇒ encode).
 -/
 
 namespace EvmAbi
+namespace Spec
 
 open Ty
 open Binary
@@ -113,5 +115,45 @@ theorem decodeStrict_eq_some_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
     rw [← he]
     exact decodeStrict_encode t hv v (by rw [he]; exact hb)
 
+/-! ## the executable encoder
 
+Nothing below is reproved: `encodeByteArray` runs the very builder `encode`
+materializes, so each statement is its `List UInt8` counterpart with
+`data_toList_encodeByteArray` rewritten in. -/
+
+/-- **Roundtrip for the executable encoder**, inherited from
+`decode_roundtrip`. -/
+theorem decode_encodeByteArray (t : Ty) (hv : t.Valid) (v : t.Val)
+    (hb : (encodeByteArray t v).size < 2 ^ 256) :
+    decode t (encodeByteArray t v).data.toList = some (v, (encode t v).length, []) := by
+  rw [size_encodeByteArray] at hb
+  rw [data_toList_encodeByteArray]
+  simpa using decode_roundtrip t hv v [] (by simpa using hb)
+
+/-- **Static roundtrip for the executable encoder** — no size hypothesis,
+since static types carry no offset words. -/
+theorem decode_encodeByteArray_static (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
+    (v : t.Val) :
+    decode t (encodeByteArray t v).data.toList = some (v, t.headSize, []) := by
+  rw [data_toList_encodeByteArray]
+  simpa using decode_static_append t hs hv v []
+
+/-- The executable encoder's output is canonical. -/
+theorem isCanonical_encodeByteArray (t : Ty) (hv : t.Valid) (v : t.Val)
+    (hb : (encodeByteArray t v).size < 2 ^ 256) :
+    IsCanonical t (encodeByteArray t v).data.toList := by
+  rw [size_encodeByteArray] at hb
+  rw [data_toList_encodeByteArray]
+  exact isCanonical_encode t hv v hb
+
+/-- **Strict roundtrip for the executable encoder**, inherited from
+`decodeStrict_encode`. -/
+theorem decodeStrict_encodeByteArray (t : Ty) (hv : t.Valid) (v : t.Val)
+    (hb : (encodeByteArray t v).size < 2 ^ 256) :
+    decodeStrict t (encodeByteArray t v).data.toList = some v := by
+  rw [size_encodeByteArray] at hb
+  rw [data_toList_encodeByteArray]
+  exact decodeStrict_encode t hv v hb
+
+end Spec
 end EvmAbi

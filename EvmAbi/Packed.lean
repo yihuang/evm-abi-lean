@@ -34,6 +34,7 @@ namespace EvmAbi
 open Ty
 open Binary
 open Builder
+open EvmAbi.Spec
 
 /-! ## The Solidity-conformant fragment -/
 

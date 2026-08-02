@@ -168,9 +168,10 @@ def putAddress (a : Nat) : Builder := putUint a
 
 
 /-- Write fixed-size bytes (`bytesN`): left-aligned, right zero-padded
-to 32 bytes. -/
+to 32 bytes.  The padding is a `zeros` run, so it is never materialised. -/
 def putBytesN (bs : List UInt8) : Builder :=
-  Builder.ofList (bs ++ List.replicate (32 - bs.length) 0)
+  let len := bs.length
+  Builder.ofListLen bs len (by rfl) ++ Builder.zeros (32 - len)
 
 @[simp] theorem toList_putBytesN (bs : List UInt8) : (putBytesN bs).toList = encodeBytesN bs := by
   simp [putBytesN, encodeBytesN]

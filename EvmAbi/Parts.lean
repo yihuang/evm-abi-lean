@@ -41,15 +41,18 @@ structure Part where
 
 namespace Part
 
-/-- Bytes this part occupies in the head section. -/
+/-- Bytes this part occupies in the head section.  Read off the builder's
+cached `size`: the layout asks for this once per part while writing the
+offset words, so walking the chunk tree here would reintroduce the
+`O(n · depth)` cost the builder exists to remove. -/
 def headSize : Part → Nat
-  | ⟨head, _, false⟩ => head.toList.length
+  | ⟨head, _, false⟩ => head.size
   | ⟨_, _, true⟩ => 32
 
-/-- Bytes this part occupies in the tail section. -/
+/-- Bytes this part occupies in the tail section — the cached size again. -/
 def tailSize : Part → Nat
   | ⟨_, _, false⟩ => 0
-  | ⟨_, tail, true⟩ => tail.toList.length
+  | ⟨_, tail, true⟩ => tail.size
 
 end Part
 
@@ -74,7 +77,7 @@ tail (total head size plus the sizes of the preceding tails). -/
 def putHeads (acc : Nat) : List Part → Builder
   | [] => ∅
   | ⟨head, _, false⟩ :: ps => head ++ putHeads acc ps
-  | ⟨_, tail, true⟩ :: ps => putUint acc ++ putHeads (acc + tail.toList.length) ps
+  | ⟨_, tail, true⟩ :: ps => putUint acc ++ putHeads (acc + tail.size) ps
 
 /-- Build the tail section: the dynamic tails, in order. -/
 def putTails : List Part → Builder
@@ -163,31 +166,35 @@ theorem tailSizes_append (xs ys : List Part) :
 
 /-! ## append lemmas for the encoders -/
 
-theorem putHeads_append (acc : Nat) (xs ys : List Part) :
-    putHeads acc (xs ++ ys) = putHeads acc xs ++ putHeads (acc + tailSizes xs) ys := by
-  induction xs generalizing acc with
-  | nil => simp [putHeads, tailSizes, Builder.empty_append]
-  | cons x xs ih =>
-      obtain ⟨head, tail, isDyn⟩ := x
-      cases isDyn <;>
-        simp [List.cons_append, putHeads, tailSizes, Part.tailSize, ih,
-          Builder.append_assoc, Nat.add_assoc]
+/- `Builder.append` is a `Chunks` constructor, so it is associative only up
+to `toList` — `(a ++ b) ++ c` and `a ++ (b ++ c)` are different trees
+denoting the same bytes.  The append laws are therefore stated of the
+materialization, which is all the codec ever uses. -/
 
 theorem encodeHeads_append (acc : Nat) (xs ys : List Part) :
     encodeHeads acc (xs ++ ys) = encodeHeads acc xs ++ encodeHeads (acc + tailSizes xs) ys := by
-  simp [encodeHeads, putHeads_append]
-
-theorem putTails_append (xs ys : List Part) :
-    putTails (xs ++ ys) = putTails xs ++ putTails ys := by
-  induction xs with
-  | nil => simp [putTails, Builder.empty_append]
+  induction xs generalizing acc with
+  | nil => simp [encodeHeads, putHeads, tailSizes]
   | cons x xs ih =>
       obtain ⟨head, tail, isDyn⟩ := x
-      cases isDyn <;> simp [List.cons_append, putTails, ih, Builder.append_assoc]
+      cases isDyn
+      · rw [List.cons_append, encodeHeads_cons_static, encodeHeads_cons_static, ih,
+          List.append_assoc]
+        simp [tailSizes, Part.tailSize]
+      · rw [List.cons_append, encodeHeads_cons_dynamic, encodeHeads_cons_dynamic, ih,
+          List.append_assoc]
+        simp [tailSizes, Part.tailSize, Nat.add_assoc]
 
 theorem encodeTails_append (xs ys : List Part) :
     encodeTails (xs ++ ys) = encodeTails xs ++ encodeTails ys := by
-  simp [encodeTails, putTails_append]
+  induction xs with
+  | nil => simp [encodeTails, putTails]
+  | cons x xs ih =>
+      obtain ⟨head, tail, isDyn⟩ := x
+      cases isDyn
+      · rw [List.cons_append, encodeTails_cons_static, encodeTails_cons_static, ih]
+      · rw [List.cons_append, encodeTails_cons_dynamic, encodeTails_cons_dynamic, ih,
+          List.append_assoc]
 
 /-! ## well-formedness -/
 

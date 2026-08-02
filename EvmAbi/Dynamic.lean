@@ -127,19 +127,31 @@ layer: `putBytes` sequences two builders (`O(1)`) and materializes via
 `toList` to `encodeBytes`.
 -/
 
-/-- Write dynamic `bytes`: the length word, then zero-padded data. -/
+/-- Write dynamic `bytes`: the length word, the data, then the padding as
+a `zeros` run — the padding is never materialised.  The length is measured
+once and handed to `ofListLen`, so the payload list is walked once, not
+twice. -/
 def putBytes (bs : List UInt8) : Builder :=
-  putUint bs.length ++ Builder.ofList (pad32 bs)
+  let len := bs.length
+  putUint len ++ Builder.ofListLen bs len (by rfl) ++
+    Builder.zeros ((32 - len % 32) % 32)
 
 @[simp] theorem toList_putBytes (bs : List UInt8) :
     (putBytes bs).toList = encodeBytes bs := by
-  simp [putBytes, encodeBytes]
+  simp [putBytes, encodeBytes, pad32, List.append_assoc]
 
-/-- Write a `string` as dynamic `bytes` over its UTF-8 encoding. -/
-def putString (s : String) : Builder := putBytes s.toUTF8.data.toList
+/-- Write a `string` as dynamic `bytes` over its UTF-8 encoding.  The
+payload is kept as the `ByteArray` `String.toUTF8` already produced, so it
+is never unpacked into a cons list. -/
+def putString (s : String) : Builder :=
+  putUint s.toUTF8.size ++ Builder.chunk s.toUTF8 ++
+    Builder.zeros ((32 - s.toUTF8.size % 32) % 32)
 
 @[simp] theorem toList_putString (s : String) : (putString s).toList = encodeString s := by
-  simp [putString, encodeString]
+  have hsz : s.toUTF8.size = s.toUTF8.data.toList.length :=
+    Binary.ByteArray.size_eq_toList_length _
+  simp only [putString, encodeString, encodeBytes, pad32, hsz, toList_putUint,
+    Builder.toList_append, Builder.toList_chunk, Builder.toList_zeros, List.append_assoc]
 
 
 end EvmAbi

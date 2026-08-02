@@ -5,7 +5,19 @@ import EvmAbi.Align
 import EvmAbi.Word
 import EvmAbi.Parts
 
+/-!
+# EvmAbi.Codec
+
+The **spec codec** — the list-based surface every theorem is stated over.
+All definitions in this file live in `namespace EvmAbi.Spec`:
+`Spec.put` / `Spec.encode` / `Spec.encodeByteArray`, the linear decoder
+`Spec.decode` with its `Get2` walkers, the bound-free static delegation,
+and the helper packages.  The user-facing runtime codec is
+`EvmAbi.Codec.Runtime`.
+-/
+
 namespace EvmAbi
+namespace Spec
 
 open Ty
 open Binary
@@ -49,8 +61,32 @@ def partsOfTuple : (ts : List Ty) → TupleVal ts → List Part
 termination_by ts => (sizeOf ts, 2)
 end
 
-/-- ABI encoder (type-indexed): the materialization of `put`. -/
+/-- ABI encoder (type-indexed): the materialization of `put`.  This is the
+*specification* — `List UInt8` is the type the proofs are stated over —
+and it is not what you run; see `encodeByteArray`. -/
 def encode (t : Ty) (v : t.Val) : List UInt8 := (put t v).toList
+
+/-- **Executable ABI encoder**: run the same `put` into a contiguous
+`ByteArray`, sized exactly from the builder's cached size and filled in one
+linear pass.  Nothing about the layout is duplicated — this is `encode`'s
+builder, materialized the other way. -/
+def encodeByteArray (t : Ty) (v : t.Val) : ByteArray := (put t v).run
+
+/-- `encodeByteArray` produces exactly the bytes `encode` specifies, so
+every `List UInt8` theorem transports to it by rewriting. -/
+@[simp] theorem data_toList_encodeByteArray (t : Ty) (v : t.Val) :
+    (encodeByteArray t v).data.toList = encode t v :=
+  Builder.data_toList_run (put t v)
+
+/-- …equivalently, it is the specification encoding packed into a `ByteArray`. -/
+theorem encodeByteArray_eq (t : Ty) (v : t.Val) :
+    encodeByteArray t v = (encode t v).toByteArray :=
+  Builder.run_eq_toByteArray (put t v)
+
+@[simp] theorem size_encodeByteArray (t : Ty) (v : t.Val) :
+    (encodeByteArray t v).size = (encode t v).length := by
+  rw [encodeByteArray, Builder.size_run, Builder.size_eq_length_toList]
+  rfl
 
 /-! ## helper lemmas -/
 
@@ -180,7 +216,8 @@ theorem encode_length_static : (t : Ty) → t.isStatic = true → t.Valid → (v
             obtain ⟨ih1, ih2⟩ := ih
             rw [List.map_cons, partOf_static t w hst]
             constructor
-            · simp only [headSizes, Part.headSize, List.length_cons]
+            · simp only [headSizes, Part.headSize, List.length_cons,
+                Builder.size_eq_length_toList]
               change (encode t w).length + headSizes (List.map (partOf t) ws) =
                 (ws.length + 1) * t.headSize
               rw [ih1, encode_length_static t hst hvt w, Nat.add_mul, Nat.one_mul]
@@ -218,6 +255,8 @@ theorem encode_length_static_tuple : (ts : List Ty) → allStatic ts = true → 
         exact hlen
       simp only [partsOfTuple]
       rw [partOf_static t v hst, length_encodeParts]
+      simp only [headSizes, tailSizes, Part.headSize, Part.tailSize, headSizeSum,
+        Builder.size_eq_length_toList]
       change (encode t v).length + headSizes (partsOfTuple ts vs) +
           (0 + tailSizes (partsOfTuple ts vs)) = t.headSize + headSizeSum ts
       rw [encode_length_static t hst hvt v]
@@ -233,7 +272,7 @@ theorem headSize_partOf (t : Ty) (hv : t.Valid) (v : t.Val) :
   cases hs : t.isStatic
   · rw [partOf_dynamic t v hs]
     exact (headSize_of_dynamic t hs).symm
-  · rw [partOf_static t v hs, Part.headSize]
+  · rw [partOf_static t v hs, Part.headSize, Builder.size_eq_length_toList]
     exact encode_length_static t hs hv v
 
 /-! ## Package B: alignment and well-formedness -/
@@ -900,7 +939,7 @@ theorem tailSize_partOf_static (t : Ty) (v : t.Val) (h : t.isStatic = true) :
 theorem tailSize_partOf_dynamic (t : Ty) (v : t.Val) (h : t.isStatic = false) :
     (partOf t v).tailSize = (encode t v).length := by
   rw [partOf_dynamic t v h, Part.tailSize]
-  rfl
+  exact (put t v).size_eq
 
 /-- The frontier invariant is preserved by extending the head prefix: a part
 advances the expected tail position by its own tail size — zero for a static
@@ -919,3 +958,5 @@ theorem tailOffset_snoc (p : Part) (xs zs : List Part) (E : Nat)
     simp [tailSizes]
     omega
   rw [h_succ, hE]
+
+end Spec
