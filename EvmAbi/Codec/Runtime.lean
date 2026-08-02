@@ -10,6 +10,12 @@ The runtime codec users run: `encode` (`ValBA` values into a `ByteArray`),
 `IsCanonical`.  The list-based specification codec lives in
 `EvmAbi.Spec`; every runtime definition here is paired with an agreement
 lemma against it, so nothing is reproved.
+
+The capstones at the end — `decodeStrict_encode`, `encode_of_decodeStrict`,
+`decodeStrict_eq_some_iff`, `isCanonical_iff` — are the `Spec` capstones
+stated of these names.  Agreement alone does not give them: it says what a
+runtime answer *denotes*, while they are about the runtime value itself, so
+the conclusion comes back up through `ValBA.toList_injective`.
 -/
 
 namespace EvmAbi
@@ -380,5 +386,69 @@ def IsCanonical (t : Ty) (ba : ByteArray) : Prop :=
 instance (t : Ty) (ba : ByteArray) : Decidable (IsCanonical t ba) := by
   unfold IsCanonical
   infer_instance
+
+/-! ## capstones
+
+The `Spec` capstones on the runtime names, each a rewrite over its `…BA`
+counterpart through `encode_eq_encodeByteArray`.  The decoder side also needs
+`ValBA.toList_injective`. -/
+
+/-- The runtime encoder is the spec's `ByteArray` encoder at the denotation —
+the bridge every capstone below goes through. -/
+theorem encode_eq_encodeByteArray (t : Ty) (v : ValBA t) :
+    encode t v = Spec.encodeByteArray t (ValBA.toList t v) := by
+  rw [encode_eq, Spec.encodeByteArray_eq]
+
+/-- Pull a conclusion back through an injective denotation. -/
+private theorem eq_some_of_map_eq {α β : Type} {f : α → β} {o : Option α} {v : α}
+    (hf : ∀ {a b : α}, f a = f b → a = b) (h : o.map f = some (f v)) : o = some v := by
+  cases o with
+  | none => simp at h
+  | some a =>
+      rw [Option.map_some, Option.some.injEq] at h
+      rw [hf h]
+
+/-- **Runtime roundtrip** (capstone): what `encode` writes, `decodeStrict`
+reads back — as the very same `ValBA` value, not merely one with the same
+denotation. -/
+theorem decodeStrict_encode (t : Ty) (hv : t.Valid) (v : ValBA t)
+    (hb : (encode t v).size < 2 ^ 256) :
+    decodeStrict t (encode t v) = some v := by
+  refine eq_some_of_map_eq (fun {_ _} hab => ValBA.toList_injective t hab) ?_
+  rw [decodeStrict, decodeStrictBAVal_eq t hv, encode_eq_encodeByteArray]
+  exact decodeStrictBA_encodeByteArray t hv _ (by rwa [← encode_eq_encodeByteArray])
+
+/-- **Runtime uniqueness** (capstone): a strictly decodable buffer *is* the
+encoding of its decoded value. -/
+theorem encode_of_decodeStrict (t : Ty) (hv : t.Valid) (ba : ByteArray) (v : ValBA t)
+    (h : decodeStrict t ba = some v) : encode t v = ba := by
+  rw [encode_eq_encodeByteArray]
+  refine encodeByteArray_of_decodeStrictBA t hv ba _ ?_
+  rw [← decodeStrictBAVal_eq t hv, ← decodeStrict, h, Option.map_some]
+
+/-- **Runtime strict-decoder characterization** (capstone). -/
+theorem decodeStrict_eq_some_iff (t : Ty) (hv : t.Valid) (ba : ByteArray)
+    (v : ValBA t) (hb : ba.size < 2 ^ 256) :
+    decodeStrict t ba = some v ↔ encode t v = ba := by
+  constructor
+  · exact encode_of_decodeStrict t hv ba v
+  · intro he
+    rw [← he]
+    exact decodeStrict_encode t hv v (by rw [he]; exact hb)
+
+/-- **Runtime image characterization** (capstone): the canonical buffers are
+exactly the image of `encode`. -/
+theorem isCanonical_iff (t : Ty) (hv : t.Valid) (ba : ByteArray)
+    (hb : ba.size < 2 ^ 256) :
+    IsCanonical t ba ↔ ∃ v : ValBA t, encode t v = ba := by
+  constructor
+  · intro hc
+    obtain ⟨v, hvv⟩ := Option.isSome_iff_exists.mp hc
+    exact ⟨v, encode_of_decodeStrict t hv ba v hvv⟩
+  · rintro ⟨v, he⟩
+    have hr := decodeStrict_encode t hv v (by rw [he]; exact hb)
+    rw [he] at hr
+    rw [IsCanonical, hr]
+    rfl
 
 end EvmAbi

@@ -192,8 +192,22 @@ theorem decodeStrictBA_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) :
     decodeStrictBA t ba = Spec.decodeStrict t ba.data.toList
 ```
 
-so the capstones hold of the runtime decoder too.  Compiled, decoding a
-`bytes[]`:
+Agreement runs *downward* — it says what a runtime answer denotes — while a
+capstone is about the runtime value itself, so the conclusion comes back up
+through `ValBA.toList_injective`.  With it, the capstones are stated of the
+runtime names:
+
+```lean4
+theorem decodeStrict_encode (t : Ty) (hv : t.Valid) (v : ValBA t)
+    (hb : (encode t v).size < 2 ^ 256) : decodeStrict t (encode t v) = some v
+
+theorem isCanonical_iff (t : Ty) (hv : t.Valid) (ba : ByteArray)
+    (hb : ba.size < 2 ^ 256) : IsCanonical t ba ↔ ∃ v : ValBA t, encode t v = ba
+```
+
+— the roundtrip returning the very same `ValBA` value, not merely one with
+the same denotation, plus `encode_of_decodeStrict` and
+`decodeStrict_eq_some_iff`.  Compiled, decoding a `bytes[]`:
 
     500 elements  (160KB)   3460 -> 1177 us    2.9x
     2000 elements (640KB)  13945 -> 4799 us    2.9x
@@ -303,7 +317,7 @@ The proof is built in incremental layers, each reusable independently:
 | **7. Dynamic primitives** | `Dynamic` | Standalone codecs for `bytes`, `string`; prefix-tolerant decoder variant |
 | **8. Head/tail combinator** | `Parts` | The core ABI layout abstraction (`Part`, `encodeParts`, offset-correctness theorems); type-independent |
 | **9. Spec codec** | `Codec` + `Codec.Roundtrip` / `Codec.Sound` / `Codec.Strict` | `Ty`-indexed `Spec.encode` (the `List UInt8` specification) and `Spec.encodeByteArray` (the same builder run into a `ByteArray`); the linear decoder `Spec.decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); bound-free static delegation in `Codec`; roundtrip and soundness families in their own files; strict API `Spec.decodeStrict`/`Spec.IsCanonical` and the capstones |
-| **10. Runtime codec** | `Codec.Runtime` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), the `ValBA` walkers, the `toList_putBA` encoder bridge, and the agreement lemmas (`decodeBAVal_eq`, `decodeStrictBAVal_eq`, `decodeStrictBA_eq`) that carry the `Spec` theorems across |
+| **10. Runtime codec** | `Codec.Runtime` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), the `ValBA` walkers, the `toList_putBA` encoder bridge, the agreement lemmas (`decodeBAVal_eq`, `decodeStrictBAVal_eq`, `decodeStrictBA_eq`) that carry the `Spec` theorems across, `ValBA.toList_injective` that carries conclusions back, and the runtime capstones (`decodeStrict_encode`, `encode_of_decodeStrict`, `decodeStrict_eq_some_iff`, `isCanonical_iff`) |
 | **11. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
 | **12. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
 | **13. Compile-time macros** | `HumanReadable.Meta` | `ty!`, `item!`, `params!` — parse string literals at elaboration time |

@@ -86,4 +86,79 @@ end
     TupleValBA.toList (t :: ts) (v, vs) = (ValBA.toList t v, TupleValBA.toList ts vs) := by
   rw [TupleValBA.toList.eq_2]
 
+/-! ## injectivity
+
+The two families carry the same information: the clauses differ only in the
+payloads, and there only by `ByteArray.data.toList`.
+
+This is the direction the agreement lemmas cannot supply.  They push a runtime
+answer *down* to its denotation; injectivity brings a conclusion back up, which
+is what lets the capstones in `EvmAbi.Codec.Runtime` be stated at all. -/
+
+/-- `List.map f` is injective when `f` is. -/
+private theorem map_inj {α β : Type} {f : α → β} (hf : ∀ {a b : α}, f a = f b → a = b) :
+    ∀ {as bs : List α}, as.map f = bs.map f → as = bs
+  | [], [], _ => rfl
+  | [], _ :: _, h => by simp at h
+  | _ :: _, [], h => by simp at h
+  | a :: as, b :: bs, h => by
+      rw [List.map_cons, List.map_cons, List.cons.injEq] at h
+      rw [hf h.1, map_inj hf h.2]
+
+/-- A `ByteArray` is determined by the bytes it denotes. -/
+private theorem ba_inj {a b : ByteArray} (h : a.data.toList = b.data.toList) : a = b := by
+  apply Binary.ByteArray.data_inj
+  rwa [← Array.toList_inj]
+
+mutual
+/-- **`ValBA.toList` is injective**: a packed value is determined by its
+denotation. -/
+theorem ValBA.toList_injective (t : Ty) {v w : ValBA t}
+    (h : ValBA.toList t v = ValBA.toList t w) : v = w := by
+  cases t with
+  | uint m =>
+      obtain ⟨n, hn⟩ := v; obtain ⟨n', hn'⟩ := w
+      simp only [ValBA.toList, Subtype.mk.injEq] at h
+      exact Subtype.ext h
+  | int m =>
+      obtain ⟨i, hi⟩ := v; obtain ⟨i', hi'⟩ := w
+      simp only [ValBA.toList, Subtype.mk.injEq] at h
+      exact Subtype.ext h
+  | bool => simpa only [ValBA.toList] using h
+  | address =>
+      obtain ⟨n, hn⟩ := v; obtain ⟨n', hn'⟩ := w
+      simp only [ValBA.toList, Subtype.mk.injEq] at h
+      exact Subtype.ext h
+  | bytesN m =>
+      obtain ⟨a, ha⟩ := v; obtain ⟨b, hb⟩ := w
+      simp only [ValBA.toList, Subtype.mk.injEq] at h
+      exact Subtype.ext (ba_inj h)
+  | bytes =>
+      obtain ⟨a, ha⟩ := v; obtain ⟨b, hb⟩ := w
+      simp only [ValBA.toList, Subtype.mk.injEq] at h
+      exact Subtype.ext (ba_inj h)
+  | string => simpa only [ValBA.toList] using h
+  | array t =>
+      obtain ⟨vs, hv⟩ := v; obtain ⟨ws, hw⟩ := w
+      simp only [ValBA.toList, Subtype.mk.injEq] at h
+      exact Subtype.ext (map_inj (fun {_ _} hab => ValBA.toList_injective t hab) h)
+  | fixedArray t n =>
+      obtain ⟨vs, hv⟩ := v; obtain ⟨ws, hw⟩ := w
+      simp only [ValBA.toList, Subtype.mk.injEq] at h
+      exact Subtype.ext (map_inj (fun {_ _} hab => ValBA.toList_injective t hab) h)
+  | tuple ts => exact TupleValBA.toList_injective ts (by simpa only [ValBA.toList] using h)
+termination_by (sizeOf t, 0)
+
+/-- **`TupleValBA.toList` is injective**, componentwise. -/
+theorem TupleValBA.toList_injective (ts : List Ty) {vs ws : TupleValBA ts}
+    (h : TupleValBA.toList ts vs = TupleValBA.toList ts ws) : vs = ws := by
+  cases ts with
+  | nil => rfl
+  | cons t ts =>
+      obtain ⟨v, vss⟩ := vs; obtain ⟨w, wss⟩ := ws
+      rw [TupleValBA.toList_cons, TupleValBA.toList_cons, Prod.mk.injEq] at h
+      rw [ValBA.toList_injective t h.1, TupleValBA.toList_injective ts h.2]
+termination_by (sizeOf ts, 1)
+end
+
 end EvmAbi

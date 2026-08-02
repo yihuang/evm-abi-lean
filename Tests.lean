@@ -928,4 +928,29 @@ example : IsCanonical .bool (encode .bool true) := by native_decide
 example : (encode .bool true).data.toList = Spec.encode .bool true := by
   simp [ValBA.toList, data_toList_encode]
 
+/-! ### …and the same properties by theorem
+
+The instances above are computed; these are the runtime capstones applied, so
+they hold for *every* value. -/
+
+example (v : ValBA (.uint 8)) (hb : (encode (.uint 8) v).size < 2 ^ 256) :
+    decodeStrict (.uint 8) (encode (.uint 8) v) = some v :=
+  decodeStrict_encode (.uint 8) (by decide) v hb
+
+example (v : ValBA specSamTy) (hb : (encode specSamTy v).size < 2 ^ 256) :
+    decodeStrict specSamTy (encode specSamTy v) = some v :=
+  decodeStrict_encode specSamTy (by native_decide) v hb
+
+example (ba : ByteArray) (v : ValBA specSamTy) (h : decodeStrict specSamTy ba = some v) :
+    encode specSamTy v = ba :=
+  encode_of_decodeStrict specSamTy (by native_decide) ba v h
+
+example (ba : ByteArray) (hb : ba.size < 2 ^ 256) :
+    IsCanonical specSamTy ba ↔ ∃ v, encode specSamTy v = ba :=
+  isCanonical_iff specSamTy (by native_decide) ba hb
+
+example (v w : ValBA specSamTy) (h : ValBA.toList specSamTy v = ValBA.toList specSamTy w) :
+    v = w :=
+  ValBA.toList_injective specSamTy h
+
 end EvmAbi
