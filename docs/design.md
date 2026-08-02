@@ -482,6 +482,85 @@ It is also why the readers are passed to `cons`/`elems` as the *maker*
 `GetBA` — a structure argument is opaque to the specialiser, and passing one
 costs ~10 ns per component.
 
+**Reading the generated code.**  `abi_codec foo "…" trace` prints every
+definition and theorem the emitter writes, as it writes it — the raw syntax,
+before elaboration.  The transcript *is* the compiler's behaviour made
+visible.  For `transfer(address to, uint256 amount)` the encoder is:
+
+```lean
+def callArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple [EvmAbi.Ty.address, EvmAbi.Ty.uint 256]) → EvmAbi.Builder :=
+  fun v =>
+  (((EvmAbi.Compile.Acc.start 64).static (EvmAbi.putAddress (v.1).val)).static
+      (EvmAbi.putUint (v.2.1).val)).finish
+
+theorem callArgs.put_denotes :
+    EvmAbi.Compile.Denotes (EvmAbi.Ty.tuple [EvmAbi.Ty.address, EvmAbi.Ty.uint 256]) callArgs.put :=
+  by
+  intro v
+  refine EvmAbi.Compile.toList_tuple (by decide) _ ?_
+  simp only [EvmAbi.Compile.partsOfTupleBA_cons, EvmAbi.Compile.partsOfTupleBA_nil]
+  exact
+    ((EvmAbi.Compile.Acc.start_inv 64).static (by decide) (EvmAbi.Compile.denotes_address (v).1)).static (by decide)
+      (EvmAbi.Compile.denotes_uint 256 (v).2.1)
+```
+
+Every decision the type made available is already taken.  The head section
+is a numeral — `Acc.start 64` — where the generic encoder would compute
+`headSizeSum` at run time.  The components are straight-line `static`
+instructions (both happen to be static; a `bytes` argument would read
+`dyn`) whose bodies are the leaf codecs, and the value is reached by the
+projections `v.1`, `v.2.1`, … rather than by matching a `Ty`.  `finish`
+closes the layout.  The theorem below it is the whole correctness story: one
+clause lemma of `EvmAbi.Compile` per instruction — `Acc.start_inv` for the
+opening, `.static` for each component — applied to the leaf lemmas
+(`denotes_address`, `denotes_uint`), with the tuple's parts list closed by
+the two `partsOfTupleBA` equations.  Nothing here was found by proof search;
+it is the emitter's output, and the kernel checks it as it is emitted.
+
+The decoder is the mirror image:
+
+```lean
+def callArgs.read : ByteArray → Nat → Option (EvmAbi.ValBA … × Nat) :=
+  EvmAbi.Compile.readTuple 64
+    (EvmAbi.Compile.cons EvmAbi.Compile.elemStatic EvmAbi.Compile.readAddress
+      (EvmAbi.Compile.cons EvmAbi.Compile.elemStatic (EvmAbi.Compile.readUint 256)
+        EvmAbi.Compile.consNil))
+```
+
+`readTuple 64` is the recursive clause of the generic decoder with its head
+size taken as a *parameter*, `elemStatic` is the static branch of the element
+step, and the `cons` chain links them; `consNil` ends the list.  The `Reads`
+theorem is the corresponding chain of `reads_tuple`/`cons_eq`/`elemStatic_eq`
+applications, the numeral checked against `Ty.headSize` by `rfl`.
+
+The dynamic case shows where the work went.  `sam(bytes, bool, uint256[])`
+emits two definitions, the array sub-type first because the emitter works
+bottom-up:
+
+```lean
+def samArgs.node0 : EvmAbi.ValBA (EvmAbi.Ty.array (EvmAbi.Ty.uint 256)) → EvmAbi.Builder :=
+  fun v =>
+  EvmAbi.putUint v.val.length ++
+    ((EvmAbi.Compile.Acc.start (v.val.length * 32)).elems EvmAbi.Compile.Acc.static
+        (fun v => EvmAbi.putUint v.val) v.val).finish
+
+def samArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple [EvmAbi.Ty.bytes, EvmAbi.Ty.bool, …]) → EvmAbi.Builder :=
+  fun v =>
+  ((((EvmAbi.Compile.Acc.start 96).dyn (EvmAbi.putBytesBA (v.1).val)).static (EvmAbi.putBool (v.2.1))).dyn
+      (samArgs.node0 (v.2.2.1))).finish
+```
+
+`node0` is the compiled encoder of the array sub-type; its single loop
+(`Acc.elems Acc.static`) runs one instruction per element, and its proof is
+one application of `denotes_array`.  The tuple then *calls* it —
+`samArgs.node0 …` — instead of rebuilding it, which is why compound types
+never duplicate code.  The `dyn` on the `bytes` and array components is the
+static/dynamic decision made once at compile time: a dynamic component
+writes its offset word and appends its payload to the tails, a static one
+(`bool`) goes inline.  The head size `96` is three offset words, all static
+components, in head order.  The `trace` transcript of a compiled codec is
+thus a complete, machine-checked account of what the type decided.
+
 ## 4. Technical Challenges
 
 ### 4.1 Dependent Pattern Matching over `Val`

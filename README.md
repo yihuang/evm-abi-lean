@@ -345,6 +345,30 @@ component sits in the head and which behind an offset word.  Arrays keep
 exactly one loop — the element count is not known until run time — but the
 instruction that loop runs is chosen at compile time.
 
+`#print` shows the root definitions; the sub-nodes and the correctness
+theorems have names you would have to guess.  Appending `trace` to any of
+the three commands prints each *specialised* definition and its correctness
+theorem as the emitter writes it — the raw generated syntax, before
+elaboration, exactly what the compiler did:
+
+```lean4
+abi_codec transfer "transfer(address to, uint256 amount)" trace
+-- ┌─ emitted transfer.put
+-- │def transfer.put : … := fun v => …
+-- │theorem transfer.put_denotes : … := …
+-- ┌─ emitted transfer.read
+-- │def transfer.read : … := …
+-- │theorem transfer.read_reads : … := …
+```
+
+The trace is a `logInfo` message: it prints when the file is elaborated, so
+run `lake env lean file.lean` (or any command that re-elaborates, e.g.
+`touch file.lean && lake build`) and read the `info:` lines; in VS Code it
+appears in the Lean Messages panel.  A normal `lake build` with everything
+up to date runs no elaborator and prints nothing — and the pinned trace test
+in `Tests.lean` wraps its command in `#guard_msgs`, which consumes the
+messages by design.
+
 `abi_codec foo` emits:
 
 | name | what it is |

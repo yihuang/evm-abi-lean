@@ -1091,6 +1091,54 @@ abi_decoder unalignedWidth "uint7"
 #guard_msgs in
 abi_codec trailingComma "(uint256, )"
 
+/-! ### the trace flag
+
+`abi_codec foo "…" trace` prints each specialised definition and its correctness
+theorem as the emitter writes it.  The transcript below is the compiler's whole output for a one-field
+tuple — pinned here so any change to the generated code (or to the flag)
+fails the suite instead of silently drifting.  Read it as the emitter's
+product: `Acc.start 32` is the head size folded to a numeral, `static`/`dyn`
+are the static/dynamic decision made once per component, and each theorem is
+exactly the `EvmAbi.Compile` clause lemmas applied to the sub-nodes' theorems.
+
+The `#guard_msgs` wrapper *consumes* these messages — that is what makes this
+a pinned test rather than noise in the build.  To see the same transcript
+live, run the flag in a scratch file:
+
+```lean
+import EvmAbi.Compile.Meta
+open EvmAbi.Compile.Meta
+
+abi_codec tiny "(bool)" trace
+```
+
+`lake env lean scratch.lean` prints it to stdout (the flag emits a `logInfo`
+message, which also appears in VS Code's Lean Messages panel). -/
+
+/--
+info: ┌─ emitted tiny.put
+│def tiny.put : EvmAbi.ValBA (EvmAbi.Ty.tuple (EvmAbi.Ty.bool :: @List.nil EvmAbi.Ty)) → EvmAbi.Builder := fun v =>
+  ((EvmAbi.Compile.Acc.start 32).static (EvmAbi.putBool (v).1)).finish
+│theorem tiny.put_denotes : EvmAbi.Compile.Denotes (EvmAbi.Ty.tuple (EvmAbi.Ty.bool :: @List.nil EvmAbi.Ty)) tiny.put :=
+  by
+  intro v
+  refine EvmAbi.Compile.toList_tuple (by decide) _ ?_
+  simp only [EvmAbi.Compile.partsOfTupleBA_cons, EvmAbi.Compile.partsOfTupleBA_nil]
+  exact (EvmAbi.Compile.Acc.start_inv 32).static (by decide) (EvmAbi.Compile.denotes_bool (v).1)
+---
+info: ┌─ emitted tiny.read
+│def tiny.read :
+    ByteArray → Nat → Option (EvmAbi.ValBA (EvmAbi.Ty.tuple (EvmAbi.Ty.bool :: @List.nil EvmAbi.Ty)) × Nat) :=
+  EvmAbi.Compile.readTuple 32
+    (EvmAbi.Compile.cons EvmAbi.Compile.elemStatic EvmAbi.Compile.readBool EvmAbi.Compile.consNil)
+│theorem tiny.read_reads : EvmAbi.Compile.Reads (EvmAbi.Ty.tuple (EvmAbi.Ty.bool :: @List.nil EvmAbi.Ty)) tiny.read :=
+  EvmAbi.Compile.reads_tuple rfl
+    (EvmAbi.Compile.cons_eq (EvmAbi.Compile.elemStatic_eq (by decide) EvmAbi.Compile.reads_bool)
+      EvmAbi.Compile.consNil_eq)
+-/
+#guard_msgs in
+abi_codec tiny "(bool)" trace
+
 /-! ### compiled codecs reduce in the kernel
 
 `encode` is well-founded-recursive over `Ty`, so the kernel cannot evaluate it:

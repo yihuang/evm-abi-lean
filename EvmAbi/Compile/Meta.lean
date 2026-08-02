@@ -41,6 +41,34 @@ abi_encoder transferArgs "transfer(address to, uint256 amount)"
 #print transferArgs.put   -- the generated code
 ```
 
+Appending `trace` prints every *specialised* definition and its correctness
+theorem as the command emits it — the raw syntax the emitter wrote, before
+elaboration, so a `Bool` is `EvmAbi.putBool (v).1` and a dynamic component
+is `Acc.dyn`, with no `Ty` dispatch left anywhere.  The trace is a `logInfo`
+message, so it shows when the file is elaborated (`lake env lean`, or the
+Lean Messages panel in an editor); a build that does not re-elaborate the
+file prints nothing:
+
+```lean
+abi_codec flags "(bool, bool)" trace
+-- ┌─ emitted flags.put
+-- │def flags.put : … := fun v =>
+-- │  (((EvmAbi.Compile.Acc.start 64).static (EvmAbi.putBool (v).1)).
+-- │     static (EvmAbi.putBool ((v).2).1)).finish
+-- │theorem flags.put_denotes : …
+-- ┌─ emitted flags.read
+-- │def flags.read : … :=
+-- │  EvmAbi.Compile.readTuple 64
+-- │    (EvmAbi.Compile.cons EvmAbi.Compile.elemStatic EvmAbi.Compile.readBool
+-- │      (…consNil))
+-- │theorem flags.read_reads : …
+```
+
+The `64` is `headSizeSum` folded to a numeral; the `static`/`dyn` words are
+the static/dynamic decision made once; and each `theorem` is exactly the
+clause lemmas of `EvmAbi.Compile` applied to the sub-nodes' theorems — one
+lemma application per instruction, never a proof the emitter built.
+
 The declarations the command emits, for a name `foo`:
 
 | name | what it is |
@@ -135,10 +163,31 @@ private def projStx (x : Term) : Nat → TermElabM Term
   | 0 => `(($x).1)
   | n + 1 => do projStx (← `(($x).2)) n
 
+/-- Erase the macro scopes the quotations introduced from every identifier in
+an emitted definition, so the trace reads the code instead of `v✝`/`Acc.static✝`.
+This is display-only: the declarations themselves keep their hygienic names. -/
+private def eraseMacroScopes (stx : Syntax) : Syntax :=
+  stx.rewriteBottomUp fun s =>
+    match s with
+    | .ident info raw val pre => .ident info raw val.eraseMacroScopes pre
+    | _ => s
+
+/-- Pretty-print a definition and its theorem exactly as the emitter wrote
+them, before elaboration — the `trace` flag's window into the compiler. -/
+private def logEmitted (trace : Bool) (fn thm : Name) (sig contract body proof : Term) :
+    CommandElabM Unit := do
+  if trace then
+    let d ← `(def $(mkIdent fn) : $sig := $body)
+    let t ← `(theorem $(mkIdent thm) : $contract := $proof)
+    logInfo m!"┌─ emitted {fn}\n│{MessageData.ofSyntax (eraseMacroScopes d)}\n│{MessageData.ofSyntax (eraseMacroScopes t)}"
+
 /-- Emit one compiled node: the definition, then the theorem that says what
 it is.  `sig` is the type of the code, `contract` the statement it satisfies —
-`Denotes` when compiling an encoder, `Reads` when compiling a decoder. -/
-private def emitNode (fn thm : Name) (sig contract body proof : Term) : CommandElabM Unit := do
+`Denotes` when compiling an encoder, `Reads` when compiling a decoder.
+`trace` prints each emitted pair as it is written. -/
+private def emitNode (trace : Bool) (fn thm : Name) (sig contract body proof : Term) :
+    CommandElabM Unit := do
+  logEmitted trace fn thm sig contract body proof
   elabCommand (← `(def $(mkIdent fn) : $sig := $body))
   elabCommand (← `(theorem $(mkIdent thm) : $contract := $proof))
 
@@ -165,12 +214,12 @@ private def nodeNames (root : Name) (tag suffix : String) (i : Nat) (top? : Opti
 /-- Compile one type: emit a definition (and its correctness theorem) for
 every compound sub-type, bottom up, and return the node for `t` itself.
 `i` is the next free node index. -/
-private partial def compileTy (root : Name) (t : Ty) (i : Nat)
+private partial def compileTy (root : Name) (trace : Bool) (t : Ty) (i : Nat)
     (top? : Option Name := none) : CommandElabM (Node × Nat) := do
   match t with
   | .uint _ | .int _ | .bool | .address | .bytesN _ | .bytes | .string => return (.leaf t, i)
   | .array e | .fixedArray e _ =>
-      let (en, i) ← compileTy root e i
+      let (en, i) ← compileTy root trace e i
       let (fn, thm) := nodeNames root "node" "_denotes" i top?
       let tyStx ← liftTermElabM (mkTyStx t)
       let elemFn ← liftTermElabM (en.code leafFn)
@@ -194,14 +243,14 @@ private partial def compileTy (root : Name) (t : Ty) (i : Nat)
       let proof ← liftTermElabM (do
         if isArray then `(EvmAbi.Compile.denotes_array (by decide) $stepPf)
         else `(EvmAbi.Compile.denotes_fixedArray (by decide) $stepPf))
-      emitNode fn thm (← liftTermElabM (encSig tyStx)) (← liftTermElabM (encContract tyStx fn))
+      emitNode trace fn thm (← liftTermElabM (encSig tyStx)) (← liftTermElabM (encContract tyStx fn))
         body proof
       return (.node t fn thm, i + 1)
   | .tuple ts =>
       let mut i := i
       let mut nodes : Array Node := #[]
       for c in ts do
-        let (cn, i') ← compileTy root c i
+        let (cn, i') ← compileTy root trace c i
         nodes := nodes.push cn
         i := i'
       let (fn, thm) := nodeNames root "node" "_denotes" i top?
@@ -237,7 +286,7 @@ private partial def compileTy (root : Name) (t : Ty) (i : Nat)
           $unfold:tactic
           exact $pf)
         return (body, proof)
-      emitNode fn thm (← liftTermElabM (encSig tyStx)) (← liftTermElabM (encContract tyStx fn))
+      emitNode trace fn thm (← liftTermElabM (encSig tyStx)) (← liftTermElabM (encContract tyStx fn))
         body proof
       return (.node t fn thm, i + 1)
 
@@ -299,12 +348,12 @@ def elemReader (t : Ty) (dp : Term) : TermElabM (Term × Term) := do
 
 /-- Compile a decoder for one type: a definition (and its `Reads` theorem)
 per compound sub-type, bottom up. -/
-private partial def compileDec (root : Name) (t : Ty) (i : Nat)
+private partial def compileDec (root : Name) (trace : Bool) (t : Ty) (i : Nat)
     (top? : Option Name := none) : CommandElabM (Node × Nat) := do
   match t with
   | .uint _ | .int _ | .bool | .address | .bytesN _ | .bytes | .string => return (.leaf t, i)
   | .array e | .fixedArray e _ =>
-      let (en, i) ← compileDec root e i
+      let (en, i) ← compileDec root trace e i
       let (fn, thm) := nodeNames root "dnode" "_reads" i top?
       let tyStx ← liftTermElabM (mkTyStx t)
       let elemRead ← liftTermElabM (en.code leafRead)
@@ -322,14 +371,14 @@ private partial def compileDec (root : Name) (t : Ty) (i : Nat)
         else
           pure (← `(EvmAbi.Compile.readFixedArray $hs $loop),
             ← `(EvmAbi.Compile.reads_fixedArray rfl $loopPf)))
-      emitNode fn thm (← liftTermElabM (decSig tyStx)) (← liftTermElabM (decContract tyStx fn))
+      emitNode trace fn thm (← liftTermElabM (decSig tyStx)) (← liftTermElabM (decContract tyStx fn))
         body proof
       return (.node t fn thm, i + 1)
   | .tuple ts =>
       let mut i := i
       let mut nodes : Array Node := #[]
       for c in ts do
-        let (cn, i') ← compileDec root c i
+        let (cn, i') ← compileDec root trace c i
         nodes := nodes.push cn
         i := i'
       let (fn, thm) := nodeNames root "dnode" "_reads" i top?
@@ -347,7 +396,7 @@ private partial def compileDec (root : Name) (t : Ty) (i : Nat)
           chainPf ← `(EvmAbi.Compile.cons_eq $erPf $chainPf)
         pure (← `(EvmAbi.Compile.readTuple $hss $chain),
           ← `(EvmAbi.Compile.reads_tuple rfl $chainPf))
-      emitNode fn thm (← liftTermElabM (decSig tyStx)) (← liftTermElabM (decContract tyStx fn))
+      emitNode trace fn thm (← liftTermElabM (decSig tyStx)) (← liftTermElabM (decContract tyStx fn))
         body proof
       return (.node t fn thm, i + 1)
 
@@ -360,16 +409,17 @@ private def emitTy (root : Name) (t : Ty) : CommandElabM Ident := do
   elabCommand (← `(abbrev $tyId : EvmAbi.Ty := $tyStx))
   return tyId
 
-/-- Emit the compiled encoder and its theorems, under the name `encName`. -/
-private def emitEncoder (root : Name) (t : Ty) (tyId : Ident) (encName : Name) :
+/-- Emit the compiled encoder and its theorems, under the name `encName`.
+`trace` prints each emitted definition and theorem. -/
+private def emitEncoder (root : Name) (trace : Bool) (t : Ty) (tyId : Ident) (encName : Name) :
     CommandElabM Unit := do
   let putId := mkIdent (root ++ `put)
   let putThmId := mkIdent (root ++ `put_denotes)
-  let (node, _) ← compileTy root t 0 (top? := some (root ++ `put))
+  let (node, _) ← compileTy root trace t 0 (top? := some (root ++ `put))
   -- a leaf root has no definition of its own yet: give it one, so that
   -- `foo.put` names the compiled encoder whatever the type is
   if let .leaf _ := node then
-    emitNode (root ++ `put) (root ++ `put_denotes) (← liftTermElabM (encSig tyId))
+    emitNode trace (root ++ `put) (root ++ `put_denotes) (← liftTermElabM (encSig tyId))
       (← liftTermElabM (encContract tyId (root ++ `put)))
       (← liftTermElabM (node.code leafFn)) (← liftTermElabM (node.proof leafProof))
   let encId := mkIdent encName
@@ -383,14 +433,14 @@ private def emitEncoder (root : Name) (t : Ty) (tyId : Ident) (encName : Name) :
       fun v hb => EvmAbi.Compile.decodeStrict_run $putThmId (by decide) v hb))
 
 /-- Emit the compiled strict decoder and its theorems, under the name
-`decName`. -/
-private def emitDecoder (root : Name) (t : Ty) (tyId : Ident) (decName : Name)
+`decName`.  `trace` prints each emitted definition and theorem. -/
+private def emitDecoder (root : Name) (trace : Bool) (t : Ty) (tyId : Ident) (decName : Name)
     (wholeApi : Bool := false) : CommandElabM Unit := do
   let readId := mkIdent (root ++ `read)
   let readThmId := mkIdent (root ++ `read_reads)
-  let (node, _) ← compileDec root t 0 (top? := some (root ++ `read))
+  let (node, _) ← compileDec root trace t 0 (top? := some (root ++ `read))
   if let .leaf _ := node then
-    emitNode (root ++ `read) (root ++ `read_reads) (← liftTermElabM (decSig tyId))
+    emitNode trace (root ++ `read) (root ++ `read_reads) (← liftTermElabM (decSig tyId))
       (← liftTermElabM (decContract tyId (root ++ `read)))
       (← liftTermElabM (node.code leafRead)) (← liftTermElabM (node.proof leafReadProof))
   let decId := mkIdent decName
@@ -449,12 +499,18 @@ agrees with `EvmAbi.encode`, and `foo_decodeStrict`, the roundtrip inherited
 from it.  A signature (`"transfer(address to, uint256 amount)"`) compiles the
 encoder of its argument list.  See the module docstring for the full list of
 emitted names.
+
+Appending `trace` prints each specialised definition and its correctness
+theorem as the emitter writes it: `abi_encoder foo "…" trace`.  The output is
+the raw generated syntax, before elaboration — the compiler's output, not a
+delaborated view of it.
 -/
-elab "abi_encoder " nm:ident s:str : command => do
+
+elab "abi_encoder " nm:ident s:str flag:("trace")? : command => do
   let t ← targetOf "abi_encoder" s
   let root := nm.getId
   let tyId ← emitTy root t
-  emitEncoder root t tyId root
+  emitEncoder root (not flag.isNone) t tyId root
 
 /--
 Compile an ABI decoder for a type, at elaboration time.
@@ -464,12 +520,16 @@ Compile an ABI decoder for a type, at elaboration time.
 dispatch, no `isStatic` per component or element — together with `foo_eq`
 (it *is* `EvmAbi.decodeStrict`), `foo_encode` (it reads back what `encode`
 wrote) and `foo_uniq` (a buffer it accepts is the encoding of what it read).
+
+Appending `trace` prints each specialised definition and its correctness
+theorem as the emitter writes it: `abi_decoder foo "…" trace`.
 -/
-elab "abi_decoder " nm:ident s:str : command => do
+
+elab "abi_decoder " nm:ident s:str flag:("trace")? : command => do
   let t ← targetOf "abi_decoder" s
   let root := nm.getId
   let tyId ← emitTy root t
-  emitDecoder root t tyId root
+  emitDecoder root (not flag.isNone) t tyId root
 
 /--
 Compile both directions at once.
@@ -479,13 +539,17 @@ Compile both directions at once.
 each with the theorem that it *is* its `EvmAbi` counterpart, plus
 `foo.roundtrip`: what the compiled encoder writes, the compiled decoder reads
 back.
+
+Appending `trace` prints each specialised definition and its correctness
+theorem as the emitter writes it, in both directions: `abi_codec foo "…" trace`.
 -/
-elab "abi_codec " nm:ident s:str : command => do
+
+elab "abi_codec " nm:ident s:str flag:("trace")? : command => do
   let t ← targetOf "abi_codec" s
   let root := nm.getId
   let tyId ← emitTy root t
-  emitEncoder root t tyId (root ++ `encode)
-  emitDecoder root t tyId (root ++ `decodeStrict) (wholeApi := true)
+  emitEncoder root (not flag.isNone) t tyId (root ++ `encode)
+  emitDecoder root (not flag.isNone) t tyId (root ++ `decodeStrict) (wholeApi := true)
   let encId := mkIdent (root ++ `encode)
   let decId := mkIdent (root ++ `decodeStrict)
   let encEqId := mkIdent (Name.appendAfter (root ++ `encode) "_eq")

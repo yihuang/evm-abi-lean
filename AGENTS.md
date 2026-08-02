@@ -101,6 +101,14 @@ theorem families live in `EvmAbi.Codec.Roundtrip` / `EvmAbi.Codec.Sound` /
 
 ## Compiler rules
 
+* **See what the emitter produces with the `trace` flag.**
+  `abi_codec foo "…" trace` prints each specialised definition and its
+  correctness theorem as it is emitted, as raw unelaborated syntax (macro
+  scopes stripped, display only).
+  When changing `Compile.Meta`, run a traced codec before and after to see
+  the diff in the generated code; `Tests.lean` pins the transcript for
+  `abi_codec tiny "(bool)" trace`.
+
 * **The emitter never invents a proof.**  Every generated theorem is a lemma
   from `EvmAbi.Compile` applied to sub-results.  If a new `Ty` clause needs
   reasoning the emitter cannot express as one application, add the lemma to
