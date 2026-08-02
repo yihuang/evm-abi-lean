@@ -95,7 +95,10 @@ def benchDecode (label : String) (ba : ByteArray) : IO Unit := do
 def benchValBA (n : Nat) (h : n < 2 ^ 256) : IO Unit := do
   let v := flatVal n h
   let vba := flatValBA n h
-  let ba := Spec.encodeByteArray flatTy v
+  -- Not `Spec.encodeByteArray flatTy v`: that shares the subexpression with the
+  -- encode row below, which then times a field read and prints 0 us/op.  Same
+  -- bytes by `Spec.encodeByteArray_eq`.
+  let ba := (Spec.encode flatTy v).toByteArray
   IO.println s!"-- {n} elements ({ba.size} bytes)"
   timeIt "decodeStrictBA (List)  " (fun _ =>
     if (decodeStrictBA flatTy ba).isSome then ba.size else 0)
