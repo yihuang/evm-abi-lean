@@ -110,6 +110,60 @@ list (a list build is the value itself, not the check). -/
     ((ba.data.toList.drop off).take len).length = min len (ba.size - off) := by
   rw [List.length_take, List.length_drop, ← ByteArray.size_eq_toList_length]
 
+/-- Walk `[off, off + n)` checking every byte is zero, one indexed read at a
+time: `ba[off]!` is the `ByteArray` extern (`lean_byte_array_fget`, O(1)) and
+allocates nothing, where the list check it replaces materialises the window
+as a cons list — `ba.data.toList` builds the whole buffer as boxed bytes —
+only to compare it against a `replicate` it also has to build.
+
+The caller ensures `off + n ≤ ba.size`, so every read is in bounds.  That
+precondition is not decoration: out of bounds `ba[off]!` is `default`, which
+for `UInt8` is `0`, so an unguarded walk past the end would report the
+padding *valid*.  `allZerosBA` is the guarded entry point. -/
+def allZerosBA.loop (ba : ByteArray) (off n : Nat) : Bool :=
+  match n with
+  | 0 => true
+  | n' + 1 => if ba[off]! = 0 then allZerosBA.loop ba (off + 1) n' else false
+
+/-- Every byte of the window at `off` of length `len` is zero — checked by
+index, so a padding check builds no list.  The window must fit: a clamped
+window shorter than `len` is not the `replicate len 0` the spec's check
+demands, and `len` comes off the wire, so this is the check that keeps
+`allZerosBA.loop`'s reads in bounds. -/
+def allZerosBA (ba : ByteArray) (off len : Nat) : Bool :=
+  if min len (ba.size - off) = len then allZerosBA.loop ba off len else false
+
+theorem allZerosBA.loop_eq (ba : ByteArray) : ∀ (off n : Nat), off + n ≤ ba.size →
+    (allZerosBA.loop ba off n = true ↔
+      (ba.data.toList.drop off).take n = List.replicate n 0) := by
+  intro off n
+  induction n generalizing off with
+  | zero => intro _; simp [allZerosBA.loop]
+  | succ n ih =>
+      intro h
+      rw [Binary.window_peel ba off n (by omega), List.replicate_succ]
+      unfold allZerosBA.loop
+      by_cases hz : ba[off]! = 0 <;> simp [hz, ih (off + 1) (by omega)]
+
+/-- The indexed zero-check agrees with the list check: `allZerosBA` is true
+exactly when the window is the zero run. -/
+theorem allZerosBA_eq (ba : ByteArray) (off len : Nat) :
+    allZerosBA ba off len = true ↔ windowList ba off len = List.replicate len 0 := by
+  rw [allZerosBA]
+  by_cases hfit : min len (ba.size - off) = len
+  · rw [if_pos hfit, windowList_eq]
+    -- the `len = 0` case is not vacuous: `off` may be past the end, and then
+    -- `hfit` holds without `off + len ≤ ba.size`.
+    rcases Nat.eq_zero_or_pos len with rfl | hpos
+    · simp [allZerosBA.loop]
+    · exact allZerosBA.loop_eq ba off len (by omega)
+  · rw [if_neg hfit]
+    simp only [Bool.false_eq_true, false_iff]
+    intro h'
+    exact hfit (by
+      have h := congrArg List.length h'
+      rwa [List.length_replicate, windowList_eq, take_length_drop_ba] at h)
+
 /-! ## primitives at an offset
 
 The numeric ones all funnel through `natAt buf 0`, so they funnel through
@@ -162,23 +216,24 @@ theorem decodeBytesNBA_eq (n : Nat) (ba : ByteArray) (off : Nat) :
     decodeBytesNBA n ba off = decodeBytesN n (ba.data.toList.drop off) := by
   simp only [decodeBytesNBA, windowList_eq, decodeBytesN, List.take_take, Nat.min_self]
 
-/-- Dynamic `bytes` at an offset: the length word, then the payload and its
-padding as windows.  The length check is arithmetic, not a list build: a
+/-- Dynamic `bytes` at an offset: the length word, then the payload as a
+window.  Neither check builds a list — the length check is arithmetic (a
 clamped window at `off + 32` has exactly `len` bytes iff
-`min len (ba.size - (off + 32)) = len`, so the payload list is constructed
-once (for the value), not once for a length check and again for the value. -/
+`min len (ba.size - (off + 32)) = len`) and the padding check is
+`allZerosBA`'s index walk — so the only list constructed is the payload,
+which is the value. -/
 def decodeBytesPrefixBA (ba : ByteArray) (off : Nat) : Option (List UInt8 × Nat) :=
   (natAtBA ba off).bind fun len =>
     let pad := (32 - len % 32) % 32
     if min len (ba.size - (off + 32)) = len ∧
-       windowList ba (off + 32 + len) pad = List.replicate pad 0 then
+       allZerosBA ba (off + 32 + len) pad then
       some (windowList ba (off + 32) len, 32 + len + pad)
     else none
 
 theorem decodeBytesPrefixBA_eq (ba : ByteArray) (off : Nat) :
     decodeBytesPrefixBA ba off = decodeBytesPrefix (ba.data.toList.drop off) := by
   rw [decodeBytesPrefixBA, decodeBytesPrefix, natAtBA_eq]
-  simp only [windowList_eq, drop_drop_ba, take_length_drop_ba, Nat.add_assoc]
+  simp only [allZerosBA_eq, windowList_eq, drop_drop_ba, take_length_drop_ba, Nat.add_assoc]
 
 /-! ## the `ValBA` payloads
 
@@ -214,7 +269,7 @@ def decodeBytesPrefixBAVal (ba : ByteArray) (off : Nat) : Option (ByteArray × N
   (natAtBA ba off).bind fun len =>
     let pad := (32 - len % 32) % 32
     if min len (ba.size - (off + 32)) = len ∧
-       windowList ba (off + 32 + len) pad = List.replicate pad 0 then
+       allZerosBA ba (off + 32 + len) pad then
       some (windowBA ba (off + 32) len, 32 + len + pad)
     else none
 
@@ -228,15 +283,16 @@ theorem decodeBytesPrefixBAVal_eq (ba : ByteArray) (off : Nat) :
   | some len =>
       simp only [Option.bind_some]
       by_cases hc : min len (ba.size - (off + 32)) = len ∧
-          windowList ba (off + 32 + len) ((32 - len % 32) % 32) =
-            List.replicate ((32 - len % 32) % 32) 0
+          allZerosBA ba (off + 32 + len) ((32 - len % 32) % 32)
       · rw [if_pos hc, if_pos hc]
         simp [windowBA_data_toList]
       · rw [if_neg hc, if_neg hc]
         rfl
 
-/-- `bytesN` at an offset: a payload is at most a word, so the list check
-is the cheap one and only the result is repacked. -/
+/-- `bytesN` at an offset: the word is at most 32 bytes, so the list check
+is bounded and cheap, and only the result is repacked.  This is the last
+list on the `ValBA` path: the unbounded payloads — `decodeBytesPrefixBAVal`
+— go `ByteArray` to `ByteArray`. -/
 def decodeBytesNBAVal (n : Nat) (ba : ByteArray) (off : Nat) : Option ByteArray :=
   (decodeBytesNBA n ba off).map (fun bs => bs.toByteArray)
 
