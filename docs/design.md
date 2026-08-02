@@ -105,6 +105,16 @@ complete type grammar.
    ties them.  Proofs stay on `List UInt8`; execution never builds one.
    2.9× faster on flat values and asymptotically faster on nested ones (§3.7).
 
+9. **An ABI compiler.**  `abi_codec foo "…"` (`EvmAbi.Compile.Meta`) reads a
+   type at elaboration time and emits Lean code specialised to it in both
+   directions — straight-line for tuples, one loop for arrays, offsets folded
+   to numerals — together with machine-checked theorems that the emitted
+   encoder agrees with `encode` and the emitted decoder with `decodeStrict`.
+   The emitted code targets small abstract machines (`EvmAbi.Compile`,
+   `EvmAbi.Compile.Decode`) whose instructions are proved correct once, so the
+   emitter only ever applies existing lemmas; nothing it prints is trusted
+   (§3.8).
+
 The **runtime layer** (`EvmAbi.Codec.Runtime`) is the user-facing side:
 `encode` (`ValBA` values → `ByteArray`), `decode` / `decodeStrict`
 (`ByteArray` → `ValBA` values) and `IsCanonical`.  Its encoder is the same
@@ -367,6 +377,110 @@ Measured by `Bench.lean` (compiled; the win rests on the `@[extern]`
 `bytes[]` values, and 16×/53× at tuple nesting depth 50/200, where the
 specification encoder is quadratic and the builder linear.
 
+### 3.8 The ABI Compiler (`Compile.lean`, `Compile/Decode.lean`, `Compile/Meta.lean`)
+
+The encoder of §3.7 is interpretive.  For a *fixed* type, everything it
+decides at run time is already known:
+
+```
+putBA          matches on the Ty                      -- once per value
+partOfBA       asks t.isStatic                        -- once per component,
+                                                      -- and per array element
+partsOfTupleBA allocates a List Part                  -- once per tuple/array
+putParts       walks that list three times            -- headSizes, putHeads,
+                                                      -- putTails
+```
+
+A compiler can settle all of it at elaboration time.  The design question is
+what the emitted code should be written *in*, because that decides what its
+correctness proof costs.  Emitting raw `Builder` expressions and closing the
+goal with a large `simp` would make every compiled type a fresh proof-search
+problem; the answer here is to give the compiler a **target language whose
+instructions are already proved**.
+
+`EvmAbi.Compile` is that language: a three-register machine for the head/tail
+layout.
+
+```lean
+structure Acc where
+  head : Builder   -- head section so far
+  off  : Nat       -- offset the next dynamic tail will occupy (the frontier)
+  tail : Builder   -- tail section so far
+
+def start  (H : Nat) : Acc            -- open a layout with an H-byte head
+def static (s : Acc) (b : Builder)    -- inline a static component
+def dyn    (s : Acc) (b : Builder)    -- write the frontier, append to tails
+def finish (s : Acc) : Builder        -- head ++ tails
+```
+
+`Acc.Inv H s ps` says the state `s` is exactly what `putHeads`/`putTails`
+would have built from the parts `ps`, and each instruction has one lemma:
+`Inv.static` and `Inv.dyn` extend `ps` by one part, `Inv.finish_toList` closes
+the layout once `ps` is all of it.  One loop (`elems`) runs one instruction
+per array element — an array is homogeneous, so *which* instruction is decided
+at compile time, and the loop is the only recursion left in compiled code.
+
+The contract is a single definition:
+
+```lean
+def Denotes (t : Ty) (f : ValBA t → Builder) : Prop :=
+  ∀ v, (f v).toList = (putBA t v).toList
+```
+
+and the clause lemmas compose it: `denotes_array_static` turns `Denotes t f`
+into `Denotes (.array t) (fun v => putUint v.val.length ++ …)`, and so on for
+each constructor.  `run_eq_encode` then lifts a `Denotes` to the user's
+statement, `f v |>.run = encode t v` — note this is a `toList` equality
+throughout, because `Builder.append` is a constructor and the machine's
+appends associate to the left where the generic layout's associate to the
+right.  The two denote the same bytes; they are not the same tree.
+
+The decoder half (`Compile/Decode.lean`) is the mirror image.  `Reads t g`
+says `g` answers what `decodeBAVal t` answers; `elemStatic`/`elemDyn` are the
+two branches of `decodeElemBAVal` with the sub-decoder taken as a parameter,
+and they are the only place that choice survives compilation — `cons` chains
+one of them onto the reader for the remaining components (so a compiled tuple
+is a nest of combinators with no `Ty` in it) and `elems` runs one per array
+element; `readArray`/`readFixedArray`/`readTuple` are the three recursive
+clauses of `decodeBAVal` with their head sizes taken as *parameters*.  That last point is the decoder's version of the head-size
+constant: the emitter passes a numeral and the lemma demands `rfl` against
+`Ty.headSize`, so the constant is checked, not assumed.  `runStrict_eq` then
+lifts a `Reads` to the user's statement about `decodeStrict`.
+
+`EvmAbi.Compile.Meta` is then a *printer*.  For each compound sub-type it
+emits a definition and the theorem `Denotes ty node` (or `Reads ty dnode`),
+whose proof is the matching clause lemma applied to the sub-nodes' theorems;
+leaves are inlined.  For a tuple it emits one `static`/`dyn` per component —
+one `cons` when decoding — and chains the instruction lemmas in the same
+order.  It never constructs a proof step of its own, and the
+kernel checks each theorem as it is emitted, so a compiled codec that
+disagrees with the verified one cannot be produced; the command fails
+instead.
+
+Two things are worth stating plainly.  First, this is *not* a verified
+compiler in the CompCert sense: there is no theorem quantifying over all
+inputs of the emitter, because the emitter is a metaprogram and Lean has no
+such theorem to state.  What is proved is every output, individually, by
+construction — a certificate per compilation, which for a code generator whose
+outputs are all checked is the same guarantee where it matters.  Second, the
+head-size constant the compiler folds into `Acc.start` is justified, not
+assumed: `headSizes_partsOfTupleBA` (which needs `AllValid ts`, discharged by
+`decide` at compile time) proves the numeral is the head section's real size.
+
+Measured (`Bench.lean`, compiled): encoding 2.2× on `(bool × 8)` and 1.8× on
+`bool[100]`, decoding 1.8× and 1.4× on the same, where the words are cheap and
+the layout is the work; 1.02–1.19× on `uint256`/`bytes` shapes, where
+`Binary`'s word codec (~700 ns per full-width word, against tens of
+nanoseconds of layout) dominates and there is little left to remove.
+
+The instructions are `@[inline]` and the loops `@[specialize]`, and both
+matter: an instruction is a three-field state, so folding it into the loop
+body is the difference between building a state per element and updating one.
+It is also why the readers are passed to `cons`/`elems` as the *maker*
+(`elemStatic`/`elemDyn`) plus the component's decoder rather than as a built
+`GetBA` — a structure argument is opaque to the specialiser, and passing one
+costs ~10 ns per component.
+
 ## 4. Technical Challenges
 
 ### 4.1 Dependent Pattern Matching over `Val`
@@ -458,6 +572,14 @@ values, and the `decreasing_tactic` discharges every goal.
     │              │  │  Bytes.lean   │
     └─────────────┘  └───────────────┘
 
+┌──────────────────────────────────────────────┐
+│      Compile.lean + Compile/Meta.lean         │
+│  the layout machine (Acc / Acc.Inv) and        │
+│  Denotes; abi_encoder emits code against it,   │
+│  one lemma application per instruction         │
+└──────────────────────┬───────────────────────┘
+                       │  proved against putBA
+
               ┌──────────────────────────┐
               │      Builder.lean         │
               │  Chunks / Builder:        │
@@ -510,6 +632,22 @@ through a `UInt64`, proved equal to the definition and registered with
 `uint256[]` with 1000 full-width words, `Spec.encodeByteArray` went 4961 µs → 997 µs
 (5.0×) and the specification encoder 5323 µs → 1307 µs, since the fix sits
 below both.
+
+### Compiling Further
+
+The compiler emits Lean.  Two directions follow.
+
+*A tighter target.*  For an all-static type the total size is a compile-time
+constant, so the encoding could be written straight into a pre-sized
+`ByteArray` with no builder and no machine state at all — the remaining
+allocations per component would go away.
+
+*EVM bytecode.*  The machine is deliberately first-order: `start`/`static`/
+`dyn`/`finish` over a head cursor, a frontier and a tail cursor is a
+description of what contract code does with memory.  Emitting EVM instead of
+Lean means giving those four instructions a second backend — and, to prove
+*that* backend, a semantics to relate them to, which is what
+[EVMYulLean](https://github.com/NethermindEth/EVMYulLean) provides.
 
 ## 7. References
 

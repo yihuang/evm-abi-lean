@@ -99,6 +99,52 @@ theorem families live in `EvmAbi.Codec.Roundtrip` / `EvmAbi.Codec.Sound` /
   `measure_B(args) < measure_A(args)`.  Two siblings at the same offset
   are fine as long as neither calls the other.
 
+## Compiler rules
+
+* **The emitter never invents a proof.**  Every generated theorem is a lemma
+  from `EvmAbi.Compile` applied to sub-results.  If a new `Ty` clause needs
+  reasoning the emitter cannot express as one application, add the lemma to
+  `EvmAbi.Compile` — do not generate a tactic script that searches.
+* **Generated statements are binder-free** (`Denotes ty node3`), so nothing
+  has to be spliced into a binder position.  The one exception is the tuple
+  body, which needs `v.1`, `v.2.1`, …: build its `v` with
+  `mkIdent (← MonadQuotation.addMacroScope \`v)` and splice the *same* ident
+  into the `fun` binder and every projection.
+* **`simp only` will not fire on `partsOfTupleBA`'s generated equations** —
+  the value argument is dependent, and unification gives up.  That is why
+  `Compile.partsOfTupleBA_cons` is stated with projections (`v.1`, `v.2`)
+  rather than a pair pattern: in that form `simp only` matches, and emitted
+  proofs need no `obtain`.
+* **Compile-time constants must be justified, not assumed.**  The head-size
+  numeral the emitter folds into `Acc.start` is `headSizeSum ts`; the machine
+  is only allowed to close (`Inv.finish_toList`) against the real
+  `headSizes ps`, and `headSizes_partsOfTupleBA` (needs `AllValid ts`,
+  emitted as `by decide`) is what connects them.  The decoder's clauses take
+  their head size as a *parameter* for the same reason, with `rfl` against
+  `Ty.headSize`/`headSizeSum` as the emitted justification.
+* **The decoder's equalities are between `GetBA` programs**, so they go
+  through `funext` and a local `getBA_ext`, and the branches close by `rfl`
+  only after both matches have been reduced — `cases hq : e <;> simp only [hq]`
+  where a bare `rfl` fails, because the two sides use *different* auxiliary
+  matchers with the same body.
+* **Emitted code is checked by the kernel as it is emitted**, so a compiler
+  bug is a compile-time error, never a wrong codec.  Keep it that way: no
+  `sorry`, no `native_decide`, no `Decidable` shortcuts in emitted proofs.
+* **The machine's instructions are `@[inline]` and its loops
+  `@[specialize]`.**  An instruction is a three-field structure the compiler
+  should fold into its caller; without the attributes the array rows of the
+  benchmark lose ~1.2×, because every element allocates a state instead of
+  updating one.  For the same reason `cons`/`elems` take the reader *maker*
+  (`elemStatic`/`elemDyn`) plus the component's decoder, not a built `GetBA`:
+  a structure argument is opaque to the specialiser, and passing one costs
+  ~10 ns per component.
+* **The static/dynamic choice lives in exactly one place per direction** —
+  `Acc.static`/`Acc.dyn` when writing, `elemStatic`/`elemDyn` when reading.
+  Everything above them (the loop, the tuple chain, the clause lemmas) is
+  written once and takes the instruction as a parameter, with `Acc.Step` as
+  the contract on the writing side.  Resist re-splitting them: that is how the
+  four `denotes_*` and four loop lemmas this file used to carry appeared.
+
 ## Pitfalls (learned the hard way)
 
 * **`++` is LEFT-associative in Lean 4 core.**  `A ++ B ++ C` parses as
