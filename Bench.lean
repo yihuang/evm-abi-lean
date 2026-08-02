@@ -23,6 +23,12 @@ Two shapes are measured, because they fail differently:
   its bytes re-copied `d` times (`O(n · d)`); the builder makes
   concatenation an `O(1)` constructor, so it stays linear.
 
+* **ValBA vs Val** — the runtime value family (`ValBA`) against the list
+  payloads of `Ty.Val`, on flat `bytes[]`: aligned 256-byte elements (the
+  zero padding is empty) and unaligned 100-byte elements (padding 28 per
+  element — the `ValBA` decoder checks it by index, `allZerosBA`, without
+  building a list).
+
 Run this interpreted (`lake env lean --run Bench.lean`) and the numbers
 invert: `ByteArray.emptyWithCapacity` and `ByteArray.push` are `@[extern]`,
 so the builder only pays off in compiled code.
@@ -31,25 +37,31 @@ so the builder only pays off in compiled code.
 open EvmAbi
 open EvmAbi.Ty
 
-/-- A `bytes` payload as a packed `ByteArray` (the `ValBA` value family). -/
-def mkBytesBA (n : Nat) : ByteArray :=
-  (List.replicate n 7).toByteArray
+def flatTy : Ty := .array .bytes
 
-def mkBytesBA256 : {bs : ByteArray // bs.size < 2 ^ 256} := ⟨mkBytesBA 256, by native_decide⟩
+/-- A `bytes` value of `payload` bytes, packed (`ValBA` family). -/
+def mkBytesBAOf (payload : Nat) (p : payload < 2 ^ 256) : {bs : ByteArray // bs.size < 2 ^ 256} :=
+  ⟨(List.replicate payload 7).toByteArray, by
+    simp [Binary.ByteArray.size_eq_toList_length, List.length_replicate]
+    exact p⟩
 
-/-- A flat `bytes[]` of packed payloads. -/
-def flatValBA (n : Nat) (h : n < 2 ^ 256) : {vs : List (ValBA .bytes) // vs.length < 2 ^ 256} :=
-  ⟨List.replicate n mkBytesBA256, by simpa using h⟩
+/-- A flat `bytes[]` of `payload`-byte packed payloads. -/
+def flatValBAOf (payload : Nat) (p : payload < 2 ^ 256)
+    (n : Nat) (h : n < 2 ^ 256) : {vs : List (ValBA .bytes) // vs.length < 2 ^ 256} :=
+  ⟨List.replicate n (mkBytesBAOf payload p), by simpa using h⟩
+
+/-- A `bytes` value of `payload` bytes. -/
+def mkBytesOf (payload : Nat) (p : payload < 2 ^ 256) : Ty.Val .bytes :=
+  ⟨List.replicate payload 7, by simpa using p⟩
+
+/-- A flat `bytes[]` of `payload`-byte elements. -/
+def flatValOf (payload : Nat) (p : payload < 2 ^ 256)
+    (n : Nat) (h : n < 2 ^ 256) : flatTy.Val :=
+  ⟨List.replicate n (mkBytesOf payload p), by simpa using h⟩
 
 /-- A `bytes` value of `n` bytes. -/
 def mkBytes (n : Nat) (h : n < 2 ^ 256) : Ty.Val .bytes :=
   ⟨List.replicate n 7, by simpa using h⟩
-
-/-- A flat `bytes[]`. -/
-def flatTy : Ty := .array .bytes
-
-def flatVal (n : Nat) (h : n < 2 ^ 256) : flatTy.Val :=
-  ⟨List.replicate n (mkBytes 256 (by decide)), by simpa using h⟩
 
 /-- A `uint256[]` of full-width values — token amounts, hashes and addresses
 are all above `2 ^ 63`, so every word goes through `Nat`'s bignum path.  This
@@ -92,12 +104,9 @@ def benchDecode (label : String) (ba : ByteArray) : IO Unit := do
   timeIt "fast  decodeStrictBA       " (fun _ =>
     if (decodeStrictBA flatTy ba).isSome then ba.size else 0)
 
-def benchValBA (n : Nat) (h : n < 2 ^ 256) : IO Unit := do
-  let v := flatVal n h
-  let vba := flatValBA n h
-  -- Not `Spec.encodeByteArray flatTy v`: that shares the subexpression with the
-  -- encode row below, which then times a field read and prints 0 us/op.  Same
-  -- bytes by `Spec.encodeByteArray_eq`.
+def benchValBA (payload : Nat) (p : payload < 2 ^ 256) (n : Nat) (h : n < 2 ^ 256) : IO Unit := do
+  let v := flatValOf payload p n h
+  let vba := flatValBAOf payload p n h
   let ba := (Spec.encode flatTy v).toByteArray
   IO.println s!"-- {n} elements ({ba.size} bytes)"
   timeIt "decodeStrictBA (List)  " (fun _ =>
@@ -111,23 +120,25 @@ def benchValBA (n : Nat) (h : n < 2 ^ 256) : IO Unit := do
 /-- A `bytes` value of `n` bytes, packed. -/
 def main : IO Unit := do
   IO.println "== flat bytes[], 256-byte elements (constant factor) =="
-  benchTy "-- 500 elements"  flatTy (flatVal 500 (by decide))
-  benchTy "-- 2000 elements" flatTy (flatVal 2000 (by decide))
+  benchTy "-- 500 elements"  flatTy (flatValOf 256 (by decide) 500 (by decide))
+  benchTy "-- 2000 elements" flatTy (flatValOf 256 (by decide) 2000 (by decide))
   IO.println "== uint256[], full-width values (bignum word encoding) =="
   benchTy "-- 1000 words" wideTy (wideVal 1000 (by decide))
   IO.println "== nested tuples (bytes, (bytes, ...)) (asymptotics) =="
   benchTy "-- depth 50"  (nest 50)  (nestVal 50)
   benchTy "-- depth 200" (nest 200) (nestVal 200)
   -- the two encoders must agree byte for byte — this is `encodeByteArray_eq`
-  let v := flatVal 50 (by decide)
+  let v := flatValOf 256 (by decide) 50 (by decide)
   let w := nestVal 20
   IO.println "== decode: list cursors vs offset cursors =="
   -- `Spec.decodeStrict` converts the buffer to a list and slices it; `decodeStrictBA`
   -- walks the same buffer by offset.  Same theorem, same answer.
-  benchDecode "-- 500 elements"  (Spec.encodeByteArray flatTy (flatVal 500 (by decide)))
-  benchDecode "-- 2000 elements" (Spec.encodeByteArray flatTy (flatVal 2000 (by decide)))
+  benchDecode "-- 500 elements"  (Spec.encodeByteArray flatTy (flatValOf 256 (by decide) 500 (by decide)))
+  benchDecode "-- 2000 elements" (Spec.encodeByteArray flatTy (flatValOf 256 (by decide) 2000 (by decide)))
   IO.println s!"agree(flat)   = {(Spec.encode flatTy v).toByteArray == Spec.encodeByteArray flatTy v}"
   IO.println s!"agree(nested) = {(Spec.encode (nest 20) w).toByteArray == Spec.encodeByteArray (nest 20) w}"
-  IO.println "== ValBA (packed payloads) vs Val (List payloads) =="
-  benchValBA 500 (by decide)
-  benchValBA 2000 (by decide)
+  IO.println "== ValBA vs Val: aligned 256-byte payloads (pad 0) =="
+  benchValBA 256 (by decide) 500 (by decide)
+  benchValBA 256 (by decide) 2000 (by decide)
+  IO.println "== ValBA vs Val: unaligned 100-byte payloads (pad 28 — the list-free pad check) =="
+  benchValBA 100 (by decide) 2000 (by decide)

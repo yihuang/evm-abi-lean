@@ -207,6 +207,122 @@ theorem windowBA_data_toList (ba : ByteArray) (off len : Nat) :
     rw [List.take_of_length_le (by rw [List.length_drop]; omega),
       List.take_of_length_le (by rw [List.length_drop]; omega)]
 
+/-- Walk `[i, stop)` checking every byte is zero.  The caller ensures
+`stop ≤ ba.size`, so every `ba[i]!` read is in bounds. -/
+def allZerosBA.loop (ba : ByteArray) (stop i : Nat) : Bool :=
+  if h : i < stop then
+    if ba[i]! = 0 then allZerosBA.loop ba stop (i + 1) else false
+  else true
+termination_by stop - i
+
+/-- Every byte of the window at `off` of length `len` is zero — checked by
+index, so a padding check builds no list.  The window must fit: a clamped
+window shorter than `len` is not all-zero for our purposes (the spec's
+`replicate len 0` has length `len`). -/
+def allZerosBA (ba : ByteArray) (off len : Nat) : Bool :=
+  if min len (ba.size - off) = len then allZerosBA.loop ba (min (off + len) ba.size) off else false
+
+theorem allZerosBA.loop_eq_aux (ba : ByteArray) (stop : Nat) (hstop : stop ≤ ba.size) :
+    ∀ (fuel i : Nat), stop - i ≤ fuel → i ≤ stop →
+      (allZerosBA.loop ba stop i = true ↔
+        (ba.data.toList.drop i).take (stop - i) = List.replicate (stop - i) 0) := by
+  intro fuel
+  induction fuel with
+  | zero =>
+      intro i hi hle
+      have hi' : i = stop := by omega
+      subst i
+      simp [allZerosBA.loop, Nat.sub_self]
+  | succ n ih =>
+      intro i hi hle
+      by_cases h : i < stop
+      · unfold allZerosBA.loop
+        simp [h]
+        by_cases hz : ba[i]! = 0
+        · simp [hz]
+          have hih := ih (i + 1) (by omega) (by omega)
+          rw [hih]
+          have hw := Binary.window_peel ba i (stop - i - 1) (by omega : i < ba.size)
+          rw [show (stop - i - 1) + 1 = stop - i by omega] at hw
+          rw [show stop - (i + 1) = stop - i - 1 by omega]
+          rw [hw, hz]
+          have hrep : List.replicate (stop - i) (0 : UInt8) = 0 :: List.replicate (stop - i - 1) 0 := by
+            rw [← List.replicate_succ]
+            congr 1
+            omega
+          simp [hrep]
+        · constructor
+          · intro hh
+            exact False.elim (hz hh.1)
+          · intro h'
+            have hw := Binary.window_peel ba i (stop - i - 1) (by omega : i < ba.size)
+            rw [show (stop - i - 1) + 1 = stop - i by omega] at hw
+            rw [hw] at h'
+            have hrep : List.replicate (stop - i) (0 : UInt8) = 0 :: List.replicate (stop - i - 1) 0 := by
+              rw [← List.replicate_succ]
+              congr 1
+              omega
+            simp [hrep] at h'
+            exact False.elim (hz h'.1)
+      · unfold allZerosBA.loop
+        simp [h]
+        rw [Nat.sub_eq_zero_of_le (by omega)]
+        rfl
+
+
+/-- The loop checks `[i, stop)` for zeros, so it is true exactly when that
+window is the zero run. -/
+theorem allZerosBA.loop_eq (ba : ByteArray) (stop : Nat) (hstop : stop ≤ ba.size) :
+    ∀ (i : Nat), i ≤ stop →
+      (allZerosBA.loop ba stop i = true ↔
+        (ba.data.toList.drop i).take (stop - i) = List.replicate (stop - i) 0) := by
+  intro i hi
+  exact allZerosBA.loop_eq_aux ba stop hstop (stop - i) i (Nat.le_refl _) hi
+
+/-- The indexed zero-check agrees with the list check: `allZerosBA` is true
+exactly when the window is the zero run. -/
+theorem allZerosBA_eq (ba : ByteArray) (off len : Nat) :
+    allZerosBA ba off len = true ↔ windowList ba off len = List.replicate len 0 := by
+  rw [allZerosBA]
+  by_cases hc : min len (ba.size - off) = len
+  · rw [if_pos hc]
+    have hstop : min (off + len) ba.size ≤ ba.size := Nat.min_le_right _ _
+    have hlen' : min (off + len) ba.size - off = len := by
+      rcases Nat.eq_zero_or_pos len with hz | hp
+      · subst len
+        rcases Nat.le_total off ba.size with h | h
+        · rw [Nat.add_zero, Nat.min_eq_left h, Nat.sub_self]
+        · rw [Nat.add_zero, Nat.min_eq_right h, Nat.sub_eq_zero_of_le h]
+      · have hle : len ≤ ba.size - off := by
+          by_cases hnot : len ≤ ba.size - off
+          · exact hnot
+          · have hmin : min len (ba.size - off) = ba.size - off := Nat.min_eq_right (by omega)
+            rw [hmin] at hc
+            omega
+        rw [Nat.min_eq_left (by omega : off + len ≤ ba.size)]
+        omega
+    rcases Nat.le_total off (min (off + len) ba.size) with hoff | hoff
+    · rw [windowList_eq, allZerosBA.loop_eq ba (min (off + len) ba.size) hstop off hoff]
+      rw [hlen']
+    · have hlen0 : len = 0 := by
+        rw [← hlen']
+        omega
+      subst len
+      simp [windowList_eq, allZerosBA.loop, show ¬ off < min off ba.size from Nat.not_lt_of_ge hoff]
+  · rw [if_neg hc]
+    constructor
+    · intro hf
+      contradiction
+    · intro h'
+      have hlen : (windowList ba off len).length = min len (ba.size - off) := by
+        rw [windowList_eq, List.length_take, List.length_drop, ← Binary.ByteArray.size_eq_toList_length]
+      have hlen' : min len (ba.size - off) = len := by
+        have h := congrArg List.length h'
+        rw [List.length_replicate] at h
+        rw [hlen] at h
+        exact h
+      exact False.elim (hc hlen')
+
 /-- Dynamic `bytes`/`string` at an offset: the same length word, clamp and
 padding checks as `decodeBytesPrefixBA`, with the payload as one packed
 window instead of a cons list. -/
@@ -214,7 +330,7 @@ def decodeBytesPrefixBAVal (ba : ByteArray) (off : Nat) : Option (ByteArray × N
   (natAtBA ba off).bind fun len =>
     let pad := (32 - len % 32) % 32
     if min len (ba.size - (off + 32)) = len ∧
-       windowList ba (off + 32 + len) pad = List.replicate pad 0 then
+       allZerosBA ba (off + 32 + len) pad then
       some (windowBA ba (off + 32) len, 32 + len + pad)
     else none
 
@@ -228,15 +344,28 @@ theorem decodeBytesPrefixBAVal_eq (ba : ByteArray) (off : Nat) :
   | some len =>
       simp only [Option.bind_some]
       by_cases hc : min len (ba.size - (off + 32)) = len ∧
-          windowList ba (off + 32 + len) ((32 - len % 32) % 32) =
-            List.replicate ((32 - len % 32) % 32) 0
-      · rw [if_pos hc, if_pos hc]
+          allZerosBA ba (off + 32 + len) ((32 - len % 32) % 32)
+      · rw [if_pos hc]
+        have hw : windowList ba (off + 32 + len) ((32 - len % 32) % 32) =
+            List.replicate ((32 - len % 32) % 32) 0 :=
+          (allZerosBA_eq ba (off + 32 + len) ((32 - len % 32) % 32)).mp hc.2
+        rw [if_pos (show min len (ba.size - (off + 32)) = len ∧
+            windowList ba (off + 32 + len) ((32 - len % 32) % 32) =
+              List.replicate ((32 - len % 32) % 32) 0 from ⟨hc.1, hw⟩)]
         simp [windowBA_data_toList]
-      · rw [if_neg hc, if_neg hc]
+      · rw [if_neg hc]
+        have hc' : ¬ (min len (ba.size - (off + 32)) = len ∧
+            windowList ba (off + 32 + len) ((32 - len % 32) % 32) =
+              List.replicate ((32 - len % 32) % 32) 0) := by
+          intro h
+          exact hc ⟨h.1, (allZerosBA_eq ba (off + 32 + len) ((32 - len % 32) % 32)).mpr h.2⟩
+        rw [if_neg hc']
         rfl
 
-/-- `bytesN` at an offset: a payload is at most a word, so the list check
-is the cheap one and only the result is repacked. -/
+/-- `bytesN` at an offset: the word is at most 32 bytes, so the list check
+is bounded and cheap and only the result is repacked — the payload is a
+word, not a field.  (The unbounded payload path — `decodeBytesPrefixBAVal`
+— is fully list-free.) -/
 def decodeBytesNBAVal (n : Nat) (ba : ByteArray) (off : Nat) : Option ByteArray :=
   (decodeBytesNBA n ba off).map (fun bs => bs.toByteArray)
 
