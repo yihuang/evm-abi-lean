@@ -1,4 +1,5 @@
 import EvmAbi
+import EvmAbi.Compile.Meta
 
 /-!
 # Bench
@@ -84,13 +85,18 @@ def nestVal : (k : Nat) → (nest k).Val
 
 def reps : Nat := 20
 
-def timeIt (label : String) (act : Unit → Nat) : IO Unit := do
+/-- Run `act` `n` times; report nanoseconds and bytes per operation. -/
+def timed (n : Nat) (act : Unit → Nat) : IO (Nat × Nat) := do
   let t0 ← IO.monoNanosNow
   let mut checksum := 0
-  for _ in [0:reps] do
+  for _ in [0:n] do
     checksum := checksum + act ()
   let t1 ← IO.monoNanosNow
-  IO.println s!"  {label}: {(t1 - t0) / (1000 * reps)} us/op  ({checksum / reps} bytes)"
+  return ((t1 - t0) / n, checksum / n)
+
+def timeIt (label : String) (act : Unit → Nat) : IO Unit := do
+  let (ns, sz) ← timed reps act
+  IO.println s!"  {label}: {ns / 1000} us/op  ({sz} bytes)"
 
 def benchTy (label : String) (t : Ty) (v : t.Val) : IO Unit := do
   IO.println label
@@ -141,6 +147,68 @@ def benchBytesN (n : Nat) (h : n < 2 ^ 256) : IO Unit := do
   timeIt "encode (BA)          " (fun _ => (encode t vba).size)
   IO.println s!"  agree: {(decodeStrict t ba).isSome == (decodeStrictBA t ba).isSome}"
 
+/-! ## the compiled encoder (`EvmAbi.Compile.Meta`)
+
+The compiled encoder writes the same bytes as `encode` (that is `foo_eq`), so
+what these rows measure is only what compilation removed: the `Ty` match per
+value, the `isStatic` test per component *and per array element*, the
+`List Part` a tuple or array allocates, and the three walks `putParts` makes
+over it.  Small values show it best — there the per-call work is the work. -/
+
+open EvmAbi.Compile.Meta
+
+abi_codec callArgs "transfer(address to, uint256 amount)"
+abi_codec callArgsDyn "submit(address to, uint256 amount, bytes data)"
+abi_codec wordArray "uint256[]"
+abi_codec bytesArray "bytes[]"
+abi_codec pairArray "(uint256,bool)[]"
+abi_codec flags "(bool,bool,bool,bool,bool,bool,bool,bool)"
+abi_codec flagArray "bool[]"
+
+def wideWord : ValBA (.uint 256) :=
+  ⟨0x123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0, by decide⟩
+
+def callVal : ValBA callArgs.ty := (⟨0xdead, by decide⟩, wideWord, ())
+
+def callDynVal : ValBA callArgsDyn.ty :=
+  (⟨0xdead, by decide⟩, wideWord, mkBytesBAOf 100 (by decide), ())
+
+def flagsVal : ValBA flags.ty := (true, false, true, false, true, false, true, false, ())
+
+def flagArrayVal (n : Nat) (h : n < 2 ^ 256) : ValBA flagArray.ty :=
+  ⟨List.replicate n true, by simpa using h⟩
+
+def wordArrayVal (n : Nat) (h : n < 2 ^ 256) : ValBA wordArray.ty :=
+  ⟨List.replicate n wideWord, by simpa using h⟩
+
+def bytesArrayVal (n : Nat) (h : n < 2 ^ 256) : ValBA bytesArray.ty :=
+  ⟨List.replicate n (mkBytesBAOf 256 (by decide)), by simpa using h⟩
+
+def pairArrayVal (n : Nat) (h : n < 2 ^ 256) : ValBA pairArray.ty :=
+  ⟨List.replicate n (wideWord, true, ()), by simpa using h⟩
+
+/-- Time `n` repetitions (the compiled rows are nanoseconds apart, so the
+small shapes need many more than `reps`). -/
+def timeItN (n : Nat) (label : String) (act : Unit → Nat) : IO Unit := do
+  let (ns, sz) ← timed n act
+  IO.println s!"  {label}: {ns} ns/op  ({sz} bytes)"
+
+def benchCompiled (label : String) (n : Nat) (t : Ty) (v : ValBA t)
+    (compiled : ValBA t → ByteArray) : IO Unit := do
+  IO.println label
+  timeItN n "generic  encode " (fun _ => (encode t v).size)
+  timeItN n "compiled        " (fun _ => (compiled v).size)
+  IO.println s!"  agree: {compiled v == encode t v}"
+
+/-- The same for the decoder: both walk the buffer the compiled encoder
+wrote, and must accept or reject it identically. -/
+def benchCompiledDecode (label : String) (n : Nat) (t : Ty) (ba : ByteArray)
+    (compiled : ByteArray → Option (ValBA t)) : IO Unit := do
+  IO.println label
+  timeItN n "generic  decodeStrict " (fun _ => if (decodeStrict t ba).isSome then ba.size else 0)
+  timeItN n "compiled              " (fun _ => if (compiled ba).isSome then ba.size else 0)
+  IO.println s!"  agree: {(compiled ba).isSome == (decodeStrict t ba).isSome}"
+
 def main : IO Unit := do
   IO.println "== flat bytes[], 256-byte elements (constant factor) =="
   benchTy "-- 500 elements"  flatTy (flatValOf 256 (by decide) 500 (by decide))
@@ -165,5 +233,33 @@ def main : IO Unit := do
   benchValBA 256 (by decide) 2000 (by decide)
   IO.println "== ValBA vs Val: unaligned 100-byte payloads (pad 28 — the list-free pad check) =="
   benchValBA 100 (by decide) 2000 (by decide)
+  IO.println "== compiled encoder vs generic encoder =="
+  benchCompiled "-- (address, uint256): one call's arguments" 200000
+    callArgs.ty callVal callArgs.encode
+  benchCompiled "-- (address, uint256, bytes): one call's arguments, dynamic" 100000
+    callArgsDyn.ty callDynVal callArgsDyn.encode
+  benchCompiled "-- uint256[], 100 elements" 20000
+    wordArray.ty (wordArrayVal 100 (by decide)) wordArray.encode
+  benchCompiled "-- (uint256, bool)[], 100 elements" 10000
+    pairArray.ty (pairArrayVal 100 (by decide)) pairArray.encode
+  benchCompiled "-- bytes[], 100 × 256 B" 5000
+    bytesArray.ty (bytesArrayVal 100 (by decide)) bytesArray.encode
+  benchCompiled "-- (bool × 8): cheap words, layout-bound" 200000
+    flags.ty flagsVal flags.encode
+  benchCompiled "-- bool[], 100 elements: cheap words, layout-bound" 20000
+    flagArray.ty (flagArrayVal 100 (by decide)) flagArray.encode
+  IO.println "== compiled decoder vs generic decoder =="
+  benchCompiledDecode "-- (address, uint256): one call's arguments" 200000
+    callArgs.ty (callArgs.encode callVal) callArgs.decodeStrict
+  benchCompiledDecode "-- (bool × 8): cheap words, layout-bound" 200000
+    flags.ty (flags.encode flagsVal) flags.decodeStrict
+  benchCompiledDecode "-- bool[], 100 elements" 20000
+    flagArray.ty (flagArray.encode (flagArrayVal 100 (by decide))) flagArray.decodeStrict
+  benchCompiledDecode "-- uint256[], 100 elements" 20000
+    wordArray.ty (wordArray.encode (wordArrayVal 100 (by decide))) wordArray.decodeStrict
+  benchCompiledDecode "-- (uint256, bool)[], 100 elements" 10000
+    pairArray.ty (pairArray.encode (pairArrayVal 100 (by decide))) pairArray.decodeStrict
+  benchCompiledDecode "-- bytes[], 100 × 256 B" 5000
+    bytesArray.ty (bytesArray.encode (bytesArrayVal 100 (by decide))) bytesArray.decodeStrict
   IO.println "== bytesN: fixed-word payloads (list round-trip vs one extract) =="
   benchBytesN 2000 (by decide)

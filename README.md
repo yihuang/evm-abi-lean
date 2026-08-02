@@ -302,6 +302,177 @@ data locations (`calldata`, `memory`, `storage`) and the `payable` of
 `address payable`.  `view`/`pure`/`payable`/`nonpayable` (at most one) are
 recorded as the item's state mutability, and `indexed` as the parameter's flag.
 
+## ABI Compiler
+
+`abi_codec` compiles all four names of the runtime API — `encode`, `decode`,
+`decodeStrict`, `IsCanonical` — for one fixed type, at elaboration time, and
+proves each one equal to its `EvmAbi` counterpart as it goes (`abi_encoder` and
+`abi_decoder` compile one direction each, under the plain name):
+
+```lean4
+import EvmAbi.Compile.Meta
+open EvmAbi.Compile.Meta
+
+abi_codec transfer "transfer(address to, uint256 amount)"
+
+#check @transfer.encode        -- ValBA transfer.ty → ByteArray
+#check @transfer.decodeStrict  -- ByteArray → Option (ValBA transfer.ty)
+#check @transfer.encode_eq     -- ∀ v, transfer.encode v = EvmAbi.encode transfer.ty v
+#check @transfer.decodeStrict_eq
+#check @transfer.roundtrip     -- ∀ v, … → transfer.decodeStrict (transfer.encode v) = some v
+```
+
+Both generic codecs are *interpretive*.  `putBA` matches on the `Ty` while it
+walks the value, `partOfBA` asks `t.isStatic` per component — and per array
+*element* — `partsOfTupleBA` allocates a `List Part`, and `putParts` walks
+that list three more times (`headSizes`, `putHeads`, `putTails`);
+`decodeBAVal` matches on the `Ty` at every value and `decodeElemBAVal` asks
+`isStatic` at every component and element.  All of it is determined by the
+type alone, so for a fixed type it can be settled once, at compile time.
+Print what the command emitted:
+
+```lean4
+#print transfer.put
+-- fun v => (((Acc.start 64).static (putAddress v.fst.val)).static (putUint v.snd.fst.val)).finish
+
+#print transfer.read
+-- readTuple 64 (cons elemStatic readAddress (cons elemStatic (readUint 256) consNil))
+```
+
+No `Ty`, no `Part`, no list: straight-line code whose head size (`64`) and
+first tail offset are numerals, and a reader chain that already knows which
+component sits in the head and which behind an offset word.  Arrays keep
+exactly one loop — the element count is not known until run time — but the
+instruction that loop runs is chosen at compile time.
+
+`#print` shows the root definitions; the sub-nodes and the correctness
+theorems have names you would have to guess.  Appending `trace` to any of
+the three commands prints each *specialised* definition and its correctness
+theorem as the emitter writes it — the raw generated syntax, before
+elaboration, exactly what the compiler did:
+
+```lean4
+abi_codec transfer "transfer(address to, uint256 amount)" trace
+-- ┌─ emitted transfer.put
+-- │def transfer.put : … := fun v => …
+-- │theorem transfer.put_denotes : … := …
+-- ┌─ emitted transfer.read
+-- │def transfer.read : … := …
+-- │theorem transfer.read_reads : … := …
+```
+
+The trace is a `logInfo` message: it prints when the file is elaborated, so
+run `lake env lean file.lean` (or any command that re-elaborates, e.g.
+`touch file.lean && lake build`) and read the `info:` lines; in VS Code it
+appears in the Lean Messages panel.  A normal `lake build` with everything
+up to date runs no elaborator and prints nothing — and the pinned trace test
+in `Tests.lean` wraps its command in `#guard_msgs`, which consumes the
+messages by design.
+
+`abi_codec foo` emits:
+
+| name | what it is |
+|---|---|
+| `foo.ty` | the `Ty` that was compiled (an `abbrev`) |
+| `foo.node…` / `foo.dnode…` (+ `_denotes` / `_reads`) | the compiled codec of each compound sub-type, and its correctness |
+| `foo.put` / `foo.read` (+ `_denotes` / `_reads`) | the compiled encoder in builder form, and the compiled reader |
+| `foo.encode`, `foo.decode`, `foo.decodeStrict`, `foo.isCanonical` | the four names of the runtime API, compiled |
+| `foo.encode_eq`, `foo.decode_eq`, `foo.decodeStrict_eq`, `foo.isCanonical_eq` | each one *is* its `EvmAbi` counterpart |
+| `foo.encode_decodeStrict` / `foo.decodeStrict_encode` | each direction against the *generic* other one |
+| `foo.decodeStrict_uniq` | a buffer `foo.decodeStrict` accepts is the encoding of what it read |
+| `foo.roundtrip` | `foo.decodeStrict (foo.encode v) = some v` |
+
+`abi_encoder foo "…"` emits the encoder half under the plain name `foo`
+(`foo_eq`, `foo_decodeStrict`); `abi_decoder foo "…"` the decoder half
+(`foo_eq`, `foo_encode`, `foo_uniq`).
+
+A string that is not an ABI type is a compile-time error at the string, and
+nothing is emitted — so a typo cannot reach a generated codec:
+
+```lean4
+abi_encoder oops "uint7"
+-- error: abi_encoder: not an ABI type or signature: uint7
+```
+
+### Why it is trustworthy
+
+A metaprogram cannot be verified from inside Lean — there is no theorem about
+the elaborator to prove.  What *can* be arranged is that the compiler is
+unable to emit code it cannot justify, and that is the design here:
+
+* the emitted code is written against a small **abstract machine**
+  (`EvmAbi.Compile` for writing — `Acc.start`, `static`, `dyn`, `finish` and
+  one element loop; `EvmAbi.Compile.Decode` for reading — `elemStatic`,
+  `elemDyn`, the chain and loop built on them, and the three compound
+  clauses), and each
+  instruction's correctness is proved *once* against the generic codec: on the
+  encoder side as "this instruction preserves the layout invariant `Acc.Inv`",
+  on the decoder side as "this reader answers what `decodeBAVal` answers";
+* for every definition the compiler prints, it prints a theorem
+  (`Denotes foo.ty foo.put`, `Reads foo.ty foo.read`) whose proof is nothing
+  but those lemmas applied to the sub-codecs' theorems.  The emitter never
+  invents a proof step;
+* Lean's kernel checks each one as it is emitted.  A compiled encoder that
+  disagrees with `EvmAbi.encode` therefore cannot be produced — the command
+  fails at compile time instead.
+
+### It reduces in the kernel
+
+`EvmAbi.encode` is well-founded-recursive over `Ty`, so the kernel cannot
+evaluate it — `decide +kernel` on a concrete encoding gets stuck at the
+`Decidable` instance.  A compiled codec has no recursion in it for a fixed
+type, so the kernel walks it, and `_eq` carries the result back:
+
+```lean4
+abi_codec erc20Transfer "transfer(address to, uint256 amount)"
+
+theorem bytes : (erc20Transfer.encode v).data.toList = … := by decide +kernel
+theorem generic : (encode erc20Transfer.ty v).data.toList = … := by
+  rw [← erc20Transfer.encode_eq v]; exact bytes    -- the kernel never unfolds `encode`
+```
+
+Both directions reduce (`Tests.lean` pins the ERC-20 vector), on `[propext]`
+alone — no `native_decide`.  That matters downstream: an audit that wants a
+concrete encoding checked on the base axioms has otherwise needed a
+fuel-indexed mirror of the encoder to rewrite through first.
+
+So the compiled code inherits the whole verified stack: `foo.encode_eq` and
+`foo.decode_eq` rewrite any statement about `EvmAbi.encode` /
+`EvmAbi.decodeStrict` onto the compiled names, which is how `foo.roundtrip`
+and `foo.decodeStrict_uniq` come out for free — the bijection of the *Core
+Theorems* section, on compiled code.
+
+### What it costs
+
+Compilation removes the *layout* overhead and nothing else, so the win
+depends on how expensive the words themselves are.  Measured with
+`lake build bench && ./.lake/build/bin/bench` (Apple M-series, compiled):
+
+| shape | `encode` | compiled | `decodeStrict` | compiled |
+|---|---|---|---|---|
+| `(bool × 8)` | 380 ns | **176 ns** (2.2×) | 670 ns | **365 ns** (1.8×) |
+| `bool[]`, 100 elements | 4965 ns | **2710 ns** (1.8×) | 8688 ns | **6100 ns** (1.4×) |
+| `bytes[]`, 100 × 256 B | 53.5 µs | 51.5 µs (1.04×) | 14.3 µs | 12.0 µs (1.19×) |
+| `(uint256, bool)[]`, 100 elements | 87.4 µs | 75.0 µs (1.17×) | 113.1 µs | 104.0 µs (1.09×) |
+| `(address, uint256)` — one call's arguments | 1037 ns | 990 ns (1.05×) | 1071 ns | 1030 ns (1.04×) |
+| `uint256[]`, 100 full-width words | 73.4 µs | 70.0 µs (1.05×) | 97.6 µs | 96.1 µs (1.02×) |
+
+The first two rows are what compilation is worth: cheap words, so the layout
+*is* the work.  The rest are dominated by `Binary`'s word codec — a
+full-width `uint256` costs ~700 ns to turn into 32 big-endian bytes, against
+tens of nanoseconds of layout — so there is little left for the compiler to
+remove.
+
+What is *not* worth doing, measured rather than assumed: emitting a direct
+chain of `ByteArray` appends for all-static types, skipping the builder.  On
+the same values in the same run that is ~6% faster on `(address, uint256)` and
+**10× slower** on `(bool × 8)` (176 ns → 1717 ns).  `Builder.run` sizes the
+buffer once and appends into an accumulator it uniquely owns; an expression
+chain of `++` does not keep that ownership, so the accumulator is copied
+instead of extended.  The builder is already the right shape for the static
+case.  Generating EVM bytecode rather than Lean remains the interesting
+direction.
+
 ## Proof Structure
 
 The proof is built in incremental layers, each reusable independently:
@@ -321,8 +492,10 @@ The proof is built in incremental layers, each reusable independently:
 | **11. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
 | **12. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
 | **13. Compile-time macros** | `HumanReadable.Meta` | `ty!`, `item!`, `params!` — parse string literals at elaboration time |
-| **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, builder and executable-encoder checks, offset-decoder checks (including degenerate and truncated buffers), human-readable ABI tests |
-| **Bench** | `Bench` | `lake build bench` — `Spec.encode` vs `Spec.encodeByteArray` vs runtime `encode`, and `Spec.decodeStrict` vs `decodeStrict` |
+| **14. Compiler target** | `Compile` + `Compile.Decode` | The layout machine (`Acc`, its invariant `Acc.Inv` and one lemma per instruction) and the element loops; the component readers, element loops and compound clauses of the decoder; `Denotes` and `Reads` — the contracts every compiled codec is proved to satisfy |
+| **15. Compiler** | `Compile.Meta` | `abi_encoder` / `abi_decoder` / `abi_codec` — emit a codec specialised to one type, with its correctness theorems, at elaboration time |
+| **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, builder and executable-encoder checks, offset-decoder checks (including degenerate and truncated buffers), human-readable ABI tests, compiled-codec checks against the same spec vectors, and its negative vectors |
+| **Bench** | `Bench` | `lake build bench` — `Spec.encode` vs `Spec.encodeByteArray` vs runtime `encode`, `Spec.decodeStrict` vs `decodeStrict`, and compiled vs generic `encode`/`decodeStrict` |
 
 The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:
 the combinatorial heart of the ABI offset arithmetic is proved once on `List Part`,

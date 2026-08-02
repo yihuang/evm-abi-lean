@@ -14,6 +14,8 @@ import EvmAbi.Codec.Runtime
 import EvmAbi.ValBA
 import EvmAbi.Parts
 import EvmAbi.Packed
+import EvmAbi.Compile
+import EvmAbi.Compile.Decode
 import EvmAbi.HumanReadable
 
 /-!
@@ -55,10 +57,22 @@ the historical build order, nodes 1–8):
 * `EvmAbi.Packed`  — packed ABI (`abi.encodePacked`, Solidity's non-standard
                   packed mode): tight scalars, in-place dynamic payloads,
                   padded array elements; static packed roundtrip
+* `EvmAbi.Compile` — the ABI compiler's target language: a small abstract
+                  machine for the head/tail layout (`Acc.start`/`static`/
+                  `dyn`/`finish` plus one element loop) whose every step is
+                  proved against `putBA`, and `Denotes`, the contract a
+                  compiled encoder satisfies
+* `EvmAbi.Compile.Decode` — the same for the decoder: the component readers
+                  (`elemStatic`/`elemDyn`), the chain `cons` and loop `elems`
+                  built on them, and the three compound clauses — all proved
+                  against `decodeBAVal` — plus `Reads`, the contract a compiled
+                  decoder satisfies
 * `EvmAbi.HumanReadable` — parser for Solidity-style human-readable ABI
                   signatures into `Ty` and `AbiItem` representations
 
-`EvmAbi.HumanReadable.Meta` — the `ty!` / `item!` / `params!` macros — is
-deliberately *not* re-exported here: it needs `import Lean`, and this library is
-otherwise free of the Lean frontend.  Import it explicitly to use the macros.
+`EvmAbi.HumanReadable.Meta` — the `ty!` / `item!` / `params!` macros — and
+`EvmAbi.Compile.Meta` — the `abi_encoder` / `abi_decoder` / `abi_codec`
+commands — are deliberately *not* re-exported here: they need `import Lean`,
+and this library is otherwise free of the Lean frontend.  Import them
+explicitly to use the macros.
 -/

@@ -13,6 +13,7 @@ import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.HumanReadable
 import EvmAbi.HumanReadable.Meta
+import EvmAbi.Compile.Meta
 
 /-!
 # Tests
@@ -952,5 +953,231 @@ example (ba : ByteArray) (hb : ba.size < 2 ^ 256) :
 example (v w : ValBA specSamTy) (h : ValBA.toList specSamTy v = ValBA.toList specSamTy w) :
     v = w :=
   ValBA.toList_injective specSamTy h
+
+/-! ## The ABI compiler (`EvmAbi.Compile.Meta`)
+
+`abi_encoder` / `abi_decoder` / `abi_codec` emit a codec specialised to one
+type, plus the theorems that it agrees with `encode` / `decodeStrict`.  The
+vectors below are the same three the spec-vector section checks — encoded here
+by *compiled* code, so the compiler is held to the published bytes, not merely
+to the generic encoder. -/
+
+open EvmAbi.Compile.Meta
+
+abi_codec samArgs "sam(bytes, bool, uint256[])"
+abi_encoder fArgs "f(uint256, uint32[], bytes10, bytes)"
+abi_encoder gArgs "(uint256[][], string[])"
+
+def samArgsVal : ValBA samArgs.ty :=
+  (⟨⟨#[0x64, 0x61, 0x76, 0x65]⟩, by decide⟩, true,
+    ⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩, ())
+
+def fArgsVal : ValBA fArgs.ty :=
+  (⟨0x123, by decide⟩,
+    ⟨[⟨0x456, by decide⟩, ⟨0x789, by decide⟩], by decide⟩,
+    ⟨⟨#[0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30]⟩, by decide⟩,
+    ⟨⟨#[0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21]⟩,
+      by decide⟩, ())
+
+def gArgsVal : ValBA gArgs.ty :=
+  (⟨[⟨[⟨1, by decide⟩, ⟨2, by decide⟩], by decide⟩, ⟨[⟨3, by decide⟩], by decide⟩], by decide⟩,
+    ⟨[⟨"one", by native_decide⟩, ⟨"two", by native_decide⟩, ⟨"three", by native_decide⟩],
+      by decide⟩, ())
+
+-- byte-exact against the specification vectors
+example : (samArgs.encode samArgsVal).data.toList = specSamBytes := by native_decide
+example : (fArgs fArgsVal).data.toList = specFBytes := by native_decide
+example : (gArgs gArgsVal).data.toList = specGBytes := by native_decide
+
+-- …and the compiled encoders are the generic one, by theorem: no computation,
+-- every value.  This is what the command proves as it emits the code.
+example (v : ValBA samArgs.ty) : samArgs.encode v = encode samArgs.ty v := samArgs.encode_eq v
+example (v : ValBA gArgs.ty) : gArgs v = encode gArgs.ty v := gArgs_eq v
+
+-- the verified roundtrip transports to compiled output for free
+example (v : ValBA fArgs.ty) (hb : (fArgs v).size < 2 ^ 256) :
+    decodeStrict fArgs.ty (fArgs v) = some v := fArgs_decodeStrict v hb
+
+example : (decodeStrict gArgs.ty (gArgs gArgsVal)).isSome := by native_decide
+
+-- every clause of the type grammar goes through the compiler
+abi_codec allTys "(uint8, int64, bool, address, bytes4, bytes, string, (bool, bytes)[2],
+  uint16[][], (address, (uint256, bytes)))"
+
+example (v : ValBA allTys.ty) : allTys.encode v = encode allTys.ty v := allTys.encode_eq v
+
+def allTysVal : ValBA allTys.ty :=
+  (⟨7, by decide⟩, ⟨-9, by decide⟩, false, ⟨0xbeef, by decide⟩,
+    ⟨⟨#[1, 2, 3, 4]⟩, by decide⟩, ⟨⟨#[9, 9]⟩, by decide⟩, ⟨"hi", by native_decide⟩,
+    ⟨[(true, ⟨⟨#[1]⟩, by decide⟩, ()), (false, ⟨⟨#[]⟩, by decide⟩, ())], by decide⟩,
+    ⟨[⟨[⟨1, by decide⟩], by decide⟩], by decide⟩,
+    (⟨0xcafe, by decide⟩, (⟨5, by decide⟩, ⟨⟨#[7, 7, 7]⟩, by decide⟩, ()), ()), ())
+
+example : allTys.encode allTysVal == encode allTys.ty allTysVal := by native_decide
+example : (decodeStrict allTys.ty (allTys.encode allTysVal)).isSome := by native_decide
+
+-- a leaf type compiles too (the root need not be compound)
+abi_encoder justBytes "bytes"
+
+example : (justBytes ⟨⟨#[1, 2]⟩, by decide⟩).data.toList =
+    encodeBytes [1, 2] := by native_decide
+
+/-! ### the decoder side
+
+`abi_decoder` compiles the strict decoder, `abi_codec` both directions.  The
+compiled decoder *is* `decodeStrict` (that is `_eq`), so it accepts exactly
+the canonical buffers — the negative vectors below are the same ones the
+strictness section rejects. -/
+
+-- the compiled decoder reads the specification's own vector
+example : (samArgs.decodeStrict specSamBytes.toByteArray).isSome := by native_decide
+
+-- and rejects what `decodeStrict` rejects: trailing garbage, …
+example : (samArgs.decodeStrict (specSamBytes ++ [0]).toByteArray).isSome = false := by native_decide
+
+-- … a truncated buffer, …
+example : (samArgs.decodeStrict (specSamBytes.take 64).toByteArray).isSome = false := by native_decide
+
+-- … and a non-canonical offset word (the `bytes` tail claimed one word early)
+example : (samArgs.decodeStrict
+    ((encodeUint 0x40 ++ specSamBytes.drop 32).toByteArray)).isSome = false := by native_decide
+
+-- compiled encoder in, compiled decoder out, by computation …
+example : (allTys.decodeStrict (allTys.encode allTysVal)).isSome := by native_decide
+
+-- … and by theorem, for every value
+example (v : ValBA samArgs.ty) (hb : (samArgs.encode v).size < 2 ^ 256) :
+    samArgs.decodeStrict (samArgs.encode v) = some v := samArgs.roundtrip v hb
+
+example (ba : ByteArray) : samArgs.decodeStrict ba = decodeStrict samArgs.ty ba :=
+  samArgs.decodeStrict_eq ba
+
+example (ba : ByteArray) (v : ValBA samArgs.ty) (h : samArgs.decodeStrict ba = some v) :
+    encode samArgs.ty v = ba := samArgs.decodeStrict_uniq ba v h
+
+-- the prefix decoder and the canonicity predicate are compiled too, and are
+-- their `EvmAbi` counterparts by theorem
+example (ba : ByteArray) : samArgs.decode ba = decode samArgs.ty ba := samArgs.decode_eq ba
+
+example (ba : ByteArray) : samArgs.isCanonical ba = true ↔ IsCanonical samArgs.ty ba :=
+  samArgs.isCanonical_eq ba
+
+example : samArgs.isCanonical specSamBytes.toByteArray := by native_decide
+example : samArgs.isCanonical (specSamBytes ++ [0]).toByteArray = false := by native_decide
+
+-- on a canonical buffer the prefix decoder consumes all of it, which is
+-- exactly why the strict one accepts it
+example : (samArgs.decode specSamBytes.toByteArray).map (·.2) =
+    some specSamBytes.length := by native_decide
+
+abi_decoder justBytesDec "bytes"
+
+example : (justBytesDec (encode .bytes ⟨⟨#[1, 2]⟩, by decide⟩)).isSome := by native_decide
+
+/-! ### the command's own failure paths
+
+A string that is not an ABI type is a compile-time error *at the string*, and
+nothing is emitted — the mistake cannot reach a generated encoder. -/
+
+/-- error: abi_encoder: not an ABI type or signature: nonsense -/
+#guard_msgs in
+abi_encoder notAType "nonsense"
+
+/-- error: abi_decoder: not an ABI type or signature: uint7 -/
+#guard_msgs in
+abi_decoder unalignedWidth "uint7"
+
+/-- error: abi_codec: not an ABI type or signature: (uint256, ) -/
+#guard_msgs in
+abi_codec trailingComma "(uint256, )"
+
+/-! ### the trace flag
+
+`abi_codec foo "…" trace` prints each specialised definition and its correctness
+theorem as the emitter writes it.  The transcript below is the compiler's whole output for a one-field
+tuple — pinned here so any change to the generated code (or to the flag)
+fails the suite instead of silently drifting.  Read it as the emitter's
+product: `Acc.start 32` is the head size folded to a numeral, `static`/`dyn`
+are the static/dynamic decision made once per component, and each theorem is
+exactly the `EvmAbi.Compile` clause lemmas applied to the sub-nodes' theorems.
+
+The `#guard_msgs` wrapper *consumes* these messages — that is what makes this
+a pinned test rather than noise in the build.  To see the same transcript
+live, run the flag in a scratch file:
+
+```lean
+import EvmAbi.Compile.Meta
+open EvmAbi.Compile.Meta
+
+abi_codec tiny "(bool)" trace
+```
+
+`lake env lean scratch.lean` prints it to stdout (the flag emits a `logInfo`
+message, which also appears in VS Code's Lean Messages panel). -/
+
+/--
+info: ┌─ emitted tiny.put
+│def tiny.put : EvmAbi.ValBA (EvmAbi.Ty.tuple (EvmAbi.Ty.bool :: @List.nil EvmAbi.Ty)) → EvmAbi.Builder := fun v =>
+  ((EvmAbi.Compile.Acc.start 32).static (EvmAbi.putBool (v).1)).finish
+│theorem tiny.put_denotes : EvmAbi.Compile.Denotes (EvmAbi.Ty.tuple (EvmAbi.Ty.bool :: @List.nil EvmAbi.Ty)) tiny.put :=
+  by
+  intro v
+  refine EvmAbi.Compile.toList_tuple (by decide) _ ?_
+  simp only [EvmAbi.Compile.partsOfTupleBA_cons, EvmAbi.Compile.partsOfTupleBA_nil]
+  exact (EvmAbi.Compile.Acc.start_inv 32).static (by decide) (EvmAbi.Compile.denotes_bool (v).1)
+---
+info: ┌─ emitted tiny.read
+│def tiny.read :
+    ByteArray → Nat → Option (EvmAbi.ValBA (EvmAbi.Ty.tuple (EvmAbi.Ty.bool :: @List.nil EvmAbi.Ty)) × Nat) :=
+  EvmAbi.Compile.readTuple 32
+    (EvmAbi.Compile.cons EvmAbi.Compile.elemStatic EvmAbi.Compile.readBool EvmAbi.Compile.consNil)
+│theorem tiny.read_reads : EvmAbi.Compile.Reads (EvmAbi.Ty.tuple (EvmAbi.Ty.bool :: @List.nil EvmAbi.Ty)) tiny.read :=
+  EvmAbi.Compile.reads_tuple rfl
+    (EvmAbi.Compile.cons_eq (EvmAbi.Compile.elemStatic_eq (by decide) EvmAbi.Compile.reads_bool)
+      EvmAbi.Compile.consNil_eq)
+-/
+#guard_msgs in
+abi_codec tiny "(bool)" trace
+
+/-! ### compiled codecs reduce in the kernel
+
+`encode` is well-founded-recursive over `Ty`, so the kernel cannot evaluate it:
+`decide +kernel` on a concrete encoding gets stuck at the `Decidable` instance.
+That is why checking a concrete encoding *downstream* — in an audit that wants
+to stay on the base axioms, with no `native_decide` — has needed a fuel-indexed
+mirror of the encoder to rewrite through first.
+
+A compiled codec needs none: for a fixed type it is a chain of machine
+instructions with no recursion in it, so the kernel walks it, and `_eq` carries
+the result back to `encode`.  The vector below is the canonical ERC-20 call. -/
+
+abi_codec erc20Transfer "transfer(address to, uint256 amount)"
+
+/-- `transfer(0x0102…14, 1000)`. -/
+def erc20TransferVal : ValBA erc20Transfer.ty :=
+  (⟨0x0102030405060708090a0b0c0d0e0f1011121314, by decide⟩, ⟨1000, by decide⟩, ())
+
+/-- The 64-byte argument region: the address right-aligned in a word, then the
+amount — evaluated by the kernel, on base axioms. -/
+theorem erc20Transfer_bytes :
+    (erc20Transfer.encode erc20TransferVal).data.toList =
+      (List.replicate 12 0 ++ (List.range 20).map (fun i => UInt8.ofNat (i + 1))) ++
+        (List.replicate 30 0 ++ [0x03, 0xe8]) := by
+  decide +kernel
+
+/-- …and the same fact about the *generic* encoder, which the kernel never
+unfolds: the compiled encoder is evaluated, `encode_eq` transports. -/
+theorem erc20Transfer_bytes_generic :
+    (encode erc20Transfer.ty erc20TransferVal).data.toList =
+      (List.replicate 12 0 ++ (List.range 20).map (fun i => UInt8.ofNat (i + 1))) ++
+        (List.replicate 30 0 ++ [0x03, 0xe8]) := by
+  rw [← erc20Transfer.encode_eq erc20TransferVal]
+  exact erc20Transfer_bytes
+
+/-- The compiled *decoder* reduces in the kernel too, so a downstream check can
+evaluate a decode rather than only rewrite through the roundtrip theorem. -/
+theorem erc20Transfer_decodes :
+    (erc20Transfer.decodeStrict (erc20Transfer.encode erc20TransferVal)).isSome := by
+  decide +kernel
 
 end EvmAbi
