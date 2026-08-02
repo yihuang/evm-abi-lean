@@ -138,6 +138,11 @@ theorem families live in `EvmAbi.Codec.Roundtrip` / `EvmAbi.Codec.Sound` /
   (`elemStatic`/`elemDyn`) plus the component's decoder, not a built `GetBA`:
   a structure argument is opaque to the specialiser, and passing one costs
   ~10 ns per component.
+* **Do not replace the builder with a chain of `ByteArray` appends.**  It looks
+  like the tighter target for an all-static type, whose size is a compile-time
+  constant, and it is measurably worse: ~6% better on two words, 10× worse on
+  eight (176 ns → 1717 ns).  `Builder.run` owns its accumulator uniquely and
+  extends it in place; `e ++ w₁ ++ w₂ ++ …` does not, and copies per step.
 * **The static/dynamic choice lives in exactly one place per direction** —
   `Acc.static`/`Acc.dyn` when writing, `elemStatic`/`elemDyn` when reading.
   Everything above them (the loop, the tuple chain, the clause lemmas) is

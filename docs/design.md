@@ -427,9 +427,10 @@ def Denotes (t : Ty) (f : ValBA t → Builder) : Prop :=
   ∀ v, (f v).toList = (putBA t v).toList
 ```
 
-and the clause lemmas compose it: `denotes_array_static` turns `Denotes t f`
-into `Denotes (.array t) (fun v => putUint v.val.length ++ …)`, and so on for
-each constructor.  `run_eq_encode` then lifts a `Denotes` to the user's
+and the clause lemmas compose it: `denotes_array` turns `Denotes t f` — plus
+the instruction the elements are written with, `Acc.Step t step f` — into
+`Denotes (.array t) (fun v => putUint v.val.length ++ …)`, and so on for each
+constructor.  `run_eq_encode` then lifts a `Denotes` to the user's
 statement, `f v |>.run = encode t v` — note this is a `toList` equality
 throughout, because `Builder.append` is a constructor and the machine's
 appends associate to the left where the generic layout's associate to the
@@ -637,10 +638,18 @@ below both.
 
 The compiler emits Lean.  Two directions follow.
 
-*A tighter target.*  For an all-static type the total size is a compile-time
-constant, so the encoding could be written straight into a pre-sized
-`ByteArray` with no builder and no machine state at all — the remaining
-allocations per component would go away.
+*A tighter target — measured, and rejected.*  For an all-static type the total
+size is a compile-time constant, so the encoding looks like it could be written
+straight into a pre-sized `ByteArray` with no builder and no machine state at
+all.  Measured against the compiled builder path on the same values, that is
+~6% faster on `(address, uint256)` and **10× slower** on `(bool × 8)`
+(176 ns → 1717 ns).  `Builder.run` allocates once and appends into an
+accumulator it uniquely owns, so each append extends it in place; an expression
+chain `e ++ w₁ ++ w₂ ++ …` does not preserve that ownership and the accumulator
+is copied per step.  The builder already *is* the tight target; what is left in
+those rows is the word codec, not the layout.  (Not isolated to the refcount
+level: a fold that threads the accumulator through a function, as `Chunks.emit`
+does, may well behave differently from an expression chain.)
 
 *EVM bytecode.*  The machine is deliberately first-order: `start`/`static`/
 `dyn`/`finish` over a head cursor, a frontier and a tail cursor is a

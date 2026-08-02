@@ -215,14 +215,14 @@ def main : IO Unit := do
     flagArray.ty (flagArrayVal 100 (by decide)) flagArray.encode
   IO.println "== compiled decoder vs generic decoder =="
   benchCompiledDecode "-- (address, uint256): one call's arguments" 200000
-    callArgs.ty (callArgs.encode callVal) callArgs.decode
+    callArgs.ty (callArgs.encode callVal) callArgs.decodeStrict
   benchCompiledDecode "-- (bool × 8): cheap words, layout-bound" 200000
-    flags.ty (flags.encode flagsVal) flags.decode
+    flags.ty (flags.encode flagsVal) flags.decodeStrict
   benchCompiledDecode "-- bool[], 100 elements" 20000
-    flagArray.ty (flagArray.encode (flagArrayVal 100 (by decide))) flagArray.decode
+    flagArray.ty (flagArray.encode (flagArrayVal 100 (by decide))) flagArray.decodeStrict
   benchCompiledDecode "-- uint256[], 100 elements" 20000
-    wordArray.ty (wordArray.encode (wordArrayVal 100 (by decide))) wordArray.decode
+    wordArray.ty (wordArray.encode (wordArrayVal 100 (by decide))) wordArray.decodeStrict
   benchCompiledDecode "-- (uint256, bool)[], 100 elements" 10000
-    pairArray.ty (pairArray.encode (pairArrayVal 100 (by decide))) pairArray.decode
+    pairArray.ty (pairArray.encode (pairArrayVal 100 (by decide))) pairArray.decodeStrict
   benchCompiledDecode "-- bytes[], 100 × 256 B" 5000
-    bytesArray.ty (bytesArray.encode (bytesArrayVal 100 (by decide))) bytesArray.decode
+    bytesArray.ty (bytesArray.encode (bytesArrayVal 100 (by decide))) bytesArray.decodeStrict

@@ -304,9 +304,10 @@ recorded as the item's state mutability, and `indexed` as the parameter's flag.
 
 ## ABI Compiler
 
-`abi_codec` compiles both directions for one fixed type, at elaboration time,
-and proves them correct as it goes (`abi_encoder` and `abi_decoder` compile
-one direction each):
+`abi_codec` compiles all four names of the runtime API — `encode`, `decode`,
+`decodeStrict`, `IsCanonical` — for one fixed type, at elaboration time, and
+proves each one equal to its `EvmAbi` counterpart as it goes (`abi_encoder` and
+`abi_decoder` compile one direction each, under the plain name):
 
 ```lean4
 import EvmAbi.Compile.Meta
@@ -314,11 +315,11 @@ open EvmAbi.Compile.Meta
 
 abi_codec transfer "transfer(address to, uint256 amount)"
 
-#check @transfer.encode      -- ValBA transfer.ty → ByteArray
-#check @transfer.decode      -- ByteArray → Option (ValBA transfer.ty)
-#check @transfer.encode_eq   -- ∀ v, transfer.encode v = EvmAbi.encode transfer.ty v
-#check @transfer.decode_eq   -- ∀ ba, transfer.decode ba = EvmAbi.decodeStrict transfer.ty ba
-#check @transfer.roundtrip   -- ∀ v, … → transfer.decode (transfer.encode v) = some v
+#check @transfer.encode        -- ValBA transfer.ty → ByteArray
+#check @transfer.decodeStrict  -- ByteArray → Option (ValBA transfer.ty)
+#check @transfer.encode_eq     -- ∀ v, transfer.encode v = EvmAbi.encode transfer.ty v
+#check @transfer.decodeStrict_eq
+#check @transfer.roundtrip     -- ∀ v, … → transfer.decodeStrict (transfer.encode v) = some v
 ```
 
 Both generic codecs are *interpretive*.  `putBA` matches on the `Ty` while it
@@ -351,16 +352,23 @@ instruction that loop runs is chosen at compile time.
 | `foo.ty` | the `Ty` that was compiled (an `abbrev`) |
 | `foo.node…` / `foo.dnode…` (+ `_denotes` / `_reads`) | the compiled codec of each compound sub-type, and its correctness |
 | `foo.put` / `foo.read` (+ `_denotes` / `_reads`) | the compiled encoder in builder form, and the compiled reader |
-| `foo.encode` | `ValBA foo.ty → ByteArray` |
-| `foo.decode` | `ByteArray → Option (ValBA foo.ty)` |
-| `foo.encode_eq` / `foo.decode_eq` | `= EvmAbi.encode` / `= EvmAbi.decodeStrict` |
-| `foo.encode_decodeStrict` / `foo.decode_encode` | each direction against the *generic* other one |
-| `foo.decode_uniq` | a buffer `foo.decode` accepts is the encoding of what it read |
-| `foo.roundtrip` | `foo.decode (foo.encode v) = some v` |
+| `foo.encode`, `foo.decode`, `foo.decodeStrict`, `foo.isCanonical` | the four names of the runtime API, compiled |
+| `foo.encode_eq`, `foo.decode_eq`, `foo.decodeStrict_eq`, `foo.isCanonical_eq` | each one *is* its `EvmAbi` counterpart |
+| `foo.encode_decodeStrict` / `foo.decodeStrict_encode` | each direction against the *generic* other one |
+| `foo.decodeStrict_uniq` | a buffer `foo.decodeStrict` accepts is the encoding of what it read |
+| `foo.roundtrip` | `foo.decodeStrict (foo.encode v) = some v` |
 
 `abi_encoder foo "…"` emits the encoder half under the plain name `foo`
 (`foo_eq`, `foo_decodeStrict`); `abi_decoder foo "…"` the decoder half
 (`foo_eq`, `foo_encode`, `foo_uniq`).
+
+A string that is not an ABI type is a compile-time error at the string, and
+nothing is emitted — so a typo cannot reach a generated codec:
+
+```lean4
+abi_encoder oops "uint7"
+-- error: abi_encoder: not an ABI type or signature: uint7
+```
 
 ### Why it is trustworthy
 
@@ -384,10 +392,30 @@ unable to emit code it cannot justify, and that is the design here:
   disagrees with `EvmAbi.encode` therefore cannot be produced — the command
   fails at compile time instead.
 
+### It reduces in the kernel
+
+`EvmAbi.encode` is well-founded-recursive over `Ty`, so the kernel cannot
+evaluate it — `decide +kernel` on a concrete encoding gets stuck at the
+`Decidable` instance.  A compiled codec has no recursion in it for a fixed
+type, so the kernel walks it, and `_eq` carries the result back:
+
+```lean4
+abi_codec erc20Transfer "transfer(address to, uint256 amount)"
+
+theorem bytes : (erc20Transfer.encode v).data.toList = … := by decide +kernel
+theorem generic : (encode erc20Transfer.ty v).data.toList = … := by
+  rw [← erc20Transfer.encode_eq v]; exact bytes    -- the kernel never unfolds `encode`
+```
+
+Both directions reduce (`Tests.lean` pins the ERC-20 vector), on `[propext]`
+alone — no `native_decide`.  That matters downstream: an audit that wants a
+concrete encoding checked on the base axioms has otherwise needed a
+fuel-indexed mirror of the encoder to rewrite through first.
+
 So the compiled code inherits the whole verified stack: `foo.encode_eq` and
 `foo.decode_eq` rewrite any statement about `EvmAbi.encode` /
 `EvmAbi.decodeStrict` onto the compiled names, which is how `foo.roundtrip`
-and `foo.decode_uniq` come out for free — the bijection of the *Core
+and `foo.decodeStrict_uniq` come out for free — the bijection of the *Core
 Theorems* section, on compiled code.
 
 ### What it costs
@@ -409,9 +437,17 @@ The first two rows are what compilation is worth: cheap words, so the layout
 *is* the work.  The rest are dominated by `Binary`'s word codec — a
 full-width `uint256` costs ~700 ns to turn into 32 big-endian bytes, against
 tens of nanoseconds of layout — so there is little left for the compiler to
-remove.  Compiling straight into a pre-sized `ByteArray` for all-static types
-(no builder at all) is the obvious next step, and generating EVM bytecode
-rather than Lean the one after that.
+remove.
+
+What is *not* worth doing, measured rather than assumed: emitting a direct
+chain of `ByteArray` appends for all-static types, skipping the builder.  On
+the same values in the same run that is ~6% faster on `(address, uint256)` and
+**10× slower** on `(bool × 8)` (176 ns → 1717 ns).  `Builder.run` sizes the
+buffer once and appends into an accumulator it uniquely owns; an expression
+chain of `++` does not keep that ownership, so the accumulator is copied
+instead of extended.  The builder is already the right shape for the static
+case.  Generating EVM bytecode rather than Lean remains the interesting
+direction.
 
 ## Proof Structure
 

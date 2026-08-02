@@ -384,8 +384,8 @@ private def emitEncoder (root : Name) (t : Ty) (tyId : Ident) (encName : Name) :
 
 /-- Emit the compiled strict decoder and its theorems, under the name
 `decName`. -/
-private def emitDecoder (root : Name) (t : Ty) (tyId : Ident) (decName : Name) :
-    CommandElabM Unit := do
+private def emitDecoder (root : Name) (t : Ty) (tyId : Ident) (decName : Name)
+    (wholeApi : Bool := false) : CommandElabM Unit := do
   let readId := mkIdent (root ++ `read)
   let readThmId := mkIdent (root ++ `read_reads)
   let (node, _) ← compileDec root t 0 (top? := some (root ++ `read))
@@ -407,8 +407,30 @@ private def emitDecoder (root : Name) (t : Ty) (tyId : Ident) (decName : Name) :
     ∀ (ba : ByteArray) (v : EvmAbi.ValBA $tyId), $decId ba = some v →
       EvmAbi.encode $tyId v = ba :=
       fun ba v h => EvmAbi.Compile.encode_of_runStrict $readThmId (by decide) ba v h))
+  -- the runtime API has four public names; a codec compiles all of them
+  if wholeApi then
+    let preId := mkIdent (root ++ `decode)
+    let canId := mkIdent (root ++ `isCanonical)
+    elabCommand (← `(def $preId : ByteArray → Option (EvmAbi.ValBA $tyId × Nat) :=
+      fun ba => $readId ba 0))
+    elabCommand (← `(theorem $(mkIdent (root ++ `decode_eq)) :
+      ∀ (ba : ByteArray), $preId ba = EvmAbi.decode $tyId ba :=
+        fun ba => $readThmId ba 0))
+    elabCommand (← `(def $canId : ByteArray → Bool := fun ba => ($decId ba).isSome))
+    elabCommand (← `(theorem $(mkIdent (root ++ `isCanonical_eq)) :
+      ∀ (ba : ByteArray), $canId ba = true ↔ EvmAbi.IsCanonical $tyId ba := by
+      intro ba
+      show ($decId ba).isSome = true ↔ _
+      rw [$(mkIdent (Name.appendAfter decName "_eq")):ident ba]
+      exact Iff.rfl))
 
-/-- Parse the command's string argument, or fail with a useful message. -/
+/-- Parse the command's string argument, or fail with a useful message.
+
+The validity check is defensive: the human-readable parser only produces types
+that satisfy `Ty.Valid` — it rejects `uint7`, `bytes33`, an array whose element
+type has no head — so no string should reach it.  The emitted proofs are
+`by decide` against exactly this predicate, so it is checked rather than
+assumed. -/
 private def targetOf (cmd : String) (s : TSyntax `str) : CommandElabM Ty := do
   let str := s.getString
   let some t := parseTarget str
@@ -452,20 +474,22 @@ elab "abi_decoder " nm:ident s:str : command => do
 /--
 Compile both directions at once.
 
-`abi_codec foo "(address, uint256)"` emits `foo.encode` and `foo.decode` with
-all the theorems of `abi_encoder`/`abi_decoder`, plus `foo.roundtrip`: what
-the compiled encoder writes, the compiled decoder reads back.
+`abi_codec foo "(address, uint256)"` compiles all four names of the runtime API
+— `foo.encode`, `foo.decode` (prefix), `foo.decodeStrict`, `foo.isCanonical` —
+each with the theorem that it *is* its `EvmAbi` counterpart, plus
+`foo.roundtrip`: what the compiled encoder writes, the compiled decoder reads
+back.
 -/
 elab "abi_codec " nm:ident s:str : command => do
   let t ← targetOf "abi_codec" s
   let root := nm.getId
   let tyId ← emitTy root t
   emitEncoder root t tyId (root ++ `encode)
-  emitDecoder root t tyId (root ++ `decode)
+  emitDecoder root t tyId (root ++ `decodeStrict) (wholeApi := true)
   let encId := mkIdent (root ++ `encode)
-  let decId := mkIdent (root ++ `decode)
+  let decId := mkIdent (root ++ `decodeStrict)
   let encEqId := mkIdent (Name.appendAfter (root ++ `encode) "_eq")
-  let decEncId := mkIdent (Name.appendAfter (root ++ `decode) "_encode")
+  let decEncId := mkIdent (Name.appendAfter (root ++ `decodeStrict) "_encode")
   elabCommand (← `(theorem $(mkIdent (root ++ `roundtrip)) :
     ∀ (v : EvmAbi.ValBA $tyId), ($encId v).size < 2 ^ 256 →
       $decId ($encId v) = some v := by

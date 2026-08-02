@@ -1030,33 +1030,106 @@ the canonical buffers — the negative vectors below are the same ones the
 strictness section rejects. -/
 
 -- the compiled decoder reads the specification's own vector
-example : (samArgs.decode specSamBytes.toByteArray).isSome := by native_decide
+example : (samArgs.decodeStrict specSamBytes.toByteArray).isSome := by native_decide
 
 -- and rejects what `decodeStrict` rejects: trailing garbage, …
-example : (samArgs.decode (specSamBytes ++ [0]).toByteArray).isSome = false := by native_decide
+example : (samArgs.decodeStrict (specSamBytes ++ [0]).toByteArray).isSome = false := by native_decide
 
 -- … a truncated buffer, …
-example : (samArgs.decode (specSamBytes.take 64).toByteArray).isSome = false := by native_decide
+example : (samArgs.decodeStrict (specSamBytes.take 64).toByteArray).isSome = false := by native_decide
 
 -- … and a non-canonical offset word (the `bytes` tail claimed one word early)
-example : (samArgs.decode
+example : (samArgs.decodeStrict
     ((encodeUint 0x40 ++ specSamBytes.drop 32).toByteArray)).isSome = false := by native_decide
 
 -- compiled encoder in, compiled decoder out, by computation …
-example : (allTys.decode (allTys.encode allTysVal)).isSome := by native_decide
+example : (allTys.decodeStrict (allTys.encode allTysVal)).isSome := by native_decide
 
 -- … and by theorem, for every value
 example (v : ValBA samArgs.ty) (hb : (samArgs.encode v).size < 2 ^ 256) :
-    samArgs.decode (samArgs.encode v) = some v := samArgs.roundtrip v hb
+    samArgs.decodeStrict (samArgs.encode v) = some v := samArgs.roundtrip v hb
 
-example (ba : ByteArray) : samArgs.decode ba = decodeStrict samArgs.ty ba :=
-  samArgs.decode_eq ba
+example (ba : ByteArray) : samArgs.decodeStrict ba = decodeStrict samArgs.ty ba :=
+  samArgs.decodeStrict_eq ba
 
-example (ba : ByteArray) (v : ValBA samArgs.ty) (h : samArgs.decode ba = some v) :
-    encode samArgs.ty v = ba := samArgs.decode_uniq ba v h
+example (ba : ByteArray) (v : ValBA samArgs.ty) (h : samArgs.decodeStrict ba = some v) :
+    encode samArgs.ty v = ba := samArgs.decodeStrict_uniq ba v h
+
+-- the prefix decoder and the canonicity predicate are compiled too, and are
+-- their `EvmAbi` counterparts by theorem
+example (ba : ByteArray) : samArgs.decode ba = decode samArgs.ty ba := samArgs.decode_eq ba
+
+example (ba : ByteArray) : samArgs.isCanonical ba = true ↔ IsCanonical samArgs.ty ba :=
+  samArgs.isCanonical_eq ba
+
+example : samArgs.isCanonical specSamBytes.toByteArray := by native_decide
+example : samArgs.isCanonical (specSamBytes ++ [0]).toByteArray = false := by native_decide
+
+-- on a canonical buffer the prefix decoder consumes all of it, which is
+-- exactly why the strict one accepts it
+example : (samArgs.decode specSamBytes.toByteArray).map (·.2) =
+    some specSamBytes.length := by native_decide
 
 abi_decoder justBytesDec "bytes"
 
 example : (justBytesDec (encode .bytes ⟨⟨#[1, 2]⟩, by decide⟩)).isSome := by native_decide
+
+/-! ### the command's own failure paths
+
+A string that is not an ABI type is a compile-time error *at the string*, and
+nothing is emitted — the mistake cannot reach a generated encoder. -/
+
+/-- error: abi_encoder: not an ABI type or signature: nonsense -/
+#guard_msgs in
+abi_encoder notAType "nonsense"
+
+/-- error: abi_decoder: not an ABI type or signature: uint7 -/
+#guard_msgs in
+abi_decoder unalignedWidth "uint7"
+
+/-- error: abi_codec: not an ABI type or signature: (uint256, ) -/
+#guard_msgs in
+abi_codec trailingComma "(uint256, )"
+
+/-! ### compiled codecs reduce in the kernel
+
+`encode` is well-founded-recursive over `Ty`, so the kernel cannot evaluate it:
+`decide +kernel` on a concrete encoding gets stuck at the `Decidable` instance.
+That is why checking a concrete encoding *downstream* — in an audit that wants
+to stay on the base axioms, with no `native_decide` — has needed a fuel-indexed
+mirror of the encoder to rewrite through first.
+
+A compiled codec needs none: for a fixed type it is a chain of machine
+instructions with no recursion in it, so the kernel walks it, and `_eq` carries
+the result back to `encode`.  The vector below is the canonical ERC-20 call. -/
+
+abi_codec erc20Transfer "transfer(address to, uint256 amount)"
+
+/-- `transfer(0x0102…14, 1000)`. -/
+def erc20TransferVal : ValBA erc20Transfer.ty :=
+  (⟨0x0102030405060708090a0b0c0d0e0f1011121314, by decide⟩, ⟨1000, by decide⟩, ())
+
+/-- The 64-byte argument region: the address right-aligned in a word, then the
+amount — evaluated by the kernel, on base axioms. -/
+theorem erc20Transfer_bytes :
+    (erc20Transfer.encode erc20TransferVal).data.toList =
+      (List.replicate 12 0 ++ (List.range 20).map (fun i => UInt8.ofNat (i + 1))) ++
+        (List.replicate 30 0 ++ [0x03, 0xe8]) := by
+  decide +kernel
+
+/-- …and the same fact about the *generic* encoder, which the kernel never
+unfolds: the compiled encoder is evaluated, `encode_eq` transports. -/
+theorem erc20Transfer_bytes_generic :
+    (encode erc20Transfer.ty erc20TransferVal).data.toList =
+      (List.replicate 12 0 ++ (List.range 20).map (fun i => UInt8.ofNat (i + 1))) ++
+        (List.replicate 30 0 ++ [0x03, 0xe8]) := by
+  rw [← erc20Transfer.encode_eq erc20TransferVal]
+  exact erc20Transfer_bytes
+
+/-- The compiled *decoder* reduces in the kernel too, so a downstream check can
+evaluate a decode rather than only rewrite through the roundtrip theorem. -/
+theorem erc20Transfer_decodes :
+    (erc20Transfer.decodeStrict (erc20Transfer.encode erc20TransferVal)).isSome := by
+  decide +kernel
 
 end EvmAbi
