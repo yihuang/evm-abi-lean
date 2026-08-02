@@ -302,7 +302,9 @@ yielding the user-facing `roundtrip` theorem.
 cons cell and a boxed `UInt8` per byte, and — worse — `Spec.encode` is built from
 `++`, so a value nested `d` levels deep has its bytes re-copied once per
 level, `O(n · d)`.  Rewriting `Spec.encode` over `ByteArray` would fix the
-representation but not the concatenation, since `ByteArray` append copies too.
+representation but not the concatenation: persistent `a ++ b` still builds a
+third array.  (Appending onto a uniquely-owned accumulator — what
+`Chunks.emit` does — is linear; see `Builder.lean`.)
 
 The fix is the builder pattern (Haskell's `Data.Binary.Builder`): make
 concatenation free by not concatenating.

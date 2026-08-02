@@ -85,7 +85,18 @@ def toList : Chunks → List UInt8
 
 `emit` appends a tree onto an accumulator with `ByteArray.push`; `Builder.run`
 pre-sizes the accumulator from the cached size, so the whole traversal is one
-linear pass with no reallocation. -/
+linear pass with no reallocation.
+
+`acc ++ ba` per `.chunk` leaf looks quadratic — `putWord` makes every 32-byte
+word a chunk — but is not.  Compiled, `ByteArray.append` is `fastAppend`,
+`b.copySlice 0 a a.size b.size false`, which copies `b` *into* `a`, in place
+while `a` is uniquely referenced; `emit` threads `acc` linearly, so it is.
+Measured on `uint256[]`, encoding is linear in the element count over a 16×
+range.
+
+**Invariant**: nothing may hold a second reference to `acc` across an `emit`
+call.  Reading `acc.size` back for a check would silently make every chunk
+append a full copy again. -/
 
 /-- Push a literal byte list onto the accumulator. -/
 def emitBytes (acc : ByteArray) : List UInt8 → ByteArray
