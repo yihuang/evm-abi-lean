@@ -308,35 +308,35 @@ private theorem decodeBytesN_window_eq (n : Nat) (ba : ByteArray) (off : Nat) :
       if off + 32 ≤ ba.size ∧ n ≤ 32 ∧ allZerosBA ba (off + n) (32 - n) then
         some (windowList ba off n)
       else none := by
-  -- the packed padding check, restated on the window's tail
+  -- a clamped window is idempotent under `take 32`
+  have hW : (windowList ba off 32).take 32 = windowList ba off 32 := by
+    simp [windowList_eq, List.take_take]
+  -- the packed padding check is exactly the window's tail
   have hz : allZerosBA ba (off + n) (32 - n) = true ↔
-      ((ba.data.toList.drop off).take 32).drop n = List.replicate (32 - n) 0 := by
-    rw [allZerosBA_eq, windowList_eq, ← drop_drop_ba, ← List.drop_take]
-  -- the spec's two checks are exactly the three packed guards: the padding
-  -- halves are `hz`, and the length halves are `min` arithmetic, which
-  -- `omega` decides once the list lengths are named
-  have hiff : (((ba.data.toList.drop off).take 32).take n).length = n ∧
-        ((ba.data.toList.drop off).take 32).drop n = List.replicate (32 - n) 0 ↔
+      (windowList ba off 32).drop n = List.replicate (32 - n) 0 := by
+    rw [allZerosBA_eq, windowList_eq, windowList_eq, ← drop_drop_ba, ← List.drop_take]
+  -- the spec's two checks are the three packed guards: the padding halves
+  -- are `hz`, and the length halves are `min` arithmetic, which `omega`
+  -- decides once the window is named
+  have hiff : ((windowList ba off 32).take n).length = n ∧
+        (windowList ba off 32).drop n = List.replicate (32 - n) 0 ↔
       off + 32 ≤ ba.size ∧ n ≤ 32 ∧ allZerosBA ba (off + n) (32 - n) := by
     constructor
     · rintro ⟨h1, h2⟩
       have h3 := congrArg List.length h2
-      simp only [List.length_take, List.length_drop, List.length_replicate,
+      simp only [windowList_eq, List.length_take, List.length_drop, List.length_replicate,
         ← Binary.ByteArray.size_eq_toList_length] at h1 h3
       exact ⟨by omega, by omega, hz.mpr h2⟩
     · rintro ⟨hfit, hn32, hpad⟩
       refine ⟨?_, hz.mp hpad⟩
-      simp only [List.length_take, List.length_drop,
+      simp only [windowList_eq, List.length_take, List.length_drop,
         ← Binary.ByteArray.size_eq_toList_length]
       omega
-  simp only [windowList_eq]
   unfold decodeBytesN
-  have ht3 : (((ba.data.toList.drop off).take 32).take 32) =
-      (ba.data.toList.drop off).take 32 := by
-    rw [List.take_take, Nat.min_self]
-  rw [ht3]
+  rw [hW]
   by_cases h : off + 32 ≤ ba.size ∧ n ≤ 32 ∧ allZerosBA ba (off + n) (32 - n)
-  · rw [if_pos (hiff.mpr h), if_pos h, List.take_take, Nat.min_eq_left h.2.1]
+  · rw [if_pos (hiff.mpr h), if_pos h]
+    simp [windowList_eq, List.take_take, Nat.min_eq_left h.2.1]
   · rw [if_neg (fun hs => h (hiff.mp hs)), if_neg h]
 
 /-- The packed `bytesN` payload denotes the list one. -/
