@@ -289,7 +289,7 @@ theorem decodeBytesPrefixBAVal_eq (ba : ByteArray) (off : Nat) :
       · rw [if_neg hc, if_neg hc]
         rfl
 
-/-- `bytesN` at an offset, list-free: the length word is at most 32 bytes,
+/-- `bytesN` at an offset, list-free: the payload word is at most 32 bytes,
 so every check is arithmetic — the word must be present
 (`off + 32 ≤ ba.size`), the payload must fit (`n ≤ 32`), and the rest of
 the word must be zero padding — and the payload comes back as one packed
@@ -308,6 +308,27 @@ private theorem decodeBytesN_window_eq (n : Nat) (ba : ByteArray) (off : Nat) :
       if off + 32 ≤ ba.size ∧ n ≤ 32 ∧ allZerosBA ba (off + n) (32 - n) then
         some (windowList ba off n)
       else none := by
+  -- the packed padding check, restated on the window's tail
+  have hz : allZerosBA ba (off + n) (32 - n) = true ↔
+      ((ba.data.toList.drop off).take 32).drop n = List.replicate (32 - n) 0 := by
+    rw [allZerosBA_eq, windowList_eq, ← drop_drop_ba, ← List.drop_take]
+  -- the spec's two checks are exactly the three packed guards: the padding
+  -- halves are `hz`, and the length halves are `min` arithmetic, which
+  -- `omega` decides once the list lengths are named
+  have hiff : (((ba.data.toList.drop off).take 32).take n).length = n ∧
+        ((ba.data.toList.drop off).take 32).drop n = List.replicate (32 - n) 0 ↔
+      off + 32 ≤ ba.size ∧ n ≤ 32 ∧ allZerosBA ba (off + n) (32 - n) := by
+    constructor
+    · rintro ⟨h1, h2⟩
+      have h3 := congrArg List.length h2
+      simp only [List.length_take, List.length_drop, List.length_replicate,
+        ← Binary.ByteArray.size_eq_toList_length] at h1 h3
+      exact ⟨by omega, by omega, hz.mpr h2⟩
+    · rintro ⟨hfit, hn32, hpad⟩
+      refine ⟨?_, hz.mp hpad⟩
+      simp only [List.length_take, List.length_drop,
+        ← Binary.ByteArray.size_eq_toList_length]
+      omega
   simp only [windowList_eq]
   unfold decodeBytesN
   have ht3 : (((ba.data.toList.drop off).take 32).take 32) =
@@ -315,51 +336,15 @@ private theorem decodeBytesN_window_eq (n : Nat) (ba : ByteArray) (off : Nat) :
     rw [List.take_take, Nat.min_self]
   rw [ht3]
   by_cases h : off + 32 ≤ ba.size ∧ n ≤ 32 ∧ allZerosBA ba (off + n) (32 - n)
-  · rw [if_pos h]
-    rcases h with ⟨hfit, hn32, hz⟩
-    have hc : (((ba.data.toList.drop off).take 32).take n).length = n ∧
-        ((ba.data.toList.drop off).take 32).drop n = List.replicate (32 - n) 0 := by
-      constructor
-      · rw [List.take_take, Nat.min_eq_left hn32, List.length_take, List.length_drop,
-          ← Binary.ByteArray.size_eq_toList_length, Nat.min_eq_left (by omega)]
-      · rw [List.drop_take, drop_drop_ba, ← windowList_eq, ← allZerosBA_eq]
-        exact hz
-    rw [if_pos hc]
-    simp [List.take_take, Nat.min_eq_left hn32]
-  · rw [if_neg h]
-    have hc : ¬ ((((ba.data.toList.drop off).take 32).take n).length = n ∧
-        ((ba.data.toList.drop off).take 32).drop n = List.replicate (32 - n) 0) := by
-      intro hc
-      rcases hc with ⟨hc1, hc2⟩
-      have h1 : n ≤ ((ba.data.toList.drop off).take 32).length := by
-        have h' := List.length_take_le' n ((ba.data.toList.drop off).take 32)
-        rwa [hc1] at h'
-      have hn32 : n ≤ 32 :=
-        Nat.le_trans h1 (List.length_take_le 32 (ba.data.toList.drop off))
-      have hlen : ((ba.data.toList.drop off).take 32).length - n = 32 - n := by
-        have h' := congrArg List.length hc2
-        rwa [List.length_drop, List.length_replicate] at h'
-      have hfit : off + 32 ≤ ba.size := by
-        have hXlen : (ba.data.toList.drop off).length = ba.size - off := by
-          rw [List.length_drop, ← Binary.ByteArray.size_eq_toList_length]
-        have hleX : ((ba.data.toList.drop off).take 32).length ≤
-            (ba.data.toList.drop off).length :=
-          List.length_take_le' 32 (ba.data.toList.drop off)
-        omega
-      have hz : allZerosBA ba (off + n) (32 - n) := by
-        rw [allZerosBA_eq, windowList_eq, ← drop_drop_ba, ← List.drop_take]
-        exact hc2
-      exact h ⟨hfit, hn32, hz⟩
-    rw [if_neg hc]
+  · rw [if_pos (hiff.mpr h), if_pos h, List.take_take, Nat.min_eq_left h.2.1]
+  · rw [if_neg (fun hs => h (hiff.mp hs)), if_neg h]
 
 /-- The packed `bytesN` payload denotes the list one. -/
 theorem decodeBytesNBAVal_eq (n : Nat) (ba : ByteArray) (off : Nat) :
     (decodeBytesNBAVal n ba off).map (fun w => w.data.toList) =
       decodeBytesNBA n ba off := by
   rw [decodeBytesNBAVal, decodeBytesNBA, decodeBytesN_window_eq]
-  by_cases h : off + 32 ≤ ba.size ∧ n ≤ 32 ∧ allZerosBA ba (off + n) (32 - n)
-  · simp [h, windowBA_data_toList]
-  · simp [h]
+  split <;> simp [windowBA_data_toList]
 
 /-! ## the decoder
 
