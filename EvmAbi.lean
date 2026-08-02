@@ -14,6 +14,7 @@ import EvmAbi.Codec.Runtime
 import EvmAbi.ValBA
 import EvmAbi.Parts
 import EvmAbi.Packed
+import EvmAbi.Compile
 import EvmAbi.HumanReadable
 
 /-!
@@ -55,6 +56,11 @@ the historical build order, nodes 1–8):
 * `EvmAbi.Packed`  — packed ABI (`abi.encodePacked`, Solidity's non-standard
                   packed mode): tight scalars, in-place dynamic payloads,
                   padded array elements; static packed roundtrip
+* `EvmAbi.Compile` — the ABI compiler's target language: a small abstract
+                  machine for the head/tail layout (`Acc.start`/`static`/
+                  `dyn`/`finish` plus one element loop) whose every step is
+                  proved against `putBA`, and `Denotes`, the contract a
+                  compiled encoder satisfies
 * `EvmAbi.HumanReadable` — parser for Solidity-style human-readable ABI
                   signatures into `Ty` and `AbiItem` representations
 
