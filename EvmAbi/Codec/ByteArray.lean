@@ -1078,6 +1078,184 @@ theorem decodeTupleBAVal_eq : (ts : List Ty) → AllValid ts → (ba : ByteArray
 termination_by ts => 8 * sizeOf ts + 3
 end
 
+/-! ## the compiled fast path
+
+The monadic walkers above are the proof surface, but their `do`-notation
+compiles to a closure allocation per array element: `decodeElemBAVal` and
+the `decodeElemsBAVal` recursion each build a `GetBA` function object at
+run time.  The direct loops below thread the cursors explicitly — the
+element step inlined, no closures — and `decodeBAValFast` is `decodeBAVal`
+with the walker calls replaced by the loops.  `@[csimp]` then makes the
+compiler route every compiled caller of `decodeBAVal` to the fast version
+automatically; the equality is a theorem, so deleting the attribute changes
+performance and nothing else.
+
+`decodeBAValFast` never calls `decodeBAVal` itself: the seven non-walker
+clauses are a private copy here (`decodeBAValSimple`), so the `@[csimp]`
+rewrite cannot make the fast path recurse. -/
+
+/-- The seven non-walker clauses of the decoder, copied out of
+`decodeBAVal` so the fast path never calls the `@[csimp]`-rewritten
+`decodeBAVal`. -/
+private def decodeBAValSimple : (t : Ty) → ByteArray → Nat → Option (ValBA t × Nat)
+  | .uint m, ba, off => match decodeUintBA ba off with
+      | some n => if h : n < 2 ^ m then some (⟨n, h⟩, 32) else none
+      | none => none
+  | .int m, ba, off => match decodeIntBA ba off with
+      | some i => if h : -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int) then
+          some (⟨i, h⟩, 32)
+        else none
+      | none => none
+  | .bool, ba, off => match decodeBoolBA ba off with
+      | some b => some (b, 32)
+      | none => none
+  | .address, ba, off => match decodeAddressBA ba off with
+      | some n => if h : n < 2 ^ 160 then some (⟨n, h⟩, 32) else none
+      | none => none
+  | .bytesN m, ba, off => match decodeBytesNBAVal m ba off with
+      | some bs => if h : bs.size = m then some (⟨bs, h⟩, 32) else none
+      | none => none
+  | .bytes, ba, off => match hp : decodeBytesPrefixBAVal ba off with
+      | some (bs, n) =>
+          some (⟨bs, by
+            have hma : decodeBytesPrefixBA ba off = some (bs.data.toList, n) := by
+              rw [← decodeBytesPrefixBAVal_eq ba off, hp]
+              rfl
+            have hlist : decodeBytesPrefix (ba.data.toList.drop off) = some (bs.data.toList, n) := by
+              rw [← decodeBytesPrefixBA_eq ba off]
+              exact hma
+            simpa [← ByteArray.size_eq_toList_length] using length_lt_of_decodeBytesPrefix hlist⟩, n)
+      | none => none
+  | .string, ba, off => match hp : decodeBytesPrefixBAVal ba off with
+      | some (bs, n) => match hs : String.fromUTF8? bs with
+          | some s =>
+              some (⟨s, by
+                have hma : decodeBytesPrefixBA ba off = some (bs.data.toList, n) := by
+                  rw [← decodeBytesPrefixBAVal_eq ba off, hp]
+                  rfl
+                have hlist : decodeBytesPrefix (ba.data.toList.drop off) = some (bs.data.toList, n) := by
+                  rw [← decodeBytesPrefixBA_eq ba off]
+                  exact hma
+                have hs' : String.fromUTF8? (bs.data.toList.toByteArray) = some s := by
+                  rw [dataToList_toByteArray]
+                  exact hs
+                exact size_toUTF8_lt_of_decodeBytesPrefix hlist hs'⟩, n)
+          | none => none
+      | none => none
+  | _, _, _ => none
+/-- The component step as a direct function: the same walk as
+`decodeElemBAVal`, cursors threaded explicitly. -/
+def decodeElemBAVal.loop (t : Ty) (ba : ByteArray) (ho to E : Nat) :
+    Option (GetBA.Result (ValBA t)) :=
+  match t.isStatic with
+  | true => match decodeBAVal t ba ho with
+      | some (v, n) => some ⟨v, ho + n, to, E⟩
+      | none => none
+  | false => match natAtBA ba ho with
+      | none => none
+      | some o => if o = E then
+          match decodeBAVal t ba to with
+          | some (v, n) => some ⟨v, ho + 32, to + n, E + n⟩
+          | none => none
+        else none
+
+mutual
+/-- Read `k` consecutive canonical elements, `ValBA` values: the element
+step inlined, so the only allocation per element is the result cell. -/
+def decodeElemsBAVal.loop (t : Ty) (k : Nat) (ba : ByteArray) (ho to E : Nat) :
+    Option (GetBA.Result ({ vs : List (ValBA t) // vs.length = k })) :=
+  match k with
+  | 0 => some ⟨⟨[], rfl⟩, ho, to, E⟩
+  | k + 1 => match decodeElemBAVal.loop t ba ho to E with
+      | none => none
+      | some r => match decodeElemsBAVal.loop t k ba r.head r.tails r.frontier with
+          | none => none
+          | some r' => some ⟨⟨r.val :: r'.val.val, by simp [List.length_cons, r'.val.property]⟩,
+              r'.head, r'.tails, r'.frontier⟩
+termination_by (sizeOf t, k + 2)
+
+/-- Read a canonical tuple, `ValBA` values. -/
+def decodeTupleBAVal.loop : (ts : List Ty) → ByteArray → Nat → Nat → Nat →
+    Option (GetBA.Result (TupleValBA ts))
+  | [], _, ho, to, E => some ⟨(), ho, to, E⟩
+  | t :: ts, ba, ho, to, E => match decodeElemBAVal.loop t ba ho to E with
+      | none => none
+      | some r => match decodeTupleBAVal.loop ts ba r.head r.tails r.frontier with
+          | none => none
+          | some r' => some ⟨(r.val, r'.val), r'.head, r'.tails, r'.frontier⟩
+termination_by ts => (sizeOf ts, 2)
+end
+
+/-- **Fast decoder**: `decodeBAVal` with the array/tuple walkers replaced by
+the direct loops.  The other seven clauses are `decodeBAValSimple`, a
+private copy — the fast path never calls `decodeBAVal` itself. -/
+def decodeBAValFast (t : Ty) (ba : ByteArray) (off : Nat) : Option (ValBA t × Nat) :=
+  match t with
+  | .array a => if a.headSize = 0 then none else
+      match hk : natAtBA ba off with
+      | none => none
+      | some k =>
+          match decodeElemsBAVal.loop a k ba (off + 32) (off + 32 + k * a.headSize)
+              (k * a.headSize) with
+          | some r => some (⟨r.val.val, by rw [r.val.property]; exact natAtBA_lt hk⟩, 32 + r.frontier)
+          | none => none
+  | .fixedArray a n =>
+      match decodeElemsBAVal.loop a n ba off (off + n * a.headSize) (n * a.headSize) with
+      | some r => some (r.val, r.frontier)
+      | none => none
+  | .tuple ts =>
+      match decodeTupleBAVal.loop ts ba off (off + headSizeSum ts) (headSizeSum ts) with
+      | some r => some (r.val, r.frontier)
+      | none => none
+  | t => decodeBAValSimple t ba off
+
+/-- The monadic walker runs are the loops definitionally — the bridge that
+makes `decodeBAValFast` the same walk as `decodeBAVal`. -/
+@[simp] theorem decodeElemBAVal.run_eq (t : Ty) (ba : ByteArray) (ho to E : Nat) :
+    (decodeElemBAVal t).run ba ho to E = decodeElemBAVal.loop t ba ho to E := by
+  simp [decodeElemBAVal, decodeElemBAVal.loop]
+
+@[simp] theorem decodeElemsBAVal.run_eq (t : Ty) (k : Nat) (ba : ByteArray) (ho to E : Nat) :
+    (decodeElemsBAVal t k).run ba ho to E = decodeElemsBAVal.loop t k ba ho to E := by
+  induction k generalizing ho to E with
+  | zero => simp [decodeElemsBAVal, decodeElemsBAVal.loop]
+  | succ k ih =>
+      simp only [decodeElemsBAVal, decodeElemsBAVal.loop, GetBA.bind_run, GetBA.pure_run]
+      rw [decodeElemBAVal.run_eq]
+      cases h : decodeElemBAVal.loop t ba ho to E with
+      | none => rfl
+      | some r =>
+          simp only [ih r.head r.tails r.frontier]
+          cases decodeElemsBAVal.loop t k ba r.head r.tails r.frontier <;> rfl
+
+@[simp] theorem decodeTupleBAVal.run_eq : (ts : List Ty) → (ba : ByteArray) → (ho to E : Nat) →
+    (decodeTupleBAVal ts).run ba ho to E = decodeTupleBAVal.loop ts ba ho to E
+  | [], ba, ho, to, E => by simp [decodeTupleBAVal, decodeTupleBAVal.loop]
+  | t :: ts, ba, ho, to, E => by
+      simp only [decodeTupleBAVal, decodeTupleBAVal.loop, GetBA.bind_run, GetBA.pure_run]
+      rw [decodeElemBAVal.run_eq]
+      cases h : decodeElemBAVal.loop t ba ho to E with
+      | none => rfl
+      | some r =>
+          simp only [decodeTupleBAVal.run_eq ts ba r.head r.tails r.frontier]
+          cases decodeTupleBAVal.loop ts ba r.head r.tails r.frontier <;> rfl
+
+/-- The fast decoder is the decoder: the delegating cases are `decodeBAVal`
+itself, the walker cases reduce to the loops definitionally. -/
+@[csimp] theorem decodeBAVal_eq_fast : @decodeBAVal = @decodeBAValFast := by
+  funext t ba off
+  cases t with
+  | uint m => simp [decodeBAVal, decodeBAValSimple, decodeBAValFast]
+  | int m => simp [decodeBAVal, decodeBAValSimple, decodeBAValFast]
+  | bool => simp [decodeBAVal, decodeBAValSimple, decodeBAValFast]
+  | address => simp [decodeBAVal, decodeBAValSimple, decodeBAValFast]
+  | bytesN m => simp [decodeBAVal, decodeBAValSimple, decodeBAValFast]
+  | bytes => simp [decodeBAVal, decodeBAValSimple, decodeBAValFast]
+  | string => simp [decodeBAVal, decodeBAValSimple, decodeBAValFast]
+  | array t => simp [decodeBAVal, decodeBAValFast]
+  | fixedArray t n => simp [decodeBAVal, decodeBAValFast]
+  | tuple ts => simp [decodeBAVal, decodeBAValFast]
+
 /-- **Strict `ValBA` decode**: canonical layout, consumed exactly, packed
 values. -/
 def decodeStrictBAVal (t : Ty) (ba : ByteArray) : Option (ValBA t) :=

@@ -73,6 +73,12 @@ def wideVal (n : Nat) (h : n < 2 ^ 256) : wideTy.Val :=
   ⟨List.replicate n ⟨0x123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0,
     by decide⟩, by simpa using h⟩
 
+
+/-- The same value, packed (`ValBA`). -/
+def wideValBA (n : Nat) (h : n < 2 ^ 256) : ValBA wideTy :=
+  ⟨List.replicate n ⟨0x123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0,
+    by decide⟩, by simpa using h⟩
+
 /-- `nest k = (bytes, (bytes, … ))`, `k` tuples deep. -/
 def nest : Nat → Ty
   | 0 => .tuple [.bytes]
@@ -167,3 +173,20 @@ def main : IO Unit := do
   benchValBA 100 (by decide) 2000 (by decide)
   IO.println "== bytesN: fixed-word payloads (list round-trip vs one extract) =="
   benchBytesN 2000 (by decide)
+  IO.println "== decode: where the walkers' closures cost, and where they do not =="
+  -- The `@[csimp]` fast path removes a closure per array element.  What that is
+  -- worth depends on what an element costs: a `uint256` costs ~1 µs of bignum
+  -- word decoding, so the closure is noise; a `bytes` payload is one window
+  -- extract, so it is a fifth of the work.  Both rows, or the first alone reads
+  -- as "the fast path bought nothing".
+  let bv : ValBA (.array .bytes) := flatValBAOf 256 (by decide) 500 (by decide)
+  let bba := encode (.array .bytes) bv
+  IO.println s!"-- bytes[] × 500, 256-byte payloads ({bba.size} bytes)"
+  timeIt "decodeStrict (BA)    " (fun _ =>
+    if (decodeStrict (.array .bytes) bba).isSome then bba.size else 0)
+  let wv : ValBA wideTy := wideValBA 2000 (by decide)
+  let wba := encode wideTy wv
+  IO.println s!"-- uint256[] × 2000, full-width words ({wba.size} bytes)"
+  timeIt "decodeStrict (BA)    " (fun _ =>
+    if (decodeStrict wideTy wba).isSome then wba.size else 0)
+
