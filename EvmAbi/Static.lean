@@ -138,11 +138,17 @@ with `Builder.append` in `O(1)` and materialize via `toList`, matching
 the list-based API above through the `toList_*` lemmas.
 -/
 
-/-- Write a `uintM` word. -/
-def putUint (n : Nat) : Builder := Builder.putWord (UInt256.ofNat n)
+/-- Write a `uintM` word, big-endian.  A width-32 encoding truncates to
+`2 ^ 256` by itself, so the value is encoded directly — no `UInt256.ofNat`
+round trip (a bignum mod) per word. -/
+def putUint (n : Nat) : Builder := Builder.chunk (encodeBEBytes 32 n)
 
 @[simp] theorem toList_putUint (n : Nat) : (putUint n).toList = encodeUint n := by
-  simp [putUint, encodeUint]
+  -- `256 ^ 32 = 2 ^ 256`, so a width-32 big-endian encoding truncates exactly
+  -- where `UInt256` does; `encodeBEU_mod_of_dvd` wants it as a divisibility
+  have h : 256 ^ 32 ∣ 2 ^ 256 := by omega
+  simp [putUint, encodeUint, bytesOfWord, UInt256.toBEBytes, encodeBEBytes, UInt256.toNat_ofNat,
+    UInt256.byteSize, UInt256.size, encodeBEU_mod_of_dvd h]
 
 
 /-- Write an `intM` word (two's complement). -/
