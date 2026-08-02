@@ -26,8 +26,9 @@ Two shapes are measured, because they fail differently:
 * **ValBA vs Val** — the runtime value family (`ValBA`) against the list
   payloads of `Ty.Val`, on flat `bytes[]`: aligned 256-byte elements (the
   zero padding is empty) and unaligned 100-byte elements (padding 28 per
-  element — the `ValBA` decoder checks it by index, `allZerosBA`, without
-  building a list).
+  element).  Both decoders check that padding by index — `allZerosBA`, no
+  list — so what the unaligned row still measures is the payload: a packed
+  `ByteArray` window against a cons list.
 
 Run this interpreted (`lake env lean --run Bench.lean`) and the numbers
 invert: `ByteArray.emptyWithCapacity` and `ByteArray.push` are `@[extern]`,
@@ -107,6 +108,9 @@ def benchDecode (label : String) (ba : ByteArray) : IO Unit := do
 def benchValBA (payload : Nat) (p : payload < 2 ^ 256) (n : Nat) (h : n < 2 ^ 256) : IO Unit := do
   let v := flatValOf payload p n h
   let vba := flatValBAOf payload p n h
+  -- Not `Spec.encodeByteArray flatTy v`: that shares the subexpression with the
+  -- encode row below, which then times a field read and prints 0 us/op.  Same
+  -- bytes by `Spec.encodeByteArray_eq`.
   let ba := (Spec.encode flatTy v).toByteArray
   IO.println s!"-- {n} elements ({ba.size} bytes)"
   timeIt "decodeStrictBA (List)  " (fun _ =>
@@ -117,7 +121,6 @@ def benchValBA (payload : Nat) (p : payload < 2 ^ 256) (n : Nat) (h : n < 2 ^ 25
   timeIt "encode (BA)          " (fun _ => (encode flatTy vba).size)
   IO.println s!"  agree: {(encode flatTy vba) == (Spec.encodeByteArray flatTy v)} ∧ {(decodeStrict flatTy ba).isSome == (decodeStrictBA flatTy ba).isSome}" 
 
-/-- A `bytes` value of `n` bytes, packed. -/
 def main : IO Unit := do
   IO.println "== flat bytes[], 256-byte elements (constant factor) =="
   benchTy "-- 500 elements"  flatTy (flatValOf 256 (by decide) 500 (by decide))
