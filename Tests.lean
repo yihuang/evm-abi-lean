@@ -13,6 +13,7 @@ import EvmAbi.Parts
 import EvmAbi.Packed
 import EvmAbi.HumanReadable
 import EvmAbi.HumanReadable.Meta
+import EvmAbi.Compile.Meta
 
 /-!
 # Tests
@@ -952,5 +953,110 @@ example (ba : ByteArray) (hb : ba.size < 2 ^ 256) :
 example (v w : ValBA specSamTy) (h : ValBA.toList specSamTy v = ValBA.toList specSamTy w) :
     v = w :=
   ValBA.toList_injective specSamTy h
+
+/-! ## The ABI compiler (`EvmAbi.Compile.Meta`)
+
+`abi_encoder` / `abi_decoder` / `abi_codec` emit a codec specialised to one
+type, plus the theorems that it agrees with `encode` / `decodeStrict`.  The
+vectors below are the same three the spec-vector section checks — encoded here
+by *compiled* code, so the compiler is held to the published bytes, not merely
+to the generic encoder. -/
+
+open EvmAbi.Compile.Meta
+
+abi_codec samArgs "sam(bytes, bool, uint256[])"
+abi_encoder fArgs "f(uint256, uint32[], bytes10, bytes)"
+abi_encoder gArgs "(uint256[][], string[])"
+
+def samArgsVal : ValBA samArgs.ty :=
+  (⟨⟨#[0x64, 0x61, 0x76, 0x65]⟩, by decide⟩, true,
+    ⟨[⟨1, by decide⟩, ⟨2, by decide⟩, ⟨3, by decide⟩], by decide⟩, ())
+
+def fArgsVal : ValBA fArgs.ty :=
+  (⟨0x123, by decide⟩,
+    ⟨[⟨0x456, by decide⟩, ⟨0x789, by decide⟩], by decide⟩,
+    ⟨⟨#[0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30]⟩, by decide⟩,
+    ⟨⟨#[0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21]⟩,
+      by decide⟩, ())
+
+def gArgsVal : ValBA gArgs.ty :=
+  (⟨[⟨[⟨1, by decide⟩, ⟨2, by decide⟩], by decide⟩, ⟨[⟨3, by decide⟩], by decide⟩], by decide⟩,
+    ⟨[⟨"one", by native_decide⟩, ⟨"two", by native_decide⟩, ⟨"three", by native_decide⟩],
+      by decide⟩, ())
+
+-- byte-exact against the specification vectors
+example : (samArgs.encode samArgsVal).data.toList = specSamBytes := by native_decide
+example : (fArgs fArgsVal).data.toList = specFBytes := by native_decide
+example : (gArgs gArgsVal).data.toList = specGBytes := by native_decide
+
+-- …and the compiled encoders are the generic one, by theorem: no computation,
+-- every value.  This is what the command proves as it emits the code.
+example (v : ValBA samArgs.ty) : samArgs.encode v = encode samArgs.ty v := samArgs.encode_eq v
+example (v : ValBA gArgs.ty) : gArgs v = encode gArgs.ty v := gArgs_eq v
+
+-- the verified roundtrip transports to compiled output for free
+example (v : ValBA fArgs.ty) (hb : (fArgs v).size < 2 ^ 256) :
+    decodeStrict fArgs.ty (fArgs v) = some v := fArgs_decodeStrict v hb
+
+example : (decodeStrict gArgs.ty (gArgs gArgsVal)).isSome := by native_decide
+
+-- every clause of the type grammar goes through the compiler
+abi_codec allTys "(uint8, int64, bool, address, bytes4, bytes, string, (bool, bytes)[2],
+  uint16[][], (address, (uint256, bytes)))"
+
+example (v : ValBA allTys.ty) : allTys.encode v = encode allTys.ty v := allTys.encode_eq v
+
+def allTysVal : ValBA allTys.ty :=
+  (⟨7, by decide⟩, ⟨-9, by decide⟩, false, ⟨0xbeef, by decide⟩,
+    ⟨⟨#[1, 2, 3, 4]⟩, by decide⟩, ⟨⟨#[9, 9]⟩, by decide⟩, ⟨"hi", by native_decide⟩,
+    ⟨[(true, ⟨⟨#[1]⟩, by decide⟩, ()), (false, ⟨⟨#[]⟩, by decide⟩, ())], by decide⟩,
+    ⟨[⟨[⟨1, by decide⟩], by decide⟩], by decide⟩,
+    (⟨0xcafe, by decide⟩, (⟨5, by decide⟩, ⟨⟨#[7, 7, 7]⟩, by decide⟩, ()), ()), ())
+
+example : allTys.encode allTysVal == encode allTys.ty allTysVal := by native_decide
+example : (decodeStrict allTys.ty (allTys.encode allTysVal)).isSome := by native_decide
+
+-- a leaf type compiles too (the root need not be compound)
+abi_encoder justBytes "bytes"
+
+example : (justBytes ⟨⟨#[1, 2]⟩, by decide⟩).data.toList =
+    encodeBytes [1, 2] := by native_decide
+
+/-! ### the decoder side
+
+`abi_decoder` compiles the strict decoder, `abi_codec` both directions.  The
+compiled decoder *is* `decodeStrict` (that is `_eq`), so it accepts exactly
+the canonical buffers — the negative vectors below are the same ones the
+strictness section rejects. -/
+
+-- the compiled decoder reads the specification's own vector
+example : (samArgs.decode specSamBytes.toByteArray).isSome := by native_decide
+
+-- and rejects what `decodeStrict` rejects: trailing garbage, …
+example : (samArgs.decode (specSamBytes ++ [0]).toByteArray).isSome = false := by native_decide
+
+-- … a truncated buffer, …
+example : (samArgs.decode (specSamBytes.take 64).toByteArray).isSome = false := by native_decide
+
+-- … and a non-canonical offset word (the `bytes` tail claimed one word early)
+example : (samArgs.decode
+    ((encodeUint 0x40 ++ specSamBytes.drop 32).toByteArray)).isSome = false := by native_decide
+
+-- compiled encoder in, compiled decoder out, by computation …
+example : (allTys.decode (allTys.encode allTysVal)).isSome := by native_decide
+
+-- … and by theorem, for every value
+example (v : ValBA samArgs.ty) (hb : (samArgs.encode v).size < 2 ^ 256) :
+    samArgs.decode (samArgs.encode v) = some v := samArgs.roundtrip v hb
+
+example (ba : ByteArray) : samArgs.decode ba = decodeStrict samArgs.ty ba :=
+  samArgs.decode_eq ba
+
+example (ba : ByteArray) (v : ValBA samArgs.ty) (h : samArgs.decode ba = some v) :
+    encode samArgs.ty v = ba := samArgs.decode_uniq ba v h
+
+abi_decoder justBytesDec "bytes"
+
+example : (justBytesDec (encode .bytes ⟨⟨#[1, 2]⟩, by decide⟩)).isSome := by native_decide
 
 end EvmAbi
