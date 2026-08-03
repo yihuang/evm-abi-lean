@@ -43,8 +43,8 @@ One caveat for proofs: `append` is a *constructor*, so it is associative and
 `empty`-neutral only up to `toList`.  Never state a `Builder`-valued equation
 that needs those laws; state it of the denotation.
 
-ABI-agnostic apart from the one word primitive (`putWord`): otherwise just
-the Lean 4 core library and `Binary.ByteArray`.
+ABI-agnostic apart from the two word primitives (`putWord`, `word32Small`):
+otherwise just the Lean 4 core library and `Binary.ByteArray`.
 -/
 namespace EvmAbi
 
@@ -103,10 +103,93 @@ def emitBytes (acc : ByteArray) : List UInt8 → ByteArray
   | [] => acc
   | b :: bs => emitBytes (acc.push b) bs
 
+theorem data_toList_emitBytes (acc : ByteArray) (bs : List UInt8) :
+    (emitBytes acc bs).data.toList = acc.data.toList ++ bs := by
+  induction bs generalizing acc with
+  | nil => simp [emitBytes]
+  | cons b bs ih => simp [emitBytes, ih, ByteArray.data_push]
+
 /-- Push `n` zero bytes onto the accumulator. -/
 def emitZeros (acc : ByteArray) : Nat → ByteArray
   | 0 => acc
   | n + 1 => emitZeros (acc.push 0) n
+
+theorem data_toList_emitZeros (acc : ByteArray) (n : Nat) :
+    (emitZeros acc n).data.toList = acc.data.toList ++ List.replicate n 0 := by
+  induction n generalizing acc with
+  | zero => simp [emitZeros]
+  | succ n ih => simp [emitZeros, ih, ByteArray.data_push, List.replicate_succ]
+
+/-! ### zero runs, copied rather than pushed
+
+`emitZeros` is the specification, and `data_toList_emitZeros` above is what
+every proof uses.  It is also the wrong thing to *run*: a dynamic ABI payload
+is padded up to a word, so the encoder asks for a run of up to 31 zero bytes
+per `bytes`/`string` value, and pushing them one at a time costs ~40 ns where
+copying them out of a static buffer costs ~5 ns (`Bench`'s word-codec
+section).
+
+`emitZerosFast` copies, and `@[csimp]` swaps it in at code generation, so the
+definition above and every theorem stated of it are untouched.  It has to
+appear before `emit`, which is the caller the swap has to reach. -/
+
+/-- A static run of 32 zero bytes to copy padding out of.  A closed term, so
+it is allocated once. -/
+def zeroBuf : ByteArray := (List.replicate 32 (0 : UInt8)).toByteArray
+
+theorem data_toList_zeroBuf : zeroBuf.data.toList = List.replicate 32 0 :=
+  List.toList_data_toByteArray
+
+theorem size_data_zeroBuf : zeroBuf.data.size = 32 := by
+  rw [← Array.length_toList, data_toList_zeroBuf, List.length_replicate]
+
+/-- Append at most 32 zero bytes with a single `copySlice`.
+
+`acc` is passed as `copySlice`'s `dest`, which is an owned argument, so it is
+extended in place while uniquely referenced; `acc.size` is read from a borrow
+and does not disturb that. -/
+def pushZeros32 (acc : ByteArray) (n : Nat) : ByteArray :=
+  zeroBuf.copySlice 0 acc acc.size n false
+
+theorem data_toList_pushZeros32 (acc : ByteArray) {n : Nat} (h : n ≤ 32) :
+    (pushZeros32 acc n).data.toList = acc.data.toList ++ List.replicate n 0 := by
+  have hsz : acc.size = acc.data.size := rfl
+  have hsplit : List.replicate n (0 : UInt8) ++ List.replicate (32 - n) 0 = List.replicate 32 0 := by
+    rw [List.replicate_append_replicate]
+    congr 1
+    omega
+  have htake : List.take n zeroBuf.data.toList = List.replicate n 0 := by
+    rw [data_toList_zeroBuf, ← hsplit]
+    exact take_append_of_length List.length_replicate
+  simp only [pushZeros32, ByteArray.copySlice, hsz, Nat.zero_add, Nat.sub_zero,
+    size_data_zeroBuf, Nat.min_eq_left h, Array.toList_append, Array.toList_extract,
+    List.extract_eq_take_drop, List.drop_zero, htake]
+  -- the head slice is all of `acc`, and the tail slice starts past its end
+  rw [List.take_of_length_le (Nat.le_of_eq Array.length_toList),
+    show acc.data.size - (acc.data.size + n) = 0 from by omega, List.take_zero,
+    List.append_nil]
+
+/-- Zero runs by copy: a full buffer at a time, then the remainder. -/
+def emitZerosFast (acc : ByteArray) (n : Nat) : ByteArray :=
+  if n ≤ 32 then pushZeros32 acc n
+  else emitZerosFast (pushZeros32 acc 32) (n - 32)
+termination_by n
+
+theorem data_toList_emitZerosFast (acc : ByteArray) (n : Nat) :
+    (emitZerosFast acc n).data.toList = acc.data.toList ++ List.replicate n 0 := by
+  induction acc, n using emitZerosFast.induct with
+  | case1 acc n h => rw [emitZerosFast, if_pos h, data_toList_pushZeros32 acc h]
+  | case2 acc n h ih =>
+      rw [emitZerosFast, if_neg h, ih, data_toList_pushZeros32 acc (Nat.le_refl 32),
+        List.append_assoc, List.replicate_append_replicate,
+        show 32 + (n - 32) = n from by omega]
+
+/-- The swap.  A `Prop`-level equation between the two implementations, so
+the compiled encoder copies its padding while the proofs keep pushing it. -/
+@[csimp] theorem emitZeros_eq_fast : @emitZeros = @emitZerosFast := by
+  funext acc n
+  apply ByteArray.data_inj
+  rw [← Array.toList_inj, data_toList_emitZeros, data_toList_emitZerosFast]
 
 /-- Append a chunk tree onto an accumulator. -/
 def emit (acc : ByteArray) : Chunks → ByteArray
@@ -115,18 +198,6 @@ def emit (acc : ByteArray) : Chunks → ByteArray
   | .chunk ba => acc ++ ba
   | .zeros n => emitZeros acc n
   | .append a b => emit (emit acc a) b
-
-theorem data_toList_emitBytes (acc : ByteArray) (bs : List UInt8) :
-    (emitBytes acc bs).data.toList = acc.data.toList ++ bs := by
-  induction bs generalizing acc with
-  | nil => simp [emitBytes]
-  | cons b bs ih => simp [emitBytes, ih, ByteArray.data_push]
-
-theorem data_toList_emitZeros (acc : ByteArray) (n : Nat) :
-    (emitZeros acc n).data.toList = acc.data.toList ++ List.replicate n 0 := by
-  induction n generalizing acc with
-  | zero => simp [emitZeros]
-  | succ n ih => simp [emitZeros, ih, ByteArray.data_push, List.replicate_succ]
 
 theorem data_toList_emit (acc : ByteArray) (c : Chunks) :
     (emit acc c).data.toList = acc.data.toList ++ c.toList := by
@@ -138,6 +209,44 @@ theorem data_toList_emit (acc : ByteArray) (c : Chunks) :
   | append a b iha ihb => simp [emit, toList, iha, ihb, List.append_assoc]
 
 end Chunks
+
+/-! ## a word written by copy
+
+`pushZeros32` is what makes `word32Small` cheap: a word whose value fits in
+eight bytes has 24 leading zero bytes, and copying them out of `zeroBuf`
+beats computing them.  The two `encodeBEU` facts below are what make it
+sound; they are really `Binary` lemmas, and live here because this is their
+only use. -/
+
+/-- Zero encodes as zeros, at any width. -/
+theorem encodeBEU_zero (m : Nat) : encodeBEU m 0 = List.replicate m 0 := by
+  induction m with
+  | zero => rfl
+  | succ m ih =>
+      rw [Nat.add_comm, encodeBEU_add 1 m 0, Nat.zero_div, ih,
+        show encodeBEU 1 0 = List.replicate 1 0 from rfl,
+        List.replicate_append_replicate, Nat.add_comm]
+
+/-- **The leading zeros are free**: a value that fits in `k` bytes has the
+other `m` bytes of its `k + m`-wide encoding zero, so they need not be
+computed — only copied. -/
+theorem encodeBEU_pad {k n : Nat} (h : n < 256 ^ k) (m : Nat) :
+    encodeBEU (k + m) n = List.replicate m 0 ++ encodeBEU k n := by
+  rw [encodeBEU_add k m n, Nat.div_eq_of_lt h, encodeBEU_zero]
+
+/-- A 32-byte big-endian word whose value fits in eight bytes: the 24 leading
+zeros copied in one `copySlice`, then the single `UInt64` chunk that can be
+non-zero.  `encodeBEBytes 32` instead pushes all 32 bytes one at a time,
+three quarters of them known to be zero. -/
+def word32Small (n : Nat) : ByteArray :=
+  pushBEChunk 8 (UInt64.ofNat n) (Chunks.pushZeros32 (ByteArray.emptyWithCapacity 32) 24)
+
+theorem data_toList_word32Small {n : Nat} (h : n < 2 ^ 64) :
+    (word32Small n).data.toList = encodeBEU 32 n := by
+  have h8 : n < 256 ^ 8 := by omega
+  rw [word32Small, pushBEChunk_eq, Chunks.data_toList_pushZeros32 _ (by omega),
+    encodeBEU_window (by omega), show (ByteArray.emptyWithCapacity 32).data.toList = [] from rfl,
+    List.nil_append, show (32 : Nat) = 8 + 24 from rfl, encodeBEU_pad h8 24]
 
 /-- A byte-string builder: a chunk tree together with its byte count.
 
