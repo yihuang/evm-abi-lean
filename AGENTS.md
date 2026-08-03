@@ -151,6 +151,22 @@ theorem families live in `EvmAbi.Codec.Roundtrip` / `EvmAbi.Codec.Sound` /
   constant, and it is measurably worse: ~6% better on two words, 10× worse on
   eight (176 ns → 1717 ns).  `Builder.run` owns its accumulator uniquely and
   extends it in place; `e ++ w₁ ++ w₂ ++ …` does not, and copies per step.
+* **A word is one `chunk` leaf, in both `putUint` branches.**  `word32Small`
+  skips computing the 24 leading zero bytes of a small word, and the obvious
+  spelling — `Builder.zeros 24 ++ Builder.chunk …`, reusing the `zeros` run —
+  is 1.53× on `bytes[]` but **1.37× slower** on `bool[]`: the extra `append`
+  node and second `emit` step cost more than the pushes they save.  Keep the
+  two shapes identical.
+* **Benchmark rows must thread the iteration index into the work.**  Lean
+  floats closed subterms to cached top-level constants, so
+  `timed n (fun _ => f topLevelData)` evaluates `f` once and then times a
+  field read — an early draft of `Bench`'s word-codec section reported 32000
+  `ByteArray.push`es in "3 ns".  Closing over a function parameter is safe;
+  writing against top-level definitions is not, and the index must reach the
+  loop, not just the returned sum.  The mirror hazard, when writing a probe:
+  a shared accumulator threaded through `Id.run` can lose unique ownership
+  and copy per push (830 ns/word against a real 86).  Mirror the structure of
+  the code under test rather than inventing a tighter loop.
 * **The static/dynamic choice lives in exactly one place per direction** —
   `Acc.static`/`Acc.dyn` when writing, `elemStatic`/`elemDyn` when reading.
   Everything above them (the loop, the tuple chain, the clause lemmas) is
