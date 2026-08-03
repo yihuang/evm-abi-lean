@@ -138,17 +138,41 @@ with `Builder.append` in `O(1)` and materialize via `toList`, matching
 the list-based API above through the `toList_*` lemmas.
 -/
 
+/-- The word encoding as a plain big-endian byte string.  `256 ^ 32 = 2 ^ 256`,
+so a width-32 encoding truncates exactly where `UInt256` does;
+`encodeBEU_mod_of_dvd` wants that as a divisibility. -/
+theorem encodeUint_eq (n : Nat) : encodeUint n = encodeBEU 32 n := by
+  have h : 256 ^ 32 ∣ 2 ^ 256 := by omega
+  simp [encodeUint, bytesOfWord, UInt256.toBEBytes, UInt256.toNat_ofNat,
+    UInt256.byteSize, UInt256.size, encodeBEU_mod_of_dvd h]
+
+theorem toList_chunk_encodeBEBytes (k n : Nat) :
+    (Builder.chunk (encodeBEBytes k n)).toList = encodeBEU k n := by
+  rw [Builder.toList_chunk, encodeBEBytes, List.toList_data_toByteArray]
+
 /-- Write a `uintM` word, big-endian.  A width-32 encoding truncates to
 `2 ^ 256` by itself, so the value is encoded directly — no `UInt256.ofNat`
-round trip (a bignum mod) per word. -/
-def putUint (n : Nat) : Builder := Builder.chunk (encodeBEBytes 32 n)
+round trip (a bignum mod) per word.
+
+Words below `2 ^ 64` take `word32Small`, which computes only the bytes that
+can be non-zero.  That is not a special case for small values: the ABI writes
+a word for every array length, every dynamic offset, every `bytes` length and
+every `bool`, and all of those are far below `2 ^ 64`.
+
+The two branches produce the *same* builder shape — one `chunk` leaf — on
+purpose.  Writing the zeros as a `zeros` run instead (`Builder.zeros 24 ++
+Builder.chunk …`) also encodes correctly and is faster on `bytes[]`, but it
+adds an `append` node and a second `emit` step per word, which measured 1.37×
+*slower* on `bool[]`, where the word is already the cheap part. -/
+def putUint (n : Nat) : Builder :=
+  if n < 2 ^ 64 then Builder.chunk (word32Small n) else Builder.chunk (encodeBEBytes 32 n)
 
 @[simp] theorem toList_putUint (n : Nat) : (putUint n).toList = encodeUint n := by
-  -- `256 ^ 32 = 2 ^ 256`, so a width-32 big-endian encoding truncates exactly
-  -- where `UInt256` does; `encodeBEU_mod_of_dvd` wants it as a divisibility
-  have h : 256 ^ 32 ∣ 2 ^ 256 := by omega
-  simp [putUint, encodeUint, bytesOfWord, UInt256.toBEBytes, encodeBEBytes, UInt256.toNat_ofNat,
-    UInt256.byteSize, UInt256.size, encodeBEU_mod_of_dvd h]
+  rw [encodeUint_eq, putUint]
+  split
+  · rename_i h
+    rw [Builder.toList_chunk, data_toList_word32Small h]
+  · rw [toList_chunk_encodeBEBytes]
 
 
 /-- Write an `intM` word (two's complement). -/

@@ -155,28 +155,9 @@ theorem toList_putBA (t : Ty) (v : ValBA t) :
 so the roundtrip, the static roundtrip, canonicity and the strict roundtrip
 transport to the runtime encoder without reproving anything.
 
-Measured with `lake build bench && ./.lake/build/bin/bench` (Apple M-series;
-compiled only — the builder rests on the `@[extern]` `ByteArray.push` and
-`ByteArray.emptyWithCapacity`, so interpreted runs do not show the win):
-
-| shape | `Spec.encode` + `toByteArray` | `Spec.encodeByteArray` | speedup |
-|---|---|---|---|
-| `bytes[]`, 500 × 256 B | 2744 µs | 954 µs | 2.9× |
-| `bytes[]`, 2000 × 256 B | 10928 µs | 3740 µs | 2.9× |
-| `uint256[]`, 1000 full-width words | 1323 µs | 991 µs | 1.3× |
-| nested tuples, depth 50 | 2042 µs | 126 µs | 16× |
-| nested tuples, depth 200 | 26088 µs | 490 µs | 53× |
-
-The flat rows show the constant factor; the nested rows show the asymptotics —
-quadratic against linear, so the gap widens with depth.
-
-Both columns also depend on how fast one 32-byte word is produced, which is
-`lean-binary`'s job: its `Binary.Fast` peels eight bytes at a time through a
-`UInt64` instead of one at a time through bignum division, and registers the
-result with `@[csimp]`, so this library needed no change to benefit.  That is
-worth 4.1× to the specification encoder and 5.0× to `Spec.encodeByteArray` on the
-`uint256[]` row — and, because it sits below both, it is why the builder's own
-advantage there is only 1.3×.
+Compiled, that is worth 6× on a flat `bytes[]` and 92× at nesting depth 200 —
+`Spec.encode` re-copies a `d`-deep value's bytes `d` times where the builder
+stays linear.  Numbers and method are in [docs/performance.md](docs/performance.md).
 
 The decoder has the same two forms.  `Spec.decode` walks two `List UInt8`
 cursors; `decodeStrict` (runtime) walks the same layout as two *offsets*
@@ -207,10 +188,8 @@ theorem isCanonical_iff (t : Ty) (hv : t.Valid) (ba : ByteArray)
 
 — the roundtrip returning the very same `ValBA` value, not merely one with
 the same denotation, plus `encode_of_decodeStrict` and
-`decodeStrict_eq_some_iff`.  Compiled, decoding a `bytes[]`:
-
-    500 elements  (160KB)   3460 -> 1177 us    2.9x
-    2000 elements (640KB)  13945 -> 4799 us    2.9x
+`decodeStrict_eq_some_iff`.  Compiled, the offset cursors decode a `bytes[]`
+3.5× faster than the list ones ([performance](docs/performance.md)).
 
 ## Human-Readable ABI
 
@@ -444,34 +423,12 @@ Theorems* section, on compiled code.
 
 ### What it costs
 
-Compilation removes the *layout* overhead and nothing else, so the win
-depends on how expensive the words themselves are.  Measured with
-`lake build bench && ./.lake/build/bin/bench` (Apple M-series, compiled):
-
-| shape | `encode` | compiled | `decodeStrict` | compiled |
-|---|---|---|---|---|
-| `(bool × 8)` | 380 ns | **176 ns** (2.2×) | 670 ns | **365 ns** (1.8×) |
-| `bool[]`, 100 elements | 4965 ns | **2710 ns** (1.8×) | 8688 ns | **6100 ns** (1.4×) |
-| `bytes[]`, 100 × 256 B | 53.5 µs | 51.5 µs (1.04×) | 14.3 µs | 12.0 µs (1.19×) |
-| `(uint256, bool)[]`, 100 elements | 87.4 µs | 75.0 µs (1.17×) | 113.1 µs | 104.0 µs (1.09×) |
-| `(address, uint256)` — one call's arguments | 1037 ns | 990 ns (1.05×) | 1071 ns | 1030 ns (1.04×) |
-| `uint256[]`, 100 full-width words | 73.4 µs | 70.0 µs (1.05×) | 97.6 µs | 96.1 µs (1.02×) |
-
-The first two rows are what compilation is worth: cheap words, so the layout
-*is* the work.  The rest are dominated by `Binary`'s word codec — a
-full-width `uint256` costs ~700 ns to turn into 32 big-endian bytes, against
-tens of nanoseconds of layout — so there is little left for the compiler to
-remove.
-
-What is *not* worth doing, measured rather than assumed: emitting a direct
-chain of `ByteArray` appends for all-static types, skipping the builder.  On
-the same values in the same run that is ~6% faster on `(address, uint256)` and
-**10× slower** on `(bool × 8)` (176 ns → 1717 ns).  `Builder.run` sizes the
-buffer once and appends into an accumulator it uniquely owns; an expression
-chain of `++` does not keep that ownership, so the accumulator is copied
-instead of extended.  The builder is already the right shape for the static
-case.  Generating EVM bytecode rather than Lean remains the interesting
-direction.
+Compilation removes the *layout* overhead and nothing else, so the win depends
+on how expensive the words themselves are: 2.25× on `(bool × 8)`, where cheap
+words make the layout the work, down to 1.06× on full-width `uint256[]`, where
+the word codec dominates and there is little left to remove.  The tables, and
+the three optimizations measured and rejected, are in
+[docs/performance.md](docs/performance.md).
 
 ## Proof Structure
 
@@ -495,7 +452,7 @@ The proof is built in incremental layers, each reusable independently:
 | **14. Compiler target** | `Compile` + `Compile.Decode` | The layout machine (`Acc`, its invariant `Acc.Inv` and one lemma per instruction) and the element loops; the component readers, element loops and compound clauses of the decoder; `Denotes` and `Reads` — the contracts every compiled codec is proved to satisfy |
 | **15. Compiler** | `Compile.Meta` | `abi_encoder` / `abi_decoder` / `abi_codec` — emit a codec specialised to one type, with its correctness theorems, at elaboration time |
 | **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, builder and executable-encoder checks, offset-decoder checks (including degenerate and truncated buffers), human-readable ABI tests, compiled-codec checks against the same spec vectors, and its negative vectors |
-| **Bench** | `Bench` | `lake build bench` — `Spec.encode` vs `Spec.encodeByteArray` vs runtime `encode`, `Spec.decodeStrict` vs `decodeStrict`, and compiled vs generic `encode`/`decodeStrict` |
+| **Bench** | `Bench` | `lake build bench` — `Spec.encode` vs `Spec.encodeByteArray` vs runtime `encode`, `Spec.decodeStrict` vs `decodeStrict`, compiled vs generic `encode`/`decodeStrict`, and the word codec against an unboxed-`Nat` and a four-limb ceiling |
 
 The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:
 the combinatorial heart of the ABI offset arithmetic is proved once on `List Part`,
@@ -537,6 +494,15 @@ Tests (spec vectors, roundtrips, error cases) run via `native_decide` / `decide`
 lake test          # build and run all test targets
 lake build Tests   # compile the test module
 ```
+
+The benchmark is not in `defaultTargets`, so CI does not pay for it:
+
+```bash
+lake build bench && ./.lake/build/bin/bench
+```
+
+See [docs/performance.md](docs/performance.md) for what it measures and the
+current numbers, and [docs/design.md](docs/design.md) for the design notes.
 
 ## License
 
