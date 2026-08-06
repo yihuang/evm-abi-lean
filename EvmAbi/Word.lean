@@ -88,10 +88,19 @@ slicing it; `none` when fewer than 32 bytes remain. -/
 def natAtBA (ba : ByteArray) (off : Nat) : Option Nat :=
   if off + 32 ≤ ba.size then some (decodeBEBytesFrom ba off 32) else none
 
-/-- The big-endian `UInt64` at byte offset `off` — one limb of a word. -/
-@[inline] def beWord8At (ba : ByteArray) (off : Nat) : UInt64 :=
-  beWord8 ba[off]! ba[off+1]! ba[off+2]! ba[off+3]!
-          ba[off+4]! ba[off+5]! ba[off+6]! ba[off+7]!
+/-- The big-endian `UInt64` at byte offset `off` — one limb of a word.  The
+in-bounds proof is an argument so the eight reads compile to unchecked loads:
+`ba[i]!` would re-test `i < ba.size` and carry a panic branch for each. -/
+@[inline] def beWord8At (ba : ByteArray) (off : Nat) (h : off + 8 ≤ ba.size) : UInt64 :=
+  beWord8 ba[off] ba[off+1] ba[off+2] ba[off+3]
+          ba[off+4] ba[off+5] ba[off+6] ba[off+7]
+
+/-- The checked read is the `!` read `ofBEByteArrayAt` is written with. -/
+private theorem beWord8At_eq (ba : ByteArray) (o : Nat) (ho : o + 8 ≤ ba.size) :
+    beWord8At ba o ho =
+      beWord8 ba[o]! ba[o+1]! ba[o+2]! ba[o+3]! ba[o+4]! ba[o+5]! ba[o+6]! ba[o+7]! := by
+  unfold beWord8At
+  congr 1 <;> exact (getElem!_pos ba _ (by omega)).symm
 
 /-- `natAtBA` with the word read as four `UInt64` limbs instead of accumulated
 into a `Nat`.  Every word the decoders read is small — `Ty.Val` bounds each
@@ -103,11 +112,11 @@ The limbs have to stay bare `UInt64` locals: assembling a `UInt256` and
 projecting `l3` out of it costs the allocation the bignum accumulation cost,
 and measures as no change. -/
 def natAtBAFast (ba : ByteArray) (off : Nat) : Option Nat :=
-  if off + 32 ≤ ba.size then
-    let a := beWord8At ba off
-    let b := beWord8At ba (off + 8)
-    let c := beWord8At ba (off + 16)
-    let d := beWord8At ba (off + 24)
+  if h : off + 32 ≤ ba.size then
+    let a := beWord8At ba off (by omega)
+    let b := beWord8At ba (off + 8) (by omega)
+    let c := beWord8At ba (off + 16) (by omega)
+    let d := beWord8At ba (off + 24) (by omega)
     some (if a == 0 && b == 0 && c == 0 then d.toNat else decodeBEBytesFrom ba off 32)
   else none
 
@@ -117,8 +126,9 @@ def natAtBAFast (ba : ByteArray) (off : Nat) : Option Nat :=
   funext ba off
   rw [natAtBA, natAtBAFast]
   by_cases h : off + 32 ≤ ba.size
-  · rw [if_pos h, if_pos h]
-    -- the four reads are the limbs of `ofBEByteArrayAt`, by definition
+  · rw [if_pos h, dif_pos h]
+    simp only [beWord8At_eq]
+    -- the four reads are now the limbs of `ofBEByteArrayAt`, by definition
     show _ = some (if (UInt256.ofBEByteArrayAt ba off).l0 == 0 &&
         (UInt256.ofBEByteArrayAt ba off).l1 == 0 &&
         (UInt256.ofBEByteArrayAt ba off).l2 == 0
@@ -130,7 +140,7 @@ def natAtBAFast (ba : ByteArray) (off : Nat) : Option Nat :=
       rw [UInt256.toNat_eq_limbs, hz.1.1, hz.1.2, hz.2]
       simp
     · rw [if_neg hz]
-  · rw [if_neg h, if_neg h]
+  · rw [if_neg h, dif_neg h]
 
 /-- **Bridge**: the indexed read is the list read at the same position. -/
 theorem natAtBA_eq (ba : ByteArray) (off : Nat) :

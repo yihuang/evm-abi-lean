@@ -283,8 +283,10 @@ def decodeWords (ba : ByteArray) (seed : Nat) : Nat := Id.run do
     if decodeBEBytesFrom ba (32 * i) 32 == 0 then s := s + 1
   return s
 
-/-- The ceiling for the row above: the same 32 bytes read into four `UInt64`
-limbs, with no 256-bit `Nat` ever built. -/
+/-- The same 32 bytes read into four `UInt64` limbs, with no 256-bit `Nat` ever
+built.  Still `ba[i]!`, so it pays a bounds test and a panic branch per byte —
+`EvmAbi.beWord8At` takes the in-bounds proof as an argument and reads below
+this row. -/
 def decodeWordLimbs (ba : ByteArray) (seed : Nat) : Nat := Id.run do
   let mut s := seed
   for i in [0:wordCount] do
@@ -339,7 +341,7 @@ def benchWordCodec : IO Unit := do
   IO.println "-- read one uint256 from 32 big-endian bytes"
   timeWord "wide  (bignum)          " 200 (decodeWords wideBuf)
   timeWord "small (< 2^63)          " 200 (decodeWords smallBuf)
-  timeWord "limbs (ceiling)         " 200 (decodeWordLimbs wideBuf)
+  timeWord "limbs (checked reads)   " 200 (decodeWordLimbs wideBuf)
   IO.println "-- 28 bytes of zero padding (the unaligned `bytes` tail)"
   timeWord "Chunks.emitZeros        " 200 (padByEmitZeros 28)
   timeWord "copySlice from zero buf " 200 (padByCopy 28)
