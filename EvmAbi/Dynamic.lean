@@ -63,10 +63,14 @@ theorem dataToList_toByteArray (ba : ByteArray) : ba.data.toList.toByteArray = b
 /-- Prefix decoder for dynamic `bytes`: reads a length word, exactly `len`
 data bytes and the zero padding, returning the bytes and the number of
 consumed bytes. Anything beyond the consumed prefix is ignored, so this
-composes with the head/tail layout (`EvmAbi.Parts`). -/
+composes with the head/tail layout (`EvmAbi.Parts`).
+
+The length word is rejected unless it is below `2 ^ 64`, the bound
+`Ty.Val` carries.  This is where the `bytes` and `string` clauses get
+theirs, so neither needs a check of its own. -/
 def decodeBytesPrefix (buf : List UInt8) : Option (List UInt8 × Nat) :=
   (natAt buf 0).bind fun len =>
-    if ((buf.drop 32).take len).length = len ∧
+    if len < 2 ^ 64 ∧ ((buf.drop 32).take len).length = len ∧
        ((buf.drop 32).drop len).take ((32 - len % 32) % 32) =
          List.replicate ((32 - len % 32) % 32) 0 then
       some ((buf.drop 32).take len, 32 + len + (32 - len % 32) % 32)
@@ -74,13 +78,14 @@ def decodeBytesPrefix (buf : List UInt8) : Option (List UInt8 × Nat) :=
 
 /-- **Prefix roundtrip**: an encoded `bytes` value is read back from the
 front of a larger buffer, with the exact consumed length reported. -/
-theorem decodeBytesPrefix_append (h : bs.length < 2 ^ 256) :
+theorem decodeBytesPrefix_append (h : bs.length < 2 ^ 64) :
     decodeBytesPrefix (encodeBytes bs ++ rest) = some (bs, (encodeBytes bs).length) := by
   have hw := natAt_append ([] : List UInt8) (pad32 bs ++ rest) (UInt256.ofNat bs.length) 0
     (by simp)
   simp only [List.nil_append] at hw
   have hlen : (UInt256.ofNat bs.length).toNat = bs.length := by
-    rw [UInt256.toNat_ofNat]; exact Nat.mod_eq_of_lt h
+    rw [UInt256.toNat_ofNat]
+    exact Nat.mod_eq_of_lt (lt_two_pow_256_of_lt_two_pow_64 h)
   rw [hlen] at hw
   have hdata : ((pad32 bs ++ rest).take bs.length) = bs := by
     rw [pad32, List.append_assoc]; exact take_append_of_length rfl
@@ -90,33 +95,33 @@ theorem decodeBytesPrefix_append (h : bs.length < 2 ^ 256) :
     exact take_append_of_length (by simp)
   unfold decodeBytesPrefix encodeBytes encodeUint
   rw [List.append_assoc, hw, Option.bind_some, drop_append_of_length (length_bytesOfWord _),
-    hdata, hpad, if_pos ⟨rfl, rfl⟩]
+    hdata, hpad, if_pos ⟨h, rfl, rfl⟩]
   congr 1
   simp [length_pad32, length_bytesOfWord] <;> omega
 
 /-- A prefix-decoded `bytes` payload is bounded by its own length word —
 what lets `decode` return refined values whose bound is intrinsic. -/
 theorem length_lt_of_decodeBytesPrefix {buf bs : List UInt8} {n : Nat}
-    (h : decodeBytesPrefix buf = some (bs, n)) : bs.length < 2 ^ 256 := by
+    (h : decodeBytesPrefix buf = some (bs, n)) : bs.length < 2 ^ 64 := by
   simp only [decodeBytesPrefix] at h
   cases hlen : natAt buf 0 with
   | none => simp only [hlen, Option.bind_none] at h; contradiction
   | some len =>
       simp only [hlen, Option.bind_some] at h
-      by_cases hc : ((buf.drop 32).take len).length = len ∧
+      by_cases hc : len < 2 ^ 64 ∧ ((buf.drop 32).take len).length = len ∧
           ((buf.drop 32).drop len).take ((32 - len % 32) % 32) =
             List.replicate ((32 - len % 32) % 32) 0
       · rw [if_pos hc] at h
         have hbs : (buf.drop 32).take len = bs := congrArg Prod.fst (Option.some.inj h)
-        rw [← hbs, hc.1]
-        exact natAt_lt hlen
+        rw [← hbs, hc.2.1]
+        exact hc.1
       · rw [if_neg hc] at h; contradiction
 
 /-- The bound of a prefix-decoded `string` payload, transported through the
 UTF-8 roundtrip onto the decoded string. -/
 theorem size_toUTF8_lt_of_decodeBytesPrefix {buf bs : List UInt8} {n : Nat} {s : String}
     (hp : decodeBytesPrefix buf = some (bs, n))
-    (hs : String.fromUTF8? bs.toByteArray = some s) : s.toUTF8.size < 2 ^ 256 := by
+    (hs : String.fromUTF8? bs.toByteArray = some s) : s.toUTF8.size < 2 ^ 64 := by
   rw [Binary.ByteArray.size_eq_toList_length, toUTF8_of_fromUTF8? hs]
   simpa [List.data_toByteArray] using length_lt_of_decodeBytesPrefix hp
 

@@ -66,6 +66,12 @@ theorem natAt_lt {buf : List UInt8} {i n : Nat} (h : natAt buf i = some n) :
       rw [← h]
       exact UInt256.toNat_lt w
 
+/-- `Ty.Val` bounds its payload lengths at `2 ^ 64`; the word layer works at
+`2 ^ 256` (`natAt_lt`).  This is the step from the value bound to the word
+bound, which is all the length arithmetic ever needs of the difference. -/
+theorem lt_two_pow_256_of_lt_two_pow_64 {n : Nat} (h : n < 2 ^ 64) : n < 2 ^ 256 :=
+  Nat.lt_of_lt_of_le h (Nat.pow_le_pow_right (by omega) (by omega))
+
 /-! ## Reading a word straight out of a `ByteArray`
 
 `natAt` slices: `drop` walks the buffer to the offset and `take` allocates a
