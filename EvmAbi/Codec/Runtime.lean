@@ -30,7 +30,7 @@ open Builder
 is cached — no list walk), the payload as a `chunk`, and the padding as a
 `zeros` run. -/
 def putBytesBA (bs : ByteArray) : Builder :=
-  putUint bs.size ++ Builder.chunk bs ++ Builder.zeros ((32 - bs.size % 32) % 32)
+  Builder.appendZeros (putUint bs.size ++ Builder.chunk bs) ((32 - bs.size % 32) % 32)
 
 @[simp] theorem toList_putBytesBA (bs : ByteArray) :
     (putBytesBA bs).toList = encodeBytes bs.data.toList := by
@@ -38,7 +38,7 @@ def putBytesBA (bs : ByteArray) : Builder :=
 
 /-- Write fixed-size `bytesN` from a packed payload. -/
 def putBytesNBA (bs : ByteArray) : Builder :=
-  Builder.chunk bs ++ Builder.zeros (32 - bs.size)
+  Builder.appendZeros (Builder.chunk bs) (32 - bs.size)
 
 @[simp] theorem toList_putBytesNBA (bs : ByteArray) :
     (putBytesNBA bs).toList = encodeBytesN bs.data.toList := by

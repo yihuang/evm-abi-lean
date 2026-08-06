@@ -117,7 +117,10 @@ What was available here is the work that never needed a bignum. The ABI writes
 a word for every array length, dynamic offset, `bytes` length and `bool`, all
 far below `2 ^ 64`, so `word32Small` copies the 24 leading zeros rather than
 computing them (2.0× on `bytes[]`), and dynamic padding is copied rather than
-pushed (`Chunks.emitZeros`, 1.16× on the unaligned row). After both, `bytes[]`
+pushed (`Chunks.emitZeros`, 1.16× on the unaligned row) — and, where the
+payload is already word aligned, not written at all (`Builder.appendZeros`,
+45 ns → 28 ns a value, the floor of writing the payload alone; 1.2× on
+`bytes32[]`). After those, `bytes[]`
 encodes at 0.44 ns/byte and decodes at 0.34 ns/byte — memcpy-bound, and what
 is left above that floor is the word codec.
 
@@ -135,6 +138,12 @@ reasoned about.
   single `chunk` leaf `word32Small` builds: 1.53× on `bytes[]`, but 1.37×
   *slower* on `bool[]`, where the extra `append` node and second `emit` step
   cost more than the pushes they save.
+* **`Builder.zeros 0 = empty`**, so the empty run is a nullary constructor
+  rather than a `zeros` node, in place of `appendZeros` skipping the append:
+  45 ns → 36 ns a value, against 28 ns for the skip. It drops the `zeros`
+  leaf and the zero-length `copySlice` `emit` makes of it, but the `append`
+  node, its `Builder` and the extra `emit` step stay — an operand has to
+  exist to be appended. Half the win, and `toList_zeros` stops being `rfl`.
 * **Chunking `allZerosBA`'s padding check** through `beWord8`: 25 ns → 15 ns
   per 28-byte check, 6% of the `decodeStrict` row it sits in — not worth the
   correctness argument.
