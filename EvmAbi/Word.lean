@@ -88,6 +88,50 @@ slicing it; `none` when fewer than 32 bytes remain. -/
 def natAtBA (ba : ByteArray) (off : Nat) : Option Nat :=
   if off + 32 ≤ ba.size then some (decodeBEBytesFrom ba off 32) else none
 
+/-- The big-endian `UInt64` at byte offset `off` — one limb of a word. -/
+@[inline] def beWord8At (ba : ByteArray) (off : Nat) : UInt64 :=
+  beWord8 ba[off]! ba[off+1]! ba[off+2]! ba[off+3]!
+          ba[off+4]! ba[off+5]! ba[off+6]! ba[off+7]!
+
+/-- `natAtBA` with the word read as four `UInt64` limbs instead of accumulated
+into a `Nat`.  Every word the decoders read is small — `Ty.Val` bounds each
+length at `2 ^ 64`, and an offset is bounded by a buffer no machine holds — so
+the top three limbs are zero and the answer is the low limb, a machine word.
+The general branch keeps this equal to `natAtBA` on any word at all.
+
+The limbs have to stay bare `UInt64` locals: assembling a `UInt256` and
+projecting `l3` out of it costs the allocation the bignum accumulation cost,
+and measures as no change. -/
+def natAtBAFast (ba : ByteArray) (off : Nat) : Option Nat :=
+  if off + 32 ≤ ba.size then
+    let a := beWord8At ba off
+    let b := beWord8At ba (off + 8)
+    let c := beWord8At ba (off + 16)
+    let d := beWord8At ba (off + 24)
+    some (if a == 0 && b == 0 && c == 0 then d.toNat else decodeBEBytesFrom ba off 32)
+  else none
+
+/-- The fast read is the specified one, so it can replace it in compiled code
+(`@[csimp]`) while every theorem stays stated about `natAtBA`. -/
+@[csimp] theorem natAtBA_eq_natAtBAFast : @natAtBA = @natAtBAFast := by
+  funext ba off
+  rw [natAtBA, natAtBAFast]
+  by_cases h : off + 32 ≤ ba.size
+  · rw [if_pos h, if_pos h]
+    -- the four reads are the limbs of `ofBEByteArrayAt`, by definition
+    show _ = some (if (UInt256.ofBEByteArrayAt ba off).l0 == 0 &&
+        (UInt256.ofBEByteArrayAt ba off).l1 == 0 &&
+        (UInt256.ofBEByteArrayAt ba off).l2 == 0
+      then (UInt256.ofBEByteArrayAt ba off).l3.toNat else decodeBEBytesFrom ba off 32)
+    by_cases hz : (UInt256.ofBEByteArrayAt ba off).l0 == 0 &&
+        (UInt256.ofBEByteArrayAt ba off).l1 == 0 && (UInt256.ofBEByteArrayAt ba off).l2 == 0
+    · rw [if_pos hz, ← UInt256.toNat_ofBEByteArrayAt ba off h]
+      simp only [Bool.and_eq_true, beq_iff_eq] at hz
+      rw [UInt256.toNat_eq_limbs, hz.1.1, hz.1.2, hz.2]
+      simp
+    · rw [if_neg hz]
+  · rw [if_neg h, if_neg h]
+
 /-- **Bridge**: the indexed read is the list read at the same position. -/
 theorem natAtBA_eq (ba : ByteArray) (off : Nat) :
     natAtBA ba off = natAt (ba.data.toList.drop off) 0 := by
