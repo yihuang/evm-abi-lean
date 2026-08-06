@@ -152,6 +152,19 @@ reasoned about.
   row, twice measured. Assembling the structure costs about what the bignum
   accumulation cost, so the limb read only pays when nothing is allocated to
   hold the limbs. `Bench`'s `limbs (ceiling)` row is the shape that works.
+* **A `UInt64` length in place of the `Nat` one** — sound, the `2 ^ 64` cap being
+  exactly `UInt64.size`. The twelve `Nat` ops an element in
+  `decodeBytesPrefixBAVal` go 4.3 → 1.27 ns, 0.95 of it `len < 2 ^ 64` comparing
+  against a *bignum* literal. That is 2.6% of a 117 ns element, under its row's
+  own spread, bought with a `toNat` on every take/drop proof — the specification
+  is `List`-indexed. And the word read spends 32 `lean_nat_add`s an element
+  against these twelve: the arithmetic is in the indices, not the lengths.
+* **`USize` indices and `ByteArray.uget`** for those reads — 1.48× on a limb read,
+  and unreachable. Nothing takes a `Nat` offset to a `USize` one soundly:
+  `USize.toNat_ofNat` gives `n % 2 ^ System.Platform.numBits`, `usize` truncates
+  with no lemma back, and `a.size < USize.size` is unprovable. Core justifies
+  `uget` in prose, as a runtime invariant; taking it costs an assumption in the
+  public API.
 
 Generating EVM bytecode rather than Lean remains the interesting direction.
 
