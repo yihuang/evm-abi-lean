@@ -97,7 +97,7 @@ The general branch keeps this equal to `natAtBA` on any word at all.
 The limbs have to stay bare `UInt64` locals: assembling a `UInt256` and
 projecting `l3` out of it costs the allocation the bignum accumulation cost,
 and measures as no change. -/
-def natAtBAFast (ba : ByteArray) (off : Nat) : Option Nat :=
+@[inline] def natAtBAFast (ba : ByteArray) (off : Nat) : Option Nat :=
   if h : off + 32 ≤ ba.size then
     let a := beWord8At ba off (by omega)
     let b := beWord8At ba (off + 8) (by omega)
