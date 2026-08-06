@@ -52,8 +52,11 @@ line (and so the emitter never has to print a proof). -/
 
 /-- Read a `uintM`. -/
 def readUint (m : Nat) (ba : ByteArray) (off : Nat) : Option (ValBA (.uint m) × Nat) :=
-  match decodeUintBA ba off with
-  | some n => if h : n < 2 ^ m then some (⟨n, h⟩, 32) else none
+  match wordAtBA ba off with
+  | some w =>
+      if hm : 256 ≤ m then
+        some (⟨w, toNat_lt_two_pow_of_le w hm⟩, 32)
+      else if h : w.toNat < 2 ^ m then some (⟨w, h⟩, 32) else none
   | none => none
 
 theorem reads_uint (m : Nat) : Reads (.uint m) (readUint m) := by

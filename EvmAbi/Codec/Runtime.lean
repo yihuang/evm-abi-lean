@@ -48,7 +48,7 @@ mutual
 /-- ABI encoder over packed values: same layout as `Spec.put`, `chunk`
 leaves for the payloads. -/
 def putBA : (t : Ty) → ValBA t → Builder
-  | .uint _, ⟨n, _⟩ => putUint n
+  | .uint _, ⟨w, _⟩ => putWord w
   | .int _, ⟨i, _⟩ => putInt i
   | .bool, b => putBool b
   | .address, ⟨n, _⟩ => putAddress n
@@ -272,8 +272,9 @@ theorem toList_putBA (t : Ty) (v : ValBA t) :
     (putBA t v).toList = Spec.encode t (ValBA.toList t v) := by
   cases t with
   | uint m =>
-      obtain ⟨n, hn⟩ := v
-      rw [putBA.eq_1, ValBA.toList.eq_1, Spec.encode, Spec.put.eq_1]
+      obtain ⟨w, hw⟩ := v
+      rw [putBA.eq_1, ValBA.toList.eq_1, Spec.encode, Spec.put.eq_1,
+        toList_putWord, toList_putUint, encodeUint, Binary.UInt256.ofNat_toNat]
   | int m =>
       obtain ⟨i, hi⟩ := v
       rw [putBA.eq_2, ValBA.toList.eq_2, Spec.encode, Spec.put.eq_2]

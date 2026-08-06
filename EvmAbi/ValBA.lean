@@ -35,7 +35,7 @@ mutual
 /-- The type of values of ABI type `t`, with packed payloads. -/
 @[reducible]
 def ValBA : Ty → Type
-  | uint m => { n : Nat // n < 2 ^ m }
+  | uint m => { w : Binary.UInt256 // w.toNat < 2 ^ m }
   | int m => { i : Int // -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int) }
   | .bool => Bool
   | address => { n : Nat // n < 2 ^ 160 }
@@ -57,7 +57,7 @@ mutual
 /-- The denotation: every packed value denotes the `Ty.Val` with the same
 structure, payloads converted by `ByteArray.data.toList`. -/
 def ValBA.toList : (t : Ty) → ValBA t → t.Val
-  | uint _, ⟨n, h⟩ => ⟨n, h⟩
+  | uint _, ⟨w, h⟩ => ⟨w.toNat, h⟩
   | int _, ⟨i, h⟩ => ⟨i, h⟩
   | .bool, b => b
   | address, ⟨n, h⟩ => ⟨n, h⟩
@@ -119,7 +119,7 @@ theorem ValBA.toList_injective (t : Ty) {v w : ValBA t}
   | uint m =>
       obtain ⟨n, hn⟩ := v; obtain ⟨n', hn'⟩ := w
       simp only [ValBA.toList, Subtype.mk.injEq] at h
-      exact Subtype.ext h
+      exact Subtype.ext (Binary.UInt256.toNat_inj.mp h)
   | int m =>
       obtain ⟨i, hi⟩ := v; obtain ⟨i', hi'⟩ := w
       simp only [ValBA.toList, Subtype.mk.injEq] at h
