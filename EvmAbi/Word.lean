@@ -88,20 +88,6 @@ slicing it; `none` when fewer than 32 bytes remain. -/
 def natAtBA (ba : ByteArray) (off : Nat) : Option Nat :=
   if off + 32 ≤ ba.size then some (decodeBEBytesFrom ba off 32) else none
 
-/-- The big-endian `UInt64` at byte offset `off` — one limb of a word.  The
-in-bounds proof is an argument so the eight reads compile to unchecked loads:
-`ba[i]!` would re-test `i < ba.size` and carry a panic branch for each. -/
-@[inline] def beWord8At (ba : ByteArray) (off : Nat) (h : off + 8 ≤ ba.size) : UInt64 :=
-  beWord8 ba[off] ba[off+1] ba[off+2] ba[off+3]
-          ba[off+4] ba[off+5] ba[off+6] ba[off+7]
-
-/-- The checked read is the `!` read `ofBEByteArrayAt` is written with. -/
-private theorem beWord8At_eq (ba : ByteArray) (o : Nat) (ho : o + 8 ≤ ba.size) :
-    beWord8At ba o ho =
-      beWord8 ba[o]! ba[o+1]! ba[o+2]! ba[o+3]! ba[o+4]! ba[o+5]! ba[o+6]! ba[o+7]! := by
-  unfold beWord8At
-  congr 1 <;> exact (getElem!_pos ba _ (by omega)).symm
-
 /-- `natAtBA` with the word read as four `UInt64` limbs instead of accumulated
 into a `Nat`.  Every word the decoders read is small — `Ty.Val` bounds each
 length at `2 ^ 64`, and an offset is bounded by a buffer no machine holds — so
@@ -127,14 +113,13 @@ def natAtBAFast (ba : ByteArray) (off : Nat) : Option Nat :=
   rw [natAtBA, natAtBAFast]
   by_cases h : off + 32 ≤ ba.size
   · rw [if_pos h, dif_pos h]
-    simp only [beWord8At_eq]
     -- the four reads are now the limbs of `ofBEByteArrayAt`, by definition
-    show _ = some (if (UInt256.ofBEByteArrayAt ba off).l0 == 0 &&
-        (UInt256.ofBEByteArrayAt ba off).l1 == 0 &&
-        (UInt256.ofBEByteArrayAt ba off).l2 == 0
-      then (UInt256.ofBEByteArrayAt ba off).l3.toNat else decodeBEBytesFrom ba off 32)
-    by_cases hz : (UInt256.ofBEByteArrayAt ba off).l0 == 0 &&
-        (UInt256.ofBEByteArrayAt ba off).l1 == 0 && (UInt256.ofBEByteArrayAt ba off).l2 == 0
+    show _ = some (if (UInt256.ofBEByteArrayAt ba off h).l0 == 0 &&
+        (UInt256.ofBEByteArrayAt ba off h).l1 == 0 &&
+        (UInt256.ofBEByteArrayAt ba off h).l2 == 0
+      then (UInt256.ofBEByteArrayAt ba off h).l3.toNat else decodeBEBytesFrom ba off 32)
+    by_cases hz : (UInt256.ofBEByteArrayAt ba off h).l0 == 0 &&
+        (UInt256.ofBEByteArrayAt ba off h).l1 == 0 && (UInt256.ofBEByteArrayAt ba off h).l2 == 0
     · rw [if_pos hz, ← UInt256.toNat_ofBEByteArrayAt ba off h]
       simp only [Bool.and_eq_true, beq_iff_eq] at hz
       rw [UInt256.toNat_eq_limbs, hz.1.1, hz.1.2, hz.2]
@@ -169,7 +154,7 @@ theorem natAtBA_eq (ba : ByteArray) (off : Nat) :
 is that no `Nat` is built — that is the whole point of the `UInt256`-valued
 decoder, and asking this for its `toNat` gives the cost straight back. -/
 def wordAtBA (ba : ByteArray) (off : Nat) : Option UInt256 :=
-  if off + 32 ≤ ba.size then some (UInt256.ofBEByteArrayAt ba off) else none
+  if h : off + 32 ≤ ba.size then some (UInt256.ofBEByteArrayAt ba off h) else none
 
 /-- **Bridge**: the limb read denotes the `Nat` read, so everything stated of
 `natAtBA` transports. -/
@@ -177,8 +162,8 @@ theorem map_toNat_wordAtBA (ba : ByteArray) (off : Nat) :
     (wordAtBA ba off).map UInt256.toNat = natAtBA ba off := by
   unfold wordAtBA natAtBA
   by_cases h : off + 32 ≤ ba.size
-  · rw [if_pos h, if_pos h, Option.map_some, UInt256.toNat_ofBEByteArrayAt ba off h]
-  · rw [if_neg h, if_neg h, Option.map_none]
+  · rw [dif_pos h, if_pos h, Option.map_some, UInt256.toNat_ofBEByteArrayAt ba off h]
+  · rw [dif_neg h, if_neg h, Option.map_none]
 
 /-- At width 256 and above the bound on a `uintM` is vacuous — every word
 satisfies it.  Worth having as a lemma rather than a proof term at each
