@@ -256,8 +256,8 @@ end Acc
 
 /-! ## the leaves -/
 
-theorem denotes_uint (m : Nat) : Denotes (.uint m) (fun v => putUint v.val) := by
-  rintro ⟨n, h⟩; rw [putBA.eq_1]
+theorem denotes_uint (m : Nat) : Denotes (.uint m) (fun v => putWord v.val) := by
+  rintro ⟨w, h⟩; rw [putBA.eq_1]
 
 theorem denotes_int (m : Nat) : Denotes (.int m) (fun v => putInt v.val) := by
   rintro ⟨i, h⟩; rw [putBA.eq_2]

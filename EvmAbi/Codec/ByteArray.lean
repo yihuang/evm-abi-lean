@@ -448,8 +448,15 @@ mutual
 /-- **Canonical decoder over a `ByteArray`, `ValBA` values**: reads one
 canonical value of type `t` at offset `off`. -/
 def decodeBAVal : (t : Ty) → ByteArray → Nat → Option (ValBA t × Nat)
-  | .uint m, ba, off => match decodeUintBA ba off with
-      | some n => if h : n < 2 ^ m then some (⟨n, h⟩, 32) else none
+  | .uint m, ba, off => match wordAtBA ba off with
+      | some w =>
+          -- At `m = 256`, and any wider, the bound holds of every word.  The
+          -- test matters: `w.toNat` is what builds the bignum the limbs exist
+          -- to avoid, and a `uint256` is almost every uint there is.  Below
+          -- 256 the value fits in fewer limbs, so its `toNat` is cheap anyway.
+          if hm : 256 ≤ m then
+            some (⟨w, toNat_lt_two_pow_of_le w hm⟩, 32)
+          else if h : w.toNat < 2 ^ m then some (⟨w, h⟩, 32) else none
       | none => none
   | .int m, ba, off => match decodeIntBA ba off with
       | some i => if h : -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int) then
@@ -870,9 +877,20 @@ theorem decodeBAVal_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) (off : Nat) :
   cases t with
   | uint m =>
       rw [decodeBAVal, decodeBA]
-      cases h : decodeUintBA ba off with
-      | none => rfl
-      | some n => by_cases hb : n < 2 ^ m <;> simp [ValBA.toList, hb]
+      have hm := map_toNat_wordAtBA ba off
+      cases h : wordAtBA ba off with
+      | none =>
+          rw [h, Option.map_none] at hm
+          rw [decodeUintBA, ← hm]
+          rfl
+      | some w =>
+          rw [h, Option.map_some] at hm
+          rw [decodeUintBA, ← hm]
+          by_cases hm256 : 256 ≤ m
+          · have hb : w.toNat < 2 ^ m :=
+              Nat.lt_of_lt_of_le w.toNat_lt (Nat.pow_le_pow_right (by omega) hm256)
+            simp [ValBA.toList, hm256, hb]
+          · by_cases hb : w.toNat < 2 ^ m <;> simp [ValBA.toList, hm256, hb]
   | int m =>
       rw [decodeBAVal, decodeBA]
       cases h : decodeIntBA ba off with

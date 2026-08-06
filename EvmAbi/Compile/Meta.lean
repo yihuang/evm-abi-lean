@@ -96,7 +96,7 @@ rather than given a definition of its own. -/
 
 /-- The compiled encoder of a leaf type, as a function. -/
 def leafFn : Ty → TermElabM Term
-  | .uint _ => `(fun v => EvmAbi.putUint v.val)
+  | .uint _ => `(fun v => EvmAbi.Builder.putWord v.val)
   | .int _ => `(fun v => EvmAbi.putInt v.val)
   | .bool => `(fun v => EvmAbi.putBool v)
   | .address => `(fun v => EvmAbi.putAddress v.val)
@@ -108,7 +108,7 @@ def leafFn : Ty → TermElabM Term
 /-- The compiled encoder of a leaf type, applied to a value. -/
 def leafApp (t : Ty) (x : Term) : TermElabM Term :=
   match t with
-  | .uint _ => `(EvmAbi.putUint ($x).val)
+  | .uint _ => `(EvmAbi.Builder.putWord ($x).val)
   | .int _ => `(EvmAbi.putInt ($x).val)
   | .bool => `(EvmAbi.putBool $x)
   | .address => `(EvmAbi.putAddress ($x).val)
@@ -151,7 +151,7 @@ def Node.proof (leafPf : Ty → TermElabM Term) : Node → TermElabM Term
   | .node _ _ thm => pure (mkIdent thm)
 
 /-- The node's encoder applied to a value — a leaf is applied *inline*, so
-compiled tuples read `putUint v.1.val` rather than a beta-redex. -/
+compiled tuples read `putWord v.1.val` rather than a beta-redex. -/
 def Node.appStx : Node → Term → TermElabM Term
   | .leaf t, x => leafApp t x
   | .node _ fn _, x => `($(mkIdent fn) $x)

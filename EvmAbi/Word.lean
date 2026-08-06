@@ -105,6 +105,29 @@ theorem natAtBA_eq (ba : ByteArray) (off : Nat) :
   · rw [if_neg h, if_neg (by omega : ¬ min 32 (ba.size - off) = 32)]
     rfl
 
+/-- The word at `off`, kept as limbs.  Same guard as `natAtBA`; what differs
+is that no `Nat` is built — that is the whole point of the `UInt256`-valued
+decoder, and asking this for its `toNat` gives the cost straight back. -/
+def wordAtBA (ba : ByteArray) (off : Nat) : Option UInt256 :=
+  if off + 32 ≤ ba.size then some (UInt256.ofBEByteArrayAt ba off) else none
+
+/-- **Bridge**: the limb read denotes the `Nat` read, so everything stated of
+`natAtBA` transports. -/
+theorem map_toNat_wordAtBA (ba : ByteArray) (off : Nat) :
+    (wordAtBA ba off).map UInt256.toNat = natAtBA ba off := by
+  unfold wordAtBA natAtBA
+  by_cases h : off + 32 ≤ ba.size
+  · rw [if_pos h, if_pos h, Option.map_some, UInt256.toNat_ofBEByteArrayAt ba off h]
+  · rw [if_neg h, if_neg h, Option.map_none]
+
+/-- At width 256 and above the bound on a `uintM` is vacuous — every word
+satisfies it.  Worth having as a lemma rather than a proof term at each
+decoder: `w.toNat` is what rebuilds the bignum the limbs exist to avoid, so
+the decoders test `256 ≤ m` first and never evaluate it. -/
+theorem toNat_lt_two_pow_of_le {m : Nat} (w : UInt256) (hm : 256 ≤ m) :
+    w.toNat < 2 ^ m :=
+  Nat.lt_of_lt_of_le w.toNat_lt (Nat.pow_le_pow_right (by omega) hm)
+
 /-- A word read out of a `ByteArray` is below `2 ^ 256`, like any word. -/
 theorem natAtBA_lt {ba : ByteArray} {off n : Nat} (h : natAtBA ba off = some n) :
     n < 2 ^ 256 := natAt_lt (by rwa [← natAtBA_eq])
