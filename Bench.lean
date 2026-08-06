@@ -243,11 +243,15 @@ The rows isolate that:
   anything: with the bignum gone, writing is 32 `ByteArray.push`es either
   way, which is what the floors below measure.
 
-Then two local pairs: what `Chunks.emitZeros` pays to write a dynamic
-payload's padding against one `copySlice` out of a zero buffer, and the two
-ways of moving 32 bytes.  The padding pair is a regression guard —
-`emitZeros_eq_fast` makes the two rows the same code, so they should agree,
-and a gap means the `@[csimp]` swap stopped reaching `emit`. -/
+Then three local groups: what `Chunks.emitZeros` pays to write a dynamic
+payload's padding against one `copySlice` out of a zero buffer, what an
+*empty* padding run costs, and the two ways of moving 32 bytes.
+
+Two of them are regression guards.  `emitZeros_eq_fast` makes the padding
+pair the same code, so the two rows should agree, and a gap means the
+`@[csimp]` swap stopped reaching `emit`.  `Builder.appendZeros` should put
+the empty run on the floor row, and drifting up towards the `zeros 0` row
+means the skip stopped happening. -/
 
 open Binary
 
@@ -314,6 +318,32 @@ def padByCopy (n seed : Nat) : Nat := Id.run do
     acc := Chunks.zeroBuf.copySlice 0 acc acc.size n false
   return acc.size % 7
 
+/-! ### the empty padding run
+
+A `bytesN 32`, and any `bytes` or `string` already a multiple of 32 long,
+pads by nothing — which is most values, since payloads are usually word
+aligned.  `Builder.appendZeros` skips the run there; these rows are what it
+skips. -/
+
+/-- 1000 distinct 32-byte payloads, so `32 - bs.size` is zero only at *run*
+time: as a literal the padding — and then the whole builder — would fold
+away. -/
+def padPayloads : Array ByteArray :=
+  (Array.range wordCount).map fun i => (List.replicate 32 (UInt8.ofNat i)).toByteArray
+
+/-- Write each payload with `mk` and run the builder.  The rows below vary
+only `mk`: the same bytes reached with the padding run built, skipped, or
+never asked for.
+
+`@[specialize]` is load-bearing.  Without it `mk` stays a closure called once
+per payload, which costs ~3 ns/word on rows that are 27 to 45 — enough to
+lift the floor and blur the guard. -/
+@[specialize] def padEmpty (mk : ByteArray → Builder) (seed : Nat) : Nat := Id.run do
+  let mut s := 0
+  for i in [0:wordCount] do
+    s := s + (mk padPayloads[(seed + i) % wordCount]!).run.size
+  return s
+
 /-- The other way to move 32 bytes: one `push` each.  The byte is hoisted out
 of the inner loop so the row times the pushes, not the arithmetic. -/
 def pushFloor (seed : Nat) : Nat := Id.run do
@@ -343,6 +373,12 @@ def benchWordCodec : IO Unit := do
   IO.println "-- 28 bytes of zero padding (the unaligned `bytes` tail)"
   timeWord "Chunks.emitZeros        " 200 (padByEmitZeros 28)
   timeWord "copySlice from zero buf " 200 (padByCopy 28)
+  IO.println "-- an empty padding run (the word-aligned payload)"
+  timeWord "b ++ zeros 0            " 200
+    (padEmpty fun bs => Builder.chunk bs ++ Builder.zeros (32 - bs.size))
+  timeWord "appendZeros b 0         " 200
+    (padEmpty fun bs => Builder.appendZeros (Builder.chunk bs) (32 - bs.size))
+  timeWord "payload alone (floor)   " 200 (padEmpty Builder.chunk)
   IO.println "-- the two ways of moving 32 bytes"
   timeWord "32x ByteArray.push      " 200 pushFloor
   timeWord "1x 32-byte copySlice    " 200 (padByCopy 32)
