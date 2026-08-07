@@ -40,9 +40,9 @@ def ValBA : Ty → Type
   | .bool => Bool
   | address => { n : Nat // n < 2 ^ 160 }
   | bytesN m => { bs : ByteArray // bs.size = m }
-  | bytes => { bs : ByteArray // bs.size < 2 ^ 256 }
-  | string => { s : String // s.toUTF8.size < 2 ^ 256 }
-  | array t => { vs : List (ValBA t) // vs.length < 2 ^ 256 }
+  | bytes => { bs : ByteArray // bs.size < 2 ^ 64 }
+  | string => { s : String // s.toUTF8.size < 2 ^ 64 }
+  | array t => { vs : List (ValBA t) // vs.length < 2 ^ 64 }
   | fixedArray t n => { vs : List (ValBA t) // vs.length = n }
   | tuple ts => TupleValBA ts
 

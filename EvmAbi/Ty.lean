@@ -26,12 +26,11 @@ Two technical points shape this module:
   `Val/TupleVal`, `isStatic/allStatic`, `headSize/headSizeSum`.
 
 * **`Val` is `@[reducible]`** so the dependent matches in `encode`/`decode`
-  see through the type index.  The dynamic-payload length bounds (every
-  length must fit its single 32-byte length word, else decoding reads a
-  wrapped length) are part of `Val` itself: `bytes`/`string`/`array` values
-  are subtypes carrying their own `< 2^256` bound, and containers inherit
-  their components' bounds through the recursion — no separate
-  well-formedness predicate exists.
+  see through the type index.  The dynamic-payload length bounds are part
+  of `Val` itself: `bytes`/`string`/`array` values are subtypes carrying
+  their own `< 2^64` bound, and containers inherit their components'
+  bounds through the recursion — no separate well-formedness predicate
+  exists.
 -/
 
 namespace EvmAbi
@@ -204,11 +203,14 @@ rejects them — so `packedSize` returns 0 for them. -/
 /- Values indexed by their ABI type, refined so that every inhabitant is
 encodable *and decodable*: the roundtrip holds for every `v : t.Val` of a
 valid `t`, with no side condition on the value.  Dynamic payloads carry
-their length bound in the subtype — every payload length must fit the
-single 32-byte length word that prefixes it, else the length word wraps
-modulo `2^256` and decoding reads a wrong length.  Containers inherit
-their components' bounds through the recursion, so no separate
-well-formedness predicate is needed.  (The roundtrip still assumes the
+their length bound in the subtype: it must fit a 64-bit word.  Soundness
+alone would only need `< 2^256`, the width of the length word past which
+it wraps; `2^64` is deliberately tighter, and a length word above it is
+rejected rather than believed.  Nothing is lost — a payload that long
+cannot be held in memory, let alone in a transaction — and every derived
+length stays inside a machine word.  Containers inherit their components'
+bounds through the recursion, so no separate well-formedness predicate is
+needed.  (The roundtrip still assumes the
 *total* encoding length is below `2^256`, so the offset words do not wrap
 either — an aggregate property no per-value refinement can express.)
 Tuples are right-nested products (`TupleVal`).  Marked `@[reducible]` so
@@ -223,9 +225,9 @@ def Val : Ty → Type
   | bool => Bool
   | address => { n : Nat // n < 2 ^ 160 }
   | bytesN m => { bs : List UInt8 // bs.length = m }
-  | bytes => { bs : List UInt8 // bs.length < 2 ^ 256 }
-  | string => { s : String // s.toUTF8.size < 2 ^ 256 }
-  | array t => { vs : List t.Val // vs.length < 2 ^ 256 }
+  | bytes => { bs : List UInt8 // bs.length < 2 ^ 64 }
+  | string => { s : String // s.toUTF8.size < 2 ^ 64 }
+  | array t => { vs : List t.Val // vs.length < 2 ^ 64 }
   | fixedArray t n => { vs : List t.Val // vs.length = n }
   | tuple ts => TupleVal ts
 
