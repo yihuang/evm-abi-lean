@@ -151,7 +151,8 @@ reasoned about.
   off).l3` — in place of four bare `UInt64` locals: no change at all on any
   row, twice measured. Assembling the structure costs about what the bignum
   accumulation cost, so the limb read only pays when nothing is allocated to
-  hold the limbs. `Bench`'s `limbs (ceiling)` row is the shape that works.
+  hold the limbs. `Bench`'s `limbs (checked reads)` row is the shape that works
+  — bare locals, no structure.
 * **A `UInt64` length in place of the `Nat` one** — sound, the `2 ^ 64` cap being
   exactly `UInt64.size`. The twelve `Nat` ops an element in
   `decodeBytesPrefixBAVal` go 4.3 → 1.27 ns, 0.95 of it `len < 2 ^ 64` comparing
