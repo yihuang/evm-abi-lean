@@ -225,22 +225,28 @@ half of the encoder and, for ordinary calldata, much the larger half:
 addresses, token amounts and hashes are all full-width, and `uint256[]` runs
 ~20× the per-element cost of `bool[]` through the very same layout.
 
-An ABI word is a `UInt256`, which wraps `BitVec 256` = `Fin (2 ^ 256)` =
-`Nat`.  Above `2 ^ 63` that is a heap GMP bignum, so each of the four
-`n >>> 64` steps `Binary.Fast`'s chunked codec takes per word allocates, as
-does each `acc <<< 64` on the way back in.
+An ABI word *was* a `Nat` — `UInt256` wrapped `BitVec 256` = `Fin (2 ^ 256)`,
+a heap GMP bignum above `2 ^ 63`, so every step of the codec allocated at both
+ends.  `UInt256` is four `UInt64` limbs since lean-binary#5, which settled the
+write side: it goes straight from the limbs and no longer touches a bignum at
+any width, and the two write rows below have converged accordingly.
+
+Reading is the half still to close.  `Binary.decodeBEBytesFrom` accumulates
+into a `Nat`, so each `acc <<< 64` on the way back in allocates for a
+full-width word — which is what separates the **wide** and **small** read rows.
 
 The rows isolate that:
 
 * **wide** — full-width words, the case the rest of the benchmark uses.
 * **small** — the same codec on words below `2 ^ 63`, where `Nat` is
-  unboxed.  Wide minus small is the bignum cost and nothing else.
-* **limbs** (read only) — the ceiling: the same 32 bytes read straight into
-  four `UInt64`s, i.e. what the codec would cost if `UInt256` were a
-  four-limb structure rather than a `Nat`.  This is a `lean-binary`
-  question, not an `EvmAbi` one, which is why it is a ceiling here and not a
-  patch.  There is no matching *write* row because it would not say
-  anything: with the bignum gone, writing is 32 `ByteArray.push`es either
+  unboxed.  Wide minus small is the bignum cost and nothing else, so on the
+  *read* rows it is most of the time and on the *write* rows it is now
+  nothing: writing goes straight from the limbs.
+* **limbs** (read only) — the same 32 bytes read straight into four
+  `UInt64`s.  Not a ceiling: it is written with `ba[i]!`, and
+  `EvmAbi.beWord8At` takes its in-bounds proof as an argument and reads
+  below this row.  There is no matching *write* row because it would not say
+  anything — with the bignum gone, writing is 32 `ByteArray.push`es either
   way, which is what the floors below measure.
 
 Then three local groups: what `Chunks.emitZeros` pays to write a dynamic
@@ -366,7 +372,7 @@ def timeWord (label : String) (n : Nat) (act : Nat → Nat) : IO Unit := do
 def benchWordCodec : IO Unit := do
   IO.println s!"== the word codec ({wordCount} words per op) =="
   IO.println "-- write one uint256 as 32 big-endian bytes"
-  timeWord "wide  (bignum)          " 200 (encodeWords wideWords)
+  timeWord "wide                    " 200 (encodeWords wideWords)
   timeWord "small (< 2^63)          " 200 (encodeWords smallWords)
   IO.println "-- read one uint256 from 32 big-endian bytes"
   timeWord "wide  (bignum)          " 200 (decodeWords wideBuf)
