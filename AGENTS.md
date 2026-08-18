@@ -6,8 +6,8 @@ Working notes for AI agents editing this repository: Lean 4 ABI codec
 ## Architecture in one paragraph
 
 The library is a proof-first ABI codec with two layers.  The **spec layer**
-(`EvmAbi.Spec`, implemented by `EvmAbi.Spec` and its `Roundtrip`/`Sound`/
-`Strict` families) is the proof surface: `Spec.put` builds a `Ty.Val` into
+(`EvmAbi.Spec` with its `Roundtrip`/`Sound`/`Strict` theorem families) is
+the proof surface: `Spec.put` builds a `Ty.Val` into
 a `Builder` (`EvmAbi.Builder`: a chunk tree with `O(1)` `++` and a cached
 size), materialized two ways — `Spec.encode = (put t v).toList` is the
 `List UInt8` specification every theorem is stated over, and
@@ -39,7 +39,7 @@ delegation (`Spec.decodeElems` / `Spec.decode_static_append`).
 `Get2` with the two cursors as naturals into one buffer — and pairs every
 definition with an agreement lemma under `off ↦ ba.data.toList.drop off`,
 so the list families transport rather than being restated.  Reads there go
-through `natAtBA` / `windowList`, never through a slice.  `EvmAbi.Codec`
+through `natAtBA` / `windowList`, never through a slice.  `EvmAbi.Spec`
 holds the spec codec proper (defs, helper packages, static delegation); the
 theorem families live in `EvmAbi.Spec.Roundtrip` / `EvmAbi.Spec.Sound` /
 `EvmAbi.Spec.Strict` (each family is one self-contained `mutual` block, all

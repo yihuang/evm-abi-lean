@@ -34,7 +34,7 @@ data_toList_run : b.run.data.toList = b.toList
 ```
 
 is what makes the layer useful: any `List UInt8` statement transports to the
-`ByteArray` that `run` produces without reproving anything.  `EvmAbi.Codec`
+`ByteArray` that `run` produces without reproving anything.  `EvmAbi.Spec`
 writes its `put` against this one builder, so `encode = (put t v).toList` and
 `encodeByteArray = (put t v).run` are the same encoder materialized two ways
 — there is no second encoder to keep in step.

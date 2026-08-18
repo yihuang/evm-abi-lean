@@ -183,7 +183,7 @@ Dynamic payloads (`bytes`, `string`, `T[]`) carry a `< 2^64` length bound
 in their subtype, and the decoders enforce it — see `Ty.Val` for why that
 is tighter than soundness needs.
 
-### 3.3 Codec Architecture (`Codec.lean`)
+### 3.3 Codec Architecture (`Spec.lean`)
 
 Encoding and decoding are defined by structural recursion on `Ty`:
 
@@ -267,21 +267,21 @@ mechanism to delimit variable-length elements, so `decodePacked` returns
 
 ### 3.6 Decoder Proof Structure
 
-The decoder's theorems live in `Codec.lean` alongside the encoder; each
+The decoder's theorems live in `Spec.lean` alongside the encoder; each
 theorem family is a self-contained `mutual` block, so the later families
-were moved to sibling modules: `Codec.Roundtrip`, `Codec.Sound`,
-`Codec.Strict`.
+were moved to sibling modules: `Spec.Roundtrip`, `Spec.Sound`,
+`Spec.Strict`.
 
 | Section | Module | Content |
 |---|---|---|
-| Encoder packages A/B | `Codec` | Head sizes, static encoding lengths, alignment (`encode_length_static`, `wf_map_partOf`) |
-| Package C | `Codec` | Appended-buffer read lemmas (`decodeUint_append`, …) and the layout lemmas `drop_headPartOf_static` |
-| Package D | `Codec` | Locating dynamic tails (`drop_tail_partOf_dynamic`, `natAt_offset_partOf_dynamic`) |
-| Decoder helpers | `Codec` | Head-size and word-recovery lemmas the decoder proofs need |
-| **Static delegation** | `Codec` | `decode_static_append` family — static types carry no offset words, so the roundtrips are bound-free |
-| **Roundtrip** | `Codec.Roundtrip` | `decode_roundtrip` family — every encoding decodes back, leaving the suffix untouched |
-| **Soundness** | `Codec.Sound` | `decode_sound` family — the decoder only produces encodings |
-| **Strict API** | `Codec.Strict` | `Spec.decodeStrict`, `Spec.IsCanonical`, and the capstones |
+| Encoder packages A/B | `Spec` | Head sizes, static encoding lengths, alignment (`encode_length_static`, `wf_map_partOf`) |
+| Package C | `Spec` | Appended-buffer read lemmas (`decodeUint_append`, …) and the layout lemmas `drop_headPartOf_static` |
+| Package D | `Spec` | Locating dynamic tails (`drop_tail_partOf_dynamic`, `natAt_offset_partOf_dynamic`) |
+| Decoder helpers | `Spec` | Head-size and word-recovery lemmas the decoder proofs need |
+| **Static delegation** | `Spec` | `decode_static_append` family — static types carry no offset words, so the roundtrips are bound-free |
+| **Roundtrip** | `Spec.Roundtrip` | `decode_roundtrip` family — every encoding decodes back, leaving the suffix untouched |
+| **Soundness** | `Spec.Sound` | `decode_sound` family — the decoder only produces encodings |
+| **Strict API** | `Spec.Strict` | `Spec.decodeStrict`, `Spec.IsCanonical`, and the capstones |
 | **Runtime codec** | `Codec` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), the `ValBA` walkers, the private `decodeBA` proof bridge, and the agreement family (`decodeBAVal_eq`, `decodeStrictBAVal_eq`, `decodeStrictBA_eq`) that carries the rows above onto the `ByteArray` side |
 
 **Static delegation** is the first milestone: for static types the frontier
@@ -347,7 +347,7 @@ exactly that and was *slower* than the specification encoder.  `size_eq` is a
 intermediate lists.
 
 There is no second encoder to keep in step: `put` — the `Builder`-valued
-encoder `Codec.lean` already defines — *is* the executable one.  The two
+encoder `Spec.lean` already defines — *is* the executable one.  The two
 entry points are its two materializations,
 
 ```lean
@@ -367,7 +367,7 @@ That is the entire bridge — no mirrored definitions, no mutual induction
 relating them.  Every result about `Spec.encode` transports by rewriting, so
 `decode_encodeByteArray`, `decode_encodeByteArray_static`,
 `isCanonical_encodeByteArray` and `decodeStrict_encodeByteArray` are three
-lines each in `Codec/Strict.lean`.  The runtime encoder over `ValBA` is the
+lines each in `Spec/Strict.lean`.  The runtime encoder over `ValBA` is the
 same layout with `chunk` leaves, and `toList_putBA` gives the analogous
 bridge to `Spec.encode` (`EvmAbi.Codec`).
 
@@ -637,7 +637,7 @@ values, and the `decreasing_tactic` discharges every goal.
 └──────────────────────┬───────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────┐
-│                  Codec.lean                   │
+│                  Spec.lean                    │
 │  Spec.encode (mutual with partOf / partsOfTuple)   │
 │  Spec.decode (Get2 walkers decodeElem/Elems/Tuple) │
 │  roundtrip / soundness / static delegation    │

@@ -296,7 +296,7 @@ abi_codec transfer "transfer(address to, uint256 amount)"
 
 #check @transfer.encode        -- ValBA transfer.ty → ByteArray
 #check @transfer.decodeStrict  -- ByteArray → Option (ValBA transfer.ty)
-#check @transfer.encode_eq     -- ∀ v, transfer.encode v = EvmAbi.encode transfer.ty v
+#check @transfer.encode_eq     -- ∀ v, transfer.encode v = EvmAbi.Codec.encode transfer.ty v
 #check @transfer.decodeStrict_eq
 #check @transfer.roundtrip     -- ∀ v, … → transfer.decodeStrict (transfer.encode v) = some v
 ```
@@ -444,7 +444,7 @@ The proof is built in incremental layers, each reusable independently:
 | **6. Static primitives** | `Static` | Standalone codecs for `uintM`, `intM`, `bool`, `address`, `bytesN`; strict bool/bytesN decoders |
 | **7. Dynamic primitives** | `Dynamic` | Standalone codecs for `bytes`, `string`; prefix-tolerant decoder variant |
 | **8. Head/tail combinator** | `Parts` | The core ABI layout abstraction (`Part`, `encodeParts`, offset-correctness theorems); type-independent |
-| **9. Spec codec** | `Codec` + `Codec.Roundtrip` / `Codec.Sound` / `Codec.Strict` | `Ty`-indexed `Spec.encode` (the `List UInt8` specification) and `Spec.encodeByteArray` (the same builder run into a `ByteArray`); the linear decoder `Spec.decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); bound-free static delegation in `Codec`; roundtrip and soundness families in their own files; strict API `Spec.decodeStrict`/`Spec.IsCanonical` and the capstones |
+| **9. Spec codec** | `Spec` + `Spec.Roundtrip` / `Spec.Sound` / `Spec.Strict` | `Ty`-indexed `Spec.encode` (the `List UInt8` specification) and `Spec.encodeByteArray` (the same builder run into a `ByteArray`); the linear decoder `Spec.decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); bound-free static delegation in `Spec`; roundtrip and soundness families in their own files; strict API `Spec.decodeStrict`/`Spec.IsCanonical` and the capstones |
 | **10. Runtime codec** | `Codec` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), the `ValBA` walkers, the `toList_putBA` encoder bridge, the agreement lemmas (`decodeBAVal_eq`, `decodeStrictBAVal_eq`, `decodeStrictBA_eq`) that carry the `Spec` theorems across, `ValBA.toList_injective` that carries conclusions back, and the runtime capstones (`decodeStrict_encode`, `encode_of_decodeStrict`, `decodeStrict_eq_some_iff`, `isCanonical_iff`) |
 | **11. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
 | **12. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
