@@ -6,7 +6,7 @@ Working notes for AI agents editing this repository: Lean 4 ABI codec
 ## Architecture in one paragraph
 
 The library is a proof-first ABI codec with two layers.  The **spec layer**
-(`EvmAbi.Spec`, implemented by `EvmAbi.Codec` and its `Roundtrip`/`Sound`/
+(`EvmAbi.Spec`, implemented by `EvmAbi.Spec` and its `Roundtrip`/`Sound`/
 `Strict` families) is the proof surface: `Spec.put` builds a `Ty.Val` into
 a `Builder` (`EvmAbi.Builder`: a chunk tree with `O(1)` `++` and a cached
 size), materialized two ways — `Spec.encode = (put t v).toList` is the
@@ -24,7 +24,7 @@ theorems; `Spec.IsCanonical` / `Spec.decodeStrict` and the capstones
 (`Spec.isCanonical_iff`, `Spec.decodeStrict_eq_some_iff`) form the strict
 API.
 
-The **runtime layer** (`EvmAbi.Codec.Runtime`) is what users run: `encode`
+The **runtime layer** (`EvmAbi.Codec`) is what users run: `encode`
 over `ValBA` values into a `ByteArray`, `decode` / `decodeStrict` over a
 `ByteArray` into `ValBA` values, and `IsCanonical`.  It is tied to the spec
 by `toList_putBA` (runtime encoder denotes the spec encoder of the
@@ -41,15 +41,16 @@ definition with an agreement lemma under `off ↦ ba.data.toList.drop off`,
 so the list families transport rather than being restated.  Reads there go
 through `natAtBA` / `windowList`, never through a slice.  `EvmAbi.Codec`
 holds the spec codec proper (defs, helper packages, static delegation); the
-theorem families live in `EvmAbi.Codec.Roundtrip` / `EvmAbi.Codec.Sound` /
-`EvmAbi.Codec.Strict` (each family is one self-contained `mutual` block).
+theorem families live in `EvmAbi.Spec.Roundtrip` / `EvmAbi.Spec.Sound` /
+`EvmAbi.Spec.Strict` (each family is one self-contained `mutual` block, all
+in `namespace EvmAbi.Spec`).
 
 ## Style rules
 
 * **Naming:** the runtime API is primary and unsuffixed (`encode`,
   `decode`, `decodeStrict`, `IsCanonical`); the list/spec API lives in the
   `Spec` namespace (`Spec.encode`, `Spec.decodeStrict`, …).  New
-  `ByteArray`/`ValBA` work goes in `EvmAbi.Codec.Runtime` or
+  `ByteArray`/`ValBA` work goes in `EvmAbi.Codec` or
   `EvmAbi.Codec.ByteArray` and must ship with its agreement lemma against
   the `Spec` counterpart.
 * **Small lemmas, short proofs.**  If a proof grows past ~30 lines or

@@ -1,15 +1,15 @@
-import EvmAbi.Codec
-import EvmAbi.Codec.Strict
+import EvmAbi.Spec
+import EvmAbi.Spec.Strict
 import EvmAbi.ValBA
 
 /-!
 # EvmAbi.Codec.ByteArray
 
-The runtime decoder internals: primitive reads **at an offset in a
-`ByteArray`**, the `ValBA` walkers, and the agreement lemmas that transport
-the `EvmAbi.Spec` theorems onto them.  The public runtime API
-(`EvmAbi.encode`, `EvmAbi.decode`, `EvmAbi.decodeStrict`,
-`EvmAbi.IsCanonical`) lives in `EvmAbi.Codec.Runtime`.
+The runtime decoder internals, nested under `EvmAbi.Codec`: primitive reads
+**at an offset in a `ByteArray`**, the `ValBA` walkers, and the agreement
+lemmas that transport the `EvmAbi.Spec` theorems onto them.  The public
+runtime API (`EvmAbi.encode`, `EvmAbi.decode`, `EvmAbi.decodeStrict`,
+`EvmAbi.IsCanonical`) lives in `EvmAbi.Codec`.
 
 Every primitive is paired with an agreement lemma against its `EvmAbi.Spec`
 counterpart under the translation `offset off ↦ ba.data.toList.drop off`,
@@ -18,7 +18,7 @@ so anything proved about the list primitives transports.  The middle
 between the `ValBA` walkers and the list decoder.
 -/
 
-namespace EvmAbi
+namespace EvmAbi.Codec.ByteArray
 
 open Ty
 open Binary
@@ -1168,4 +1168,4 @@ theorem decodeStrictBA_eq_some_iff (t : Ty) (hv : t.Valid) (ba : ByteArray)
     rw [← he]
     exact decodeStrictBA_encodeByteArray t hv v (by rw [he]; exact hb)
 
-end EvmAbi
+end EvmAbi.Codec.ByteArray

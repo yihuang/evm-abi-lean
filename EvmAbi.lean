@@ -5,12 +5,11 @@ import EvmAbi.Ty
 import EvmAbi.Builder
 import EvmAbi.Static
 import EvmAbi.Dynamic
+import EvmAbi.Spec
+import EvmAbi.Spec.Roundtrip
+import EvmAbi.Spec.Sound
+import EvmAbi.Spec.Strict
 import EvmAbi.Codec
-import EvmAbi.Codec.Roundtrip
-import EvmAbi.Codec.Sound
-import EvmAbi.Codec.Strict
-import EvmAbi.Codec.ByteArray
-import EvmAbi.Codec.Runtime
 import EvmAbi.ValBA
 import EvmAbi.Parts
 import EvmAbi.Packed
@@ -41,18 +40,20 @@ the historical build order, nodes 1–8):
 * `EvmAbi.Static`  — static primitives: `uintM`, `intM`, `bool`, `address`,
                   `bytesN`, with roundtrips
 * `EvmAbi.Dynamic` — dynamic `bytes` / `string` with roundtrips, prefix decoder
-* `EvmAbi.Spec`    — the specification codec (`EvmAbi.Codec` and its
+* `EvmAbi.Spec`    — the specification codec (`EvmAbi.Spec` and its
                   `Roundtrip` / `Sound` / `Strict` families): list-based
                   `Spec.encode` / `Spec.decode` / `Spec.decodeStrict` and
                   `Spec.IsCanonical`, the surface every theorem is stated
                   over
-* `EvmAbi.Codec.Runtime` — the **runtime codec users run**: `encode`
+* `EvmAbi.Codec`    — the **runtime codec users run**: `encode`
                   (`ByteArray` out), `decode` / `decodeStrict` (`ValBA`
                   values out), `IsCanonical`, plus the encoder agreement
                   `toList_putBA` that ties it to `Spec`
-* `EvmAbi.Codec.ByteArray` — runtime decoder internals: offset primitives,
-                  the `ValBA` walkers, and the agreement lemmas that carry
-                  the `Spec` theorems onto the `ByteArray` side
+* `EvmAbi.Codec.ByteArray` — internal runtime decoder details:
+                  offset primitives, the `ValBA` walkers, and the agreement
+                  lemmas that carry the `Spec` theorems onto the `ByteArray`
+                  side.  Nested under `EvmAbi.Codec` because it is an
+                  implementation detail of the runtime layer
 * `EvmAbi.Parts`   — head/tail combinator: `Part`, `encodeParts`, offset theorems
 * `EvmAbi.Packed`  — packed ABI (`abi.encodePacked`, Solidity's non-standard
                   packed mode): tight scalars, in-place dynamic payloads,
@@ -76,3 +77,15 @@ commands — are deliberately *not* re-exported here: they need `import Lean`,
 and this library is otherwise free of the Lean frontend.  Import them
 explicitly to use the macros.
 -/
+
+namespace EvmAbi
+
+-- Re-export the user-facing runtime API at the root namespace, as documented:
+-- users write `EvmAbi.encode`, `EvmAbi.decode`, `EvmAbi.decodeStrict`, and
+-- `EvmAbi.IsCanonical` without opening `EvmAbi.Codec`.
+export EvmAbi.Codec
+  (encode decode decodeStrict IsCanonical
+   decodeStrict_encode encode_of_decodeStrict
+   decodeStrict_eq_some_iff isCanonical_iff)
+
+end EvmAbi

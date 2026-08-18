@@ -1,6 +1,6 @@
 import EvmAbi.Ty
 import EvmAbi.Bytes
-import EvmAbi.Codec
+import EvmAbi.Spec
 import Binary.UInt256
 
 /-!

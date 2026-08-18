@@ -115,7 +115,7 @@ complete type grammar.
    emitter only ever applies existing lemmas; nothing it prints is trusted
    (§3.8).
 
-The **runtime layer** (`EvmAbi.Codec.Runtime`) is the user-facing side:
+The **runtime layer** (`EvmAbi.Codec`) is the user-facing side:
 `encode` (`ValBA` values → `ByteArray`), `decode` / `decodeStrict`
 (`ByteArray` → `ValBA` values) and `IsCanonical`.  Its encoder is the same
 layout over packed payloads, and `toList_putBA` proves it denotes the spec
@@ -278,7 +278,7 @@ were moved to sibling modules: `Codec.Roundtrip`, `Codec.Sound`,
 | **Roundtrip** | `Codec.Roundtrip` | `decode_roundtrip` family — every encoding decodes back, leaving the suffix untouched |
 | **Soundness** | `Codec.Sound` | `decode_sound` family — the decoder only produces encodings |
 | **Strict API** | `Codec.Strict` | `Spec.decodeStrict`, `Spec.IsCanonical`, and the capstones |
-| **Runtime codec** | `Codec.Runtime` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), the `ValBA` walkers, the private `decodeBA` proof bridge, and the agreement family (`decodeBAVal_eq`, `decodeStrictBAVal_eq`, `decodeStrictBA_eq`) that carries the rows above onto the `ByteArray` side |
+| **Runtime codec** | `Codec` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), the `ValBA` walkers, the private `decodeBA` proof bridge, and the agreement family (`decodeBAVal_eq`, `decodeStrictBAVal_eq`, `decodeStrictBA_eq`) that carries the rows above onto the `ByteArray` side |
 
 **Static delegation** is the first milestone: for static types the frontier
 never moves and the tail cursor is never read, so the roundtrips hold
@@ -365,7 +365,7 @@ relating them.  Every result about `Spec.encode` transports by rewriting, so
 `isCanonical_encodeByteArray` and `decodeStrict_encodeByteArray` are three
 lines each in `Codec/Strict.lean`.  The runtime encoder over `ValBA` is the
 same layout with `chunk` leaves, and `toList_putBA` gives the analogous
-bridge to `Spec.encode` (`EvmAbi.Codec.Runtime`).
+bridge to `Spec.encode` (`EvmAbi.Codec`).
 
 The one place the layout touches the builder's *representation* rather than
 its denotation is `Part.headSize`/`tailSize` and `putHeads`, which read the
@@ -521,10 +521,10 @@ The decoder is the mirror image:
 
 ```lean
 def callArgs.read : ByteArray → Nat → Option (EvmAbi.ValBA … × Nat) :=
-  EvmAbi.Compile.readTuple 64
-    (EvmAbi.Compile.cons EvmAbi.Compile.elemStatic EvmAbi.Compile.readAddress
-      (EvmAbi.Compile.cons EvmAbi.Compile.elemStatic (EvmAbi.Compile.readUint 256)
-        EvmAbi.Compile.consNil))
+  EvmAbi.Compile.Decode.readTuple 64
+    (EvmAbi.Compile.Decode.cons EvmAbi.Compile.Decode.elemStatic EvmAbi.Compile.Decode.readAddress
+      (EvmAbi.Compile.Decode.cons EvmAbi.Compile.Decode.elemStatic (EvmAbi.Compile.Decode.readUint 256)
+        EvmAbi.Compile.Decode.consNil))
 ```
 
 `readTuple 64` is the recursive clause of the generic decoder with its head
@@ -546,7 +546,7 @@ def samArgs.node0 : EvmAbi.ValBA (EvmAbi.Ty.array (EvmAbi.Ty.uint 256)) → EvmA
 
 def samArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple [EvmAbi.Ty.bytes, EvmAbi.Ty.bool, …]) → EvmAbi.Builder :=
   fun v =>
-  ((((EvmAbi.Compile.Acc.start 96).dyn (EvmAbi.putBytesBA (v.1).val)).static (EvmAbi.putBool (v.2.1))).dyn
+  ((((EvmAbi.Compile.Acc.start 96).dyn (EvmAbi.Codec.putBytesBA (v.1).val)).static (EvmAbi.putBool (v.2.1))).dyn
       (samArgs.node0 (v.2.2.1))).finish
 ```
 

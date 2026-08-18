@@ -37,7 +37,7 @@ open EvmAbi.Compile.Meta
 abi_encoder transferArgs "transfer(address to, uint256 amount)"
 
 #check @transferArgs      -- ValBA transferArgs.ty → ByteArray
-#check @transferArgs_eq   -- ∀ v, transferArgs v = EvmAbi.encode transferArgs.ty v
+#check @transferArgs_eq   -- ∀ v, transferArgs v = EvmAbi.Codec.encode transferArgs.ty v
 #print transferArgs.put   -- the generated code
 ```
 
@@ -58,8 +58,8 @@ abi_codec flags "(bool, bool)" trace
 -- │theorem flags.put_denotes : …
 -- ┌─ emitted flags.read
 -- │def flags.read : … :=
--- │  EvmAbi.Compile.readTuple 64
--- │    (EvmAbi.Compile.cons EvmAbi.Compile.elemStatic EvmAbi.Compile.readBool
+-- │  EvmAbi.Compile.Decode.readTuple 64
+-- │    (EvmAbi.Compile.Decode.cons EvmAbi.Compile.Decode.elemStatic EvmAbi.Compile.Decode.readBool
 -- │      (…consNil))
 -- │theorem flags.read_reads : …
 ```
@@ -78,7 +78,7 @@ The declarations the command emits, for a name `foo`:
 | `foo.node…_denotes` | `Denotes` for each of those — its correctness |
 | `foo.put` / `foo.put_denotes` | the compiled encoder in builder form |
 | `foo` | the encoder users call: `ValBA foo.ty → ByteArray` |
-| `foo_eq` | `foo v = EvmAbi.encode foo.ty v` |
+| `foo_eq` | `foo v = EvmAbi.Codec.encode foo.ty v` |
 | `foo_decodeStrict` | the roundtrip, inherited from `decodeStrict_encode` |
 -/
 
@@ -100,8 +100,8 @@ def leafFn : Ty → TermElabM Term
   | .int _ => `(fun v => EvmAbi.putInt v.val)
   | .bool => `(fun v => EvmAbi.putBool v)
   | .address => `(fun v => EvmAbi.putAddress v.val)
-  | .bytesN _ => `(fun v => EvmAbi.putBytesNBA v.val)
-  | .bytes => `(fun v => EvmAbi.putBytesBA v.val)
+  | .bytesN _ => `(fun v => EvmAbi.Codec.putBytesNBA v.val)
+  | .bytes => `(fun v => EvmAbi.Codec.putBytesBA v.val)
   | .string => `(fun v => EvmAbi.putString v.val)
   | t => throwError "abi_encoder: {repr t} is not a leaf type"
 
@@ -112,8 +112,8 @@ def leafApp (t : Ty) (x : Term) : TermElabM Term :=
   | .int _ => `(EvmAbi.putInt ($x).val)
   | .bool => `(EvmAbi.putBool $x)
   | .address => `(EvmAbi.putAddress ($x).val)
-  | .bytesN _ => `(EvmAbi.putBytesNBA ($x).val)
-  | .bytes => `(EvmAbi.putBytesBA ($x).val)
+  | .bytesN _ => `(EvmAbi.Codec.putBytesNBA ($x).val)
+  | .bytes => `(EvmAbi.Codec.putBytesBA ($x).val)
   | .string => `(EvmAbi.putString ($x).val)
   | t => throwError "abi_encoder: {repr t} is not a leaf type"
 
@@ -202,7 +202,7 @@ private def decSig (tyStx : Term) : TermElabM Term :=
   `(ByteArray → Nat → Option (EvmAbi.ValBA $tyStx × Nat))
 
 private def decContract (tyStx : Term) (fn : Name) : TermElabM Term :=
-  `(EvmAbi.Compile.Reads $tyStx $(mkIdent fn))
+  `(EvmAbi.Compile.Decode.Reads $tyStx $(mkIdent fn))
 
 /-- The names of the `i`-th compiled node: `foo.node3` and `foo.node3_denotes`
 (`dnode`/`_reads` for a decoder), unless this is the root, which is named. -/
@@ -314,24 +314,24 @@ to numerals are justified by `rfl` against `Ty.headSize`/`headSizeSum`. -/
 
 /-- The reader of a leaf type. -/
 def leafRead : Ty → TermElabM Term
-  | .uint m => `(EvmAbi.Compile.readUint $(quote m))
-  | .int m => `(EvmAbi.Compile.readInt $(quote m))
-  | .bool => `(EvmAbi.Compile.readBool)
-  | .address => `(EvmAbi.Compile.readAddress)
-  | .bytesN m => `(EvmAbi.Compile.readBytesN $(quote m))
-  | .bytes => `(EvmAbi.Compile.readBytes)
-  | .string => `(EvmAbi.Compile.readString)
+  | .uint m => `(EvmAbi.Compile.Decode.readUint $(quote m))
+  | .int m => `(EvmAbi.Compile.Decode.readInt $(quote m))
+  | .bool => `(EvmAbi.Compile.Decode.readBool)
+  | .address => `(EvmAbi.Compile.Decode.readAddress)
+  | .bytesN m => `(EvmAbi.Compile.Decode.readBytesN $(quote m))
+  | .bytes => `(EvmAbi.Compile.Decode.readBytes)
+  | .string => `(EvmAbi.Compile.Decode.readString)
   | t => throwError "abi_decoder: {repr t} is not a leaf type"
 
 /-- The correctness of a leaf's reader. -/
 def leafReadProof : Ty → TermElabM Term
-  | .uint m => `(EvmAbi.Compile.reads_uint $(quote m))
-  | .int m => `(EvmAbi.Compile.reads_int $(quote m))
-  | .bool => `(EvmAbi.Compile.reads_bool)
-  | .address => `(EvmAbi.Compile.reads_address)
-  | .bytesN m => `(EvmAbi.Compile.reads_bytesN $(quote m))
-  | .bytes => `(EvmAbi.Compile.reads_bytes)
-  | .string => `(EvmAbi.Compile.reads_string)
+  | .uint m => `(EvmAbi.Compile.Decode.reads_uint $(quote m))
+  | .int m => `(EvmAbi.Compile.Decode.reads_int $(quote m))
+  | .bool => `(EvmAbi.Compile.Decode.reads_bool)
+  | .address => `(EvmAbi.Compile.Decode.reads_address)
+  | .bytesN m => `(EvmAbi.Compile.Decode.reads_bytesN $(quote m))
+  | .bytes => `(EvmAbi.Compile.Decode.reads_bytes)
+  | .string => `(EvmAbi.Compile.Decode.reads_string)
   | t => throwError "abi_decoder: {repr t} is not a leaf type"
 
 /-- How one component of type `t` is read — `elemStatic` or `elemDyn` — and
@@ -340,11 +340,11 @@ the only place the static/dynamic split survives compilation: the tuple chain
 and the element loop are the same code either way. -/
 def elemReader (t : Ty) (dp : Term) : TermElabM (Term × Term) := do
   if t.isStatic then
-    return (← `(EvmAbi.Compile.elemStatic),
-      ← `(EvmAbi.Compile.elemStatic_eq (by decide) $dp))
+    return (← `(EvmAbi.Compile.Decode.elemStatic),
+      ← `(EvmAbi.Compile.Decode.elemStatic_eq (by decide) $dp))
   else
-    return (← `(EvmAbi.Compile.elemDyn),
-      ← `(EvmAbi.Compile.elemDyn_eq (by decide) $dp))
+    return (← `(EvmAbi.Compile.Decode.elemDyn),
+      ← `(EvmAbi.Compile.Decode.elemDyn_eq (by decide) $dp))
 
 /-- Compile a decoder for one type: a definition (and its `Reads` theorem)
 per compound sub-type, bottom up. -/
@@ -363,14 +363,14 @@ private partial def compileDec (root : Name) (trace : Bool) (t : Ty) (i : Nat)
       -- the reader the loop runs is picked here, not per element at run time
       let (mk, erPf) ← liftTermElabM (elemReader e elemPf)
       let (loop, loopPf) ← liftTermElabM do
-        pure (← `(EvmAbi.Compile.elems $mk $elemRead), ← `(EvmAbi.Compile.elems_eq $erPf))
+        pure (← `(EvmAbi.Compile.Decode.elems $mk $elemRead), ← `(EvmAbi.Compile.Decode.elems_eq $erPf))
       let (body, proof) ← liftTermElabM (do
         if isArray then
-          pure (← `(EvmAbi.Compile.readArray $hs $loop),
-            ← `(EvmAbi.Compile.reads_array rfl $loopPf))
+          pure (← `(EvmAbi.Compile.Decode.readArray $hs $loop),
+            ← `(EvmAbi.Compile.Decode.reads_array rfl $loopPf))
         else
-          pure (← `(EvmAbi.Compile.readFixedArray $hs $loop),
-            ← `(EvmAbi.Compile.reads_fixedArray rfl $loopPf)))
+          pure (← `(EvmAbi.Compile.Decode.readFixedArray $hs $loop),
+            ← `(EvmAbi.Compile.Decode.reads_fixedArray rfl $loopPf)))
       emitNode trace fn thm (← liftTermElabM (decSig tyStx)) (← liftTermElabM (decContract tyStx fn))
         body proof
       return (.node t fn thm, i + 1)
@@ -388,14 +388,14 @@ private partial def compileDec (root : Name) (trace : Bool) (t : Ty) (i : Nat)
         -- the component chain, built from the right: each link knows at
         -- compile time whether its component sits in the head or behind an
         -- offset word
-        let mut chain ← `(EvmAbi.Compile.consNil)
-        let mut chainPf ← `(EvmAbi.Compile.consNil_eq)
+        let mut chain ← `(EvmAbi.Compile.Decode.consNil)
+        let mut chainPf ← `(EvmAbi.Compile.Decode.consNil_eq)
         for (c, cn) in (ts.zip nodes.toList).reverse do
           let (mk, erPf) ← elemReader c (← cn.proof leafReadProof)
-          chain ← `(EvmAbi.Compile.cons $mk $(← cn.code leafRead) $chain)
-          chainPf ← `(EvmAbi.Compile.cons_eq $erPf $chainPf)
-        pure (← `(EvmAbi.Compile.readTuple $hss $chain),
-          ← `(EvmAbi.Compile.reads_tuple rfl $chainPf))
+          chain ← `(EvmAbi.Compile.Decode.cons $mk $(← cn.code leafRead) $chain)
+          chainPf ← `(EvmAbi.Compile.Decode.cons_eq $erPf $chainPf)
+        pure (← `(EvmAbi.Compile.Decode.readTuple $hss $chain),
+          ← `(EvmAbi.Compile.Decode.reads_tuple rfl $chainPf))
       emitNode trace fn thm (← liftTermElabM (decSig tyStx)) (← liftTermElabM (decContract tyStx fn))
         body proof
       return (.node t fn thm, i + 1)
@@ -425,11 +425,11 @@ private def emitEncoder (root : Name) (trace : Bool) (t : Ty) (tyId : Ident) (en
   let encId := mkIdent encName
   elabCommand (← `(def $encId : EvmAbi.ValBA $tyId → ByteArray := fun v => ($putId v).run))
   elabCommand (← `(theorem $(mkIdent (Name.appendAfter encName "_eq")) :
-    ∀ (v : EvmAbi.ValBA $tyId), $encId v = EvmAbi.encode $tyId v :=
+    ∀ (v : EvmAbi.ValBA $tyId), $encId v = EvmAbi.Codec.encode $tyId v :=
       EvmAbi.Compile.run_eq_encode $putThmId))
   elabCommand (← `(theorem $(mkIdent (Name.appendAfter encName "_decodeStrict")) :
     ∀ (v : EvmAbi.ValBA $tyId), ($encId v).size < 2 ^ 256 →
-      EvmAbi.decodeStrict $tyId ($encId v) = some v :=
+      EvmAbi.Codec.decodeStrict $tyId ($encId v) = some v :=
       fun v hb => EvmAbi.Compile.decodeStrict_run $putThmId (by decide) v hb))
 
 /-- Emit the compiled strict decoder and its theorems, under the name
@@ -445,18 +445,18 @@ private def emitDecoder (root : Name) (trace : Bool) (t : Ty) (tyId : Ident) (de
       (← liftTermElabM (node.code leafRead)) (← liftTermElabM (node.proof leafReadProof))
   let decId := mkIdent decName
   elabCommand (← `(def $decId : ByteArray → Option (EvmAbi.ValBA $tyId) :=
-    fun ba => EvmAbi.Compile.runStrict $readId ba))
+    fun ba => EvmAbi.Compile.Decode.runStrict $readId ba))
   elabCommand (← `(theorem $(mkIdent (Name.appendAfter decName "_eq")) :
-    ∀ (ba : ByteArray), $decId ba = EvmAbi.decodeStrict $tyId ba :=
-      EvmAbi.Compile.runStrict_eq $readThmId))
+    ∀ (ba : ByteArray), $decId ba = EvmAbi.Codec.decodeStrict $tyId ba :=
+      EvmAbi.Compile.Decode.runStrict_eq $readThmId))
   elabCommand (← `(theorem $(mkIdent (Name.appendAfter decName "_encode")) :
-    ∀ (v : EvmAbi.ValBA $tyId), (EvmAbi.encode $tyId v).size < 2 ^ 256 →
-      $decId (EvmAbi.encode $tyId v) = some v :=
-      fun v hb => EvmAbi.Compile.runStrict_encode $readThmId (by decide) v hb))
+    ∀ (v : EvmAbi.ValBA $tyId), (EvmAbi.Codec.encode $tyId v).size < 2 ^ 256 →
+      $decId (EvmAbi.Codec.encode $tyId v) = some v :=
+      fun v hb => EvmAbi.Compile.Decode.runStrict_encode $readThmId (by decide) v hb))
   elabCommand (← `(theorem $(mkIdent (Name.appendAfter decName "_uniq")) :
     ∀ (ba : ByteArray) (v : EvmAbi.ValBA $tyId), $decId ba = some v →
-      EvmAbi.encode $tyId v = ba :=
-      fun ba v h => EvmAbi.Compile.encode_of_runStrict $readThmId (by decide) ba v h))
+      EvmAbi.Codec.encode $tyId v = ba :=
+      fun ba v h => EvmAbi.Compile.Decode.encode_of_runStrict $readThmId (by decide) ba v h))
   -- the runtime API has four public names; a codec compiles all of them
   if wholeApi then
     let preId := mkIdent (root ++ `decode)
@@ -464,11 +464,11 @@ private def emitDecoder (root : Name) (trace : Bool) (t : Ty) (tyId : Ident) (de
     elabCommand (← `(def $preId : ByteArray → Option (EvmAbi.ValBA $tyId × Nat) :=
       fun ba => $readId ba 0))
     elabCommand (← `(theorem $(mkIdent (root ++ `decode_eq)) :
-      ∀ (ba : ByteArray), $preId ba = EvmAbi.decode $tyId ba :=
+      ∀ (ba : ByteArray), $preId ba = EvmAbi.Codec.decode $tyId ba :=
         fun ba => $readThmId ba 0))
     elabCommand (← `(def $canId : ByteArray → Bool := fun ba => ($decId ba).isSome))
     elabCommand (← `(theorem $(mkIdent (root ++ `isCanonical_eq)) :
-      ∀ (ba : ByteArray), $canId ba = true ↔ EvmAbi.IsCanonical $tyId ba := by
+      ∀ (ba : ByteArray), $canId ba = true ↔ EvmAbi.Codec.IsCanonical $tyId ba := by
       intro ba
       show ($decId ba).isSome = true ↔ _
       rw [$(mkIdent (Name.appendAfter decName "_eq")):ident ba]
@@ -495,7 +495,7 @@ Compile an ABI encoder for a type, at elaboration time.
 `abi_encoder foo "(address, uint256)"` emits a `ByteArray` encoder `foo`
 specialised to that type — no `Ty` dispatch, no `List Part`, offsets folded
 to numerals — together with `foo_eq`, the machine-checked proof that it
-agrees with `EvmAbi.encode`, and `foo_decodeStrict`, the roundtrip inherited
+agrees with `EvmAbi.Codec.encode`, and `foo_decodeStrict`, the roundtrip inherited
 from it.  A signature (`"transfer(address to, uint256 amount)"`) compiles the
 encoder of its argument list.  See the module docstring for the full list of
 emitted names.
@@ -518,7 +518,7 @@ Compile an ABI decoder for a type, at elaboration time.
 `abi_decoder foo "(address, uint256)"` emits a strict decoder
 `foo : ByteArray → Option (ValBA foo.ty)` specialised to that type — no `Ty`
 dispatch, no `isStatic` per component or element — together with `foo_eq`
-(it *is* `EvmAbi.decodeStrict`), `foo_encode` (it reads back what `encode`
+(it *is* `EvmAbi.Codec.decodeStrict`), `foo_encode` (it reads back what `encode`
 wrote) and `foo_uniq` (a buffer it accepts is the encoding of what it read).
 
 Appending `trace` prints each specialised definition and its correctness

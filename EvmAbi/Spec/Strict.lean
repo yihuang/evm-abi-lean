@@ -1,8 +1,8 @@
-import EvmAbi.Codec.Roundtrip
-import EvmAbi.Codec.Sound
+import EvmAbi.Spec.Roundtrip
+import EvmAbi.Spec.Sound
 
 /-!
-# EvmAbi.Codec.Strict
+# EvmAbi.Spec.Strict
 
 The strict API, in `namespace EvmAbi.Spec`: `decodeStrict` (canonical
 layout plus exact consumption, no trailing garbage), the predicate

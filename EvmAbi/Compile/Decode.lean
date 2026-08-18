@@ -3,9 +3,10 @@ import EvmAbi.Compile
 /-!
 # EvmAbi.Compile.Decode
 
-The **decoder half of the compiler's target language**: readers that a
-compiled decoder is assembled from, each proved once against the generic
-runtime decoder `decodeBAVal` (`EvmAbi.Codec.ByteArray`).
+The **decoder half of the compiler's target language**, in `namespace
+EvmAbi.Compile.Decode`: readers that a compiled decoder is assembled
+from, each proved once against the generic runtime decoder `decodeBAVal`
+(`EvmAbi.Codec.ByteArray`).
 
 The generic decoder is interpretive in exactly the way the encoder was:
 `decodeBAVal` matches on the `Ty` at every value, `decodeElemBAVal` asks
@@ -30,10 +31,11 @@ composes exactly like `Denotes` does on the encoder side, and
 `runStrict_eq` turns it into the user-facing statement about `decodeStrict`.
 -/
 
-namespace EvmAbi
-namespace Compile
+namespace EvmAbi.Compile.Decode
 
 open Ty Binary
+open EvmAbi.Codec
+open EvmAbi.Codec.ByteArray
 
 /-- A compiled decoder for `t` reads what the generic decoder reads. -/
 def Reads (t : Ty) (g : ByteArray → Nat → Option (ValBA t × Nat)) : Prop :=
@@ -360,5 +362,4 @@ theorem encode_of_runStrict {t : Ty} {g : ByteArray → Nat → Option (ValBA t 
   rw [runStrict_eq hg] at h
   exact encode_of_decodeStrict t hv ba v h
 
-end Compile
-end EvmAbi
+end EvmAbi.Compile.Decode
