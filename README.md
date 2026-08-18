@@ -444,7 +444,7 @@ The proof is built in incremental layers, each reusable independently:
 | **6. Static primitives** | `Static` | Standalone codecs for `uintM`, `intM`, `bool`, `address`, `bytesN`; strict bool/bytesN decoders |
 | **7. Dynamic primitives** | `Dynamic` | Standalone codecs for `bytes`, `string`; prefix-tolerant decoder variant |
 | **8. Head/tail combinator** | `Parts` | The core ABI layout abstraction (`Part`, `encodeParts`, offset-correctness theorems); type-independent |
-| **9. Spec codec** | `Codec` + `Codec.Roundtrip` / `Codec.Sound` / `Codec.Strict` | `Ty`-indexed `Spec.encode` (the `List UInt8` specification) and `Spec.encodeByteArray` (the same builder run into a `ByteArray`); the linear decoder `Spec.decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); bound-free static delegation in `Codec`; roundtrip and soundness families in their own files; strict API `Spec.decodeStrict`/`Spec.IsCanonical` and the capstones |
+| **9. Spec codec** | `Spec` + `Spec.Roundtrip` / `Spec.Sound` / `Spec.Strict` | `Ty`-indexed `Spec.encode` (the `List UInt8` specification) and `Spec.encodeByteArray` (the same builder run into a `ByteArray`); the linear decoder `Spec.decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); bound-free static delegation in `Spec`; roundtrip and soundness families in their own files; strict API `Spec.decodeStrict`/`Spec.IsCanonical` and the capstones |
 | **10. Runtime codec** | `Codec` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), the `ValBA` walkers, the `toList_putBA` encoder bridge, the agreement lemmas (`decodeBAVal_eq`, `decodeStrictBAVal_eq`, `decodeStrictBA_eq`) that carry the `Spec` theorems across, `ValBA.toList_injective` that carries conclusions back, and the runtime capstones (`decodeStrict_encode`, `encode_of_decodeStrict`, `decodeStrict_eq_some_iff`, `isCanonical_iff`) |
 | **11. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
 | **12. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
@@ -454,9 +454,9 @@ The proof is built in incremental layers, each reusable independently:
 | **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, builder and executable-encoder checks, offset-decoder checks (including degenerate and truncated buffers), human-readable ABI tests, compiled-codec checks against the same spec vectors, and its negative vectors |
 | **Bench** | `Bench` | `lake build bench` — `Spec.encode` vs `Spec.encodeByteArray` vs runtime `encode`, `Spec.decodeStrict` vs `decodeStrict`, compiled vs generic `encode`/`decodeStrict`, and the word codec against an unboxed-`Nat` and a four-limb ceiling |
 
-The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:
+The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Spec)** is the key architectural decision:
 the combinatorial heart of the ABI offset arithmetic is proved once on `List Part`,
-then every type case in Codec reduces to it.
+then every type case in Spec reduces to it.
 
 ## Quick Example
 

@@ -39,7 +39,7 @@ delegation (`Spec.decodeElems` / `Spec.decode_static_append`).
 `Get2` with the two cursors as naturals into one buffer — and pairs every
 definition with an agreement lemma under `off ↦ ba.data.toList.drop off`,
 so the list families transport rather than being restated.  Reads there go
-through `natAtBA` / `windowList`, never through a slice.  `EvmAbi.Codec`
+through `natAtBA` / `windowList`, never through a slice.  `EvmAbi.Spec`
 holds the spec codec proper (defs, helper packages, static delegation); the
 theorem families live in `EvmAbi.Spec.Roundtrip` / `EvmAbi.Spec.Sound` /
 `EvmAbi.Spec.Strict` (each family is one self-contained `mutual` block, all
