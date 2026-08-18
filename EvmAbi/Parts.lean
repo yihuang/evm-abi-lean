@@ -54,6 +54,53 @@ def tailSize : Part → Nat
   | ⟨_, _, false⟩ => 0
   | ⟨_, tail, true⟩ => tail.size
 
+/-- Two parts are equivalent when they denote the same bytes and occupy
+the same cached sizes. -/
+def Equiv (p q : Part) : Prop :=
+  p.isDyn = q.isDyn ∧
+    p.head.toList = q.head.toList ∧
+    p.tail.toList = q.tail.toList ∧
+    p.head.size = q.head.size ∧
+    p.tail.size = q.tail.size
+
+/-- Equivalent parts have equal head sizes. -/
+theorem headSize_eq_of_equiv {p q : Part} (h : Equiv p q) : headSize p = headSize q := by
+  rcases h with ⟨hdyn, hhead, htail, hs1, hs2⟩
+  cases p with
+  | mk ph pt pd =>
+    cases q with
+    | mk qh qt qd =>
+      cases pd with
+      | false =>
+        cases qd with
+        | false =>
+            change ph.size = qh.size
+            exact hs1
+        | true => exact False.elim (Bool.noConfusion hdyn)
+      | true =>
+        cases qd with
+        | false => exact False.elim (Bool.noConfusion hdyn)
+        | true => simp [headSize]
+
+/-- Equivalent parts have equal tail sizes. -/
+theorem tailSize_eq_of_equiv {p q : Part} (h : Equiv p q) : tailSize p = tailSize q := by
+  rcases h with ⟨hdyn, hhead, htail, hs1, hs2⟩
+  cases p with
+  | mk ph pt pd =>
+    cases q with
+    | mk qh qt qd =>
+      cases pd with
+      | false =>
+        cases qd with
+        | false => simp [tailSize]
+        | true => exact False.elim (Bool.noConfusion hdyn)
+      | true =>
+        cases qd with
+        | false => exact False.elim (Bool.noConfusion hdyn)
+        | true =>
+            change pt.size = qt.size
+            exact hs2
+
 end Part
 
 /-- Total size of the head section. -/
