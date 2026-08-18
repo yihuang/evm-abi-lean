@@ -1205,3 +1205,14 @@ theorem decodeStrictBA_eq_some_iff (t : Ty) (hv : t.Valid) (ba : ByteArray)
     exact decodeStrictBA_encodeByteArray t hv v (by rw [he]; exact hb)
 
 end EvmAbi.Codec.ByteArray
+
+namespace EvmAbi
+
+-- Root spellings for the spec-valued strict API — user-facing, unlike
+-- the `ValBA` walkers and offset primitives, which stay internal.
+export EvmAbi.Codec.ByteArray
+  (decodeStrictBA IsCanonicalBA decodeStrictBA_eq
+   decodeStrictBA_encodeByteArray encodeByteArray_of_decodeStrictBA
+   decodeStrictBA_eq_some_iff)
+
+end EvmAbi
