@@ -93,7 +93,7 @@ payloads, and there only by `ByteArray.data.toList`.
 
 This is the direction the agreement lemmas cannot supply.  They push a runtime
 answer *down* to its denotation; injectivity brings a conclusion back up, which
-is what lets the capstones in `EvmAbi.Codec.Runtime` be stated at all. -/
+is what lets the capstones in `EvmAbi.Codec` be stated at all. -/
 
 /-- `List.map f` is injective when `f` is. -/
 private theorem map_inj {α β : Type} {f : α → β} (hf : ∀ {a b : α}, f a = f b → a = b) :

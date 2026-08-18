@@ -38,6 +38,8 @@ so the builder only pays off in compiled code.
 
 open EvmAbi
 open EvmAbi.Ty
+open EvmAbi.Codec
+open EvmAbi.Codec.ByteArray
 
 def flatTy : Ty := .array .bytes
 

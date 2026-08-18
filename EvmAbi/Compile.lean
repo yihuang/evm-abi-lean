@@ -1,11 +1,11 @@
-import EvmAbi.Codec.Runtime
+import EvmAbi.Codec
 
 /-!
 # EvmAbi.Compile
 
 The **target language of the ABI compiler**: a tiny abstract machine for the
 head/tail layout, whose every step is proved once against the generic
-encoder `putBA` (`EvmAbi.Codec.Runtime`).
+encoder `putBA` (`EvmAbi.Codec`).
 
 The generic encoder is *interpretive*: `putBA` recurses on the `Ty` while it
 walks the value, `partOfBA` asks `t.isStatic` per component (and per array
@@ -38,6 +38,7 @@ namespace EvmAbi
 namespace Compile
 
 open Ty Binary Builder
+open EvmAbi.Codec
 
 /-! ## the contract
 

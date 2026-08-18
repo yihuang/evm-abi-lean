@@ -1,17 +1,6 @@
-import EvmAbi.Bytes
-import EvmAbi.Align
-import EvmAbi.Word
-import EvmAbi.Ty
-import EvmAbi.Builder
-import EvmAbi.Static
-import EvmAbi.Dynamic
-import EvmAbi.Codec
-import EvmAbi.Codec.Strict
-import EvmAbi.Codec.ByteArray
-import EvmAbi.Codec.Runtime
-import EvmAbi.Parts
-import EvmAbi.Packed
-import EvmAbi.HumanReadable
+-- The root module carries the library's import closure; the meta modules
+-- are deliberately not re-exported there.
+import EvmAbi
 import EvmAbi.HumanReadable.Meta
 import EvmAbi.Compile.Meta
 
@@ -26,6 +15,8 @@ namespace EvmAbi
 
 open Binary
 open Ty
+open EvmAbi.Codec
+open EvmAbi.Codec.ByteArray
 
 /-! ## pad32 -/
 
@@ -938,7 +929,7 @@ example : (decodeStrict .bytes (encode .bytes ⟨"hi".toUTF8, by native_decide�
 example : IsCanonical .bool (encode .bool true) := by native_decide
 
 example : (encode .bool true).data.toList = Spec.encode .bool true := by
-  simp [ValBA.toList, data_toList_encode]
+  simp [ValBA.toList, EvmAbi.Codec.data_toList_encode]
 
 /-! ### …and the same properties by theorem
 
@@ -1140,12 +1131,14 @@ info: ┌─ emitted tiny.put
 info: ┌─ emitted tiny.read
 │def tiny.read :
     ByteArray → Nat → Option (EvmAbi.ValBA (EvmAbi.Ty.tuple (EvmAbi.Ty.bool :: @List.nil EvmAbi.Ty)) × Nat) :=
-  EvmAbi.Compile.readTuple 32
-    (EvmAbi.Compile.cons EvmAbi.Compile.elemStatic EvmAbi.Compile.readBool EvmAbi.Compile.consNil)
-│theorem tiny.read_reads : EvmAbi.Compile.Reads (EvmAbi.Ty.tuple (EvmAbi.Ty.bool :: @List.nil EvmAbi.Ty)) tiny.read :=
-  EvmAbi.Compile.reads_tuple rfl
-    (EvmAbi.Compile.cons_eq (EvmAbi.Compile.elemStatic_eq (by decide) EvmAbi.Compile.reads_bool)
-      EvmAbi.Compile.consNil_eq)
+  EvmAbi.Compile.Decode.readTuple 32
+    (EvmAbi.Compile.Decode.cons EvmAbi.Compile.Decode.elemStatic EvmAbi.Compile.Decode.readBool
+      EvmAbi.Compile.Decode.consNil)
+│theorem tiny.read_reads :
+    EvmAbi.Compile.Decode.Reads (EvmAbi.Ty.tuple (EvmAbi.Ty.bool :: @List.nil EvmAbi.Ty)) tiny.read :=
+  EvmAbi.Compile.Decode.reads_tuple rfl
+    (EvmAbi.Compile.Decode.cons_eq (EvmAbi.Compile.Decode.elemStatic_eq (by decide) EvmAbi.Compile.Decode.reads_bool)
+      EvmAbi.Compile.Decode.consNil_eq)
 -/
 #guard_msgs in
 abi_codec tiny "(bool)" trace

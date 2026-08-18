@@ -296,7 +296,7 @@ abi_codec transfer "transfer(address to, uint256 amount)"
 
 #check @transfer.encode        -- ValBA transfer.ty → ByteArray
 #check @transfer.decodeStrict  -- ByteArray → Option (ValBA transfer.ty)
-#check @transfer.encode_eq     -- ∀ v, transfer.encode v = EvmAbi.encode transfer.ty v
+#check @transfer.encode_eq     -- ∀ v, transfer.encode v = EvmAbi.Codec.encode transfer.ty v
 #check @transfer.decodeStrict_eq
 #check @transfer.roundtrip     -- ∀ v, … → transfer.decodeStrict (transfer.encode v) = some v
 ```
@@ -392,12 +392,12 @@ unable to emit code it cannot justify, and that is the design here:
   but those lemmas applied to the sub-codecs' theorems.  The emitter never
   invents a proof step;
 * Lean's kernel checks each one as it is emitted.  A compiled encoder that
-  disagrees with `EvmAbi.encode` therefore cannot be produced — the command
+  disagrees with `EvmAbi.Codec.encode` therefore cannot be produced — the command
   fails at compile time instead.
 
 ### It reduces in the kernel
 
-`EvmAbi.encode` is well-founded-recursive over `Ty`, so the kernel cannot
+`EvmAbi.Codec.encode` is well-founded-recursive over `Ty`, so the kernel cannot
 evaluate it — `decide +kernel` on a concrete encoding gets stuck at the
 `Decidable` instance.  A compiled codec has no recursion in it for a fixed
 type, so the kernel walks it, and `_eq` carries the result back:
@@ -416,8 +416,8 @@ concrete encoding checked on the base axioms has otherwise needed a
 fuel-indexed mirror of the encoder to rewrite through first.
 
 So the compiled code inherits the whole verified stack: `foo.encode_eq` and
-`foo.decode_eq` rewrite any statement about `EvmAbi.encode` /
-`EvmAbi.decodeStrict` onto the compiled names, which is how `foo.roundtrip`
+`foo.decode_eq` rewrite any statement about `EvmAbi.Codec.encode` /
+`EvmAbi.Codec.decodeStrict` onto the compiled names, which is how `foo.roundtrip`
 and `foo.decodeStrict_uniq` come out for free — the bijection of the *Core
 Theorems* section, on compiled code.
 
@@ -444,8 +444,8 @@ The proof is built in incremental layers, each reusable independently:
 | **6. Static primitives** | `Static` | Standalone codecs for `uintM`, `intM`, `bool`, `address`, `bytesN`; strict bool/bytesN decoders |
 | **7. Dynamic primitives** | `Dynamic` | Standalone codecs for `bytes`, `string`; prefix-tolerant decoder variant |
 | **8. Head/tail combinator** | `Parts` | The core ABI layout abstraction (`Part`, `encodeParts`, offset-correctness theorems); type-independent |
-| **9. Spec codec** | `Codec` + `Codec.Roundtrip` / `Codec.Sound` / `Codec.Strict` | `Ty`-indexed `Spec.encode` (the `List UInt8` specification) and `Spec.encodeByteArray` (the same builder run into a `ByteArray`); the linear decoder `Spec.decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); bound-free static delegation in `Codec`; roundtrip and soundness families in their own files; strict API `Spec.decodeStrict`/`Spec.IsCanonical` and the capstones |
-| **10. Runtime codec** | `Codec.Runtime` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), the `ValBA` walkers, the `toList_putBA` encoder bridge, the agreement lemmas (`decodeBAVal_eq`, `decodeStrictBAVal_eq`, `decodeStrictBA_eq`) that carry the `Spec` theorems across, `ValBA.toList_injective` that carries conclusions back, and the runtime capstones (`decodeStrict_encode`, `encode_of_decodeStrict`, `decodeStrict_eq_some_iff`, `isCanonical_iff`) |
+| **9. Spec codec** | `Spec` + `Spec.Roundtrip` / `Spec.Sound` / `Spec.Strict` | `Ty`-indexed `Spec.encode` (the `List UInt8` specification) and `Spec.encodeByteArray` (the same builder run into a `ByteArray`); the linear decoder `Spec.decode` (`Get2` walkers `decodeElem`/`decodeElems`/`decodeTuple`); bound-free static delegation in `Spec`; roundtrip and soundness families in their own files; strict API `Spec.decodeStrict`/`Spec.IsCanonical` and the capstones |
+| **10. Runtime codec** | `Codec` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), the `ValBA` walkers, the `toList_putBA` encoder bridge, the agreement lemmas (`decodeBAVal_eq`, `decodeStrictBAVal_eq`, `decodeStrictBA_eq`) that carry the `Spec` theorems across, `ValBA.toList_injective` that carries conclusions back, and the runtime capstones (`decodeStrict_encode`, `encode_of_decodeStrict`, `decodeStrict_eq_some_iff`, `isCanonical_iff`) |
 | **11. Packed ABI** | `Packed` | Packed encoding for all-static types; primitive packed codecs, type-indexed `encodePacked`/`decodePacked`, static packed roundtrip |
 | **12. Human-readable ABI** | `HumanReadable` | Solidity-signature parser (`Ty.parse`, `AbiItem.parse`, `AbiParam.parseList`) |
 | **13. Compile-time macros** | `HumanReadable.Meta` | `ty!`, `item!`, `params!` — parse string literals at elaboration time |
@@ -454,9 +454,9 @@ The proof is built in incremental layers, each reusable independently:
 | **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, builder and executable-encoder checks, offset-decoder checks (including degenerate and truncated buffers), human-readable ABI tests, compiled-codec checks against the same spec vectors, and its negative vectors |
 | **Bench** | `Bench` | `lake build bench` — `Spec.encode` vs `Spec.encodeByteArray` vs runtime `encode`, `Spec.decodeStrict` vs `decodeStrict`, compiled vs generic `encode`/`decodeStrict`, and the word codec against an unboxed-`Nat` and a four-limb ceiling |
 
-The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:
+The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Spec)** is the key architectural decision:
 the combinatorial heart of the ABI offset arithmetic is proved once on `List Part`,
-then every type case in Codec reduces to it.
+then every type case in Spec reduces to it.
 
 ## Quick Example
 

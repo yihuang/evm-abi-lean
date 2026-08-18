@@ -1,6 +1,6 @@
 import EvmAbi.Ty
 import EvmAbi.Bytes
-import EvmAbi.Codec
+import EvmAbi.Spec
 import Binary.UInt256
 
 /-!
@@ -150,10 +150,10 @@ def putPackedElems (t : Ty) : List t.Val → Builder
   | v :: vs => put t v ++ putPackedElems t vs
 
 @[simp] theorem toList_putPackedElems (t : Ty) (vs : List t.Val) :
-    (putPackedElems t vs).toList = (vs.map (encode t)).flatten := by
+    (putPackedElems t vs).toList = (vs.map (Spec.encode t)).flatten := by
   induction vs with
   | nil => simp [putPackedElems, Builder.toList_empty]
-  | cons v vs ih => simp [putPackedElems, ih, encode]
+  | cons v vs ih => simp [putPackedElems, ih, Spec.encode]
 
 mutual
 /-- Packed encoder (`abi.encodePacked`), builder form.  Total; the
@@ -253,7 +253,7 @@ def decodePacked (t : Ty) (buf : List UInt8) : Option t.Val :=
 /-- The standard encodings of a static element list occupy `vs.length`
 padded (32-byte-word) slots. -/
 theorem length_map_encode_static (t : Ty) (hs : t.isStatic = true) (hv : t.Valid) :
-    (vs : List t.Val) → ((vs.map (encode t)).map List.length).sum = vs.length * t.headSize
+    (vs : List t.Val) → ((vs.map (Spec.encode t)).map List.length).sum = vs.length * t.headSize
   | [] => by simp
   | v :: vs => by
       simp only [List.map_cons, List.length_cons, List.sum_cons]
@@ -390,7 +390,7 @@ theorem decodeBytesNPacked_append (bs : List UInt8) (h : bs.length = n) (rest : 
 /-- For a static element type the head section of its part list is exactly
 the flattened standard encodings — the packed array layout. -/
 theorem encodeHeads_map_partOf_static (t : Ty) (hs : t.isStatic = true) (vs : List t.Val) :
-    encodeHeads E (vs.map (partOf t)) = (vs.map (encode t)).flatten := by
+    encodeHeads E (vs.map (partOf t)) = (vs.map (Spec.encode t)).flatten := by
   induction vs with
   | nil => simp [encodeHeads, putHeads, Builder.toList_empty]
   | cons v vs ih =>
@@ -449,7 +449,7 @@ theorem decodePackedElem_append : (t : Ty) → t.isStatic = true → t.Valid →
   | .fixedArray t n, hs, hv, ⟨vs, hvs⟩, head, tails, E => by
       have hst : t.isStatic = true := by simp only [isStatic] at hs; exact hs
       have hvt : t.Valid := hv
-      have hbuf : (vs.map (encode t)).flatten ++ head =
+      have hbuf : (vs.map (Spec.encode t)).flatten ++ head =
           encodeHeads (n * t.headSize) (vs.map (partOf t)) ++ head := by
         rw [encodeHeads_map_partOf_static t hst vs]
       have hlen_heads : (encodeHeads (n * t.headSize) (vs.map (partOf t))).length =

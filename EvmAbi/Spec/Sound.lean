@@ -1,27 +1,26 @@
-import EvmAbi.Codec
+import EvmAbi.Spec
 
 /-!
-# EvmAbi.Codec.Sound
+# EvmAbi.Spec.Sound
 
-The soundness family of the linear decoder: whenever `decode` succeeds, the
-consumed front of the buffer is exactly the encoding of the decoded value —
+The soundness family of the linear decoder, in `namespace EvmAbi.Spec`:
+whenever `decode` succeeds, the consumed front of the buffer is exactly the encoding of the decoded value —
 `decode t buf = some (v, rest)` implies `encode t v ++ rest = buf`.  The
-section is layered like the roundtrip family (`EvmAbi.Codec.Roundtrip`):
+section is layered like the roundtrip family (`EvmAbi.Spec.Roundtrip`):
 per-constructor *word atoms* reuse the word-recovery lemmas of
-`EvmAbi.Codec`, and the *walkers* (`decodeElem_sound_static` /
+`EvmAbi.Spec`, and the *walkers* (`decodeElem_sound_static` /
 `decodeElem_sound_dynamic`, `decodeElems_sound`, `decodeTuple_sound`)
 thread them through a run of parts.
 
-This is what makes `decodeStrict` (`EvmAbi.Codec.Strict`) the strict
+This is what makes `decodeStrict` (`EvmAbi.Spec.Strict`) the strict
 counterpart of `encode`.
 -/
 
-namespace EvmAbi
+namespace EvmAbi.Spec
 
 open Ty
 open Binary
 open Builder
-open EvmAbi.Spec
 
 /-! ## soundness: the linear decoder only produces encodings -/
 
@@ -580,4 +579,4 @@ theorem decode_sound (t : Ty) (hv : t.Valid) (v : t.Val) (buf rest : List UInt8)
 termination_by 8 * sizeOf t
 end
 
-end EvmAbi
+end EvmAbi.Spec

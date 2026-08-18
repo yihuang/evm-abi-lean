@@ -1,26 +1,25 @@
-import EvmAbi.Codec
+import EvmAbi.Spec
 
 /-!
-# EvmAbi.Codec.Roundtrip
+# EvmAbi.Spec.Roundtrip
 
-The roundtrip family of the linear decoder: every encoding of a valid type
-decodes back, leaving the suffix untouched.  `decodeElem_roundtrip` owns
+The roundtrip family of the linear decoder, in `namespace EvmAbi.Spec`:
+every encoding of a valid type decodes back, leaving the suffix untouched.  `decodeElem_roundtrip` owns
 the static/dynamic case split (the frontier check is free on encodings, by
 the offset correctness theorems of `EvmAbi.Parts`); the element and tuple
 walkers (`decodeElems_roundtrip`, `decodeTuple_roundtrip`) thread the
 frontier through a run of parts; `decode_roundtrip` is the prefix form.
 
-Split out of the single `EvmAbi.Codec` module so each theorem family is its
-own file.  `EvmAbi.Codec.Sound` is the mirror family (the decoder only
-produces encodings), `EvmAbi.Codec.Strict` the strict API built on both.
+Split out of the single `EvmAbi.Spec` module so each theorem family is its
+own file.  `EvmAbi.Spec.Sound` is the mirror family (the decoder only
+produces encodings), `EvmAbi.Spec.Strict` the strict API built on both.
 -/
 
-namespace EvmAbi
+namespace EvmAbi.Spec
 
 open Ty
 open Binary
 open Builder
-open EvmAbi.Spec
 
 /- ## roundtrip: the linear decoder recovers encodings -/
 
@@ -421,4 +420,4 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
 termination_by 8 * sizeOf t
 end
 
-end EvmAbi
+end EvmAbi.Spec
