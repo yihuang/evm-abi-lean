@@ -454,9 +454,9 @@ The proof is built in incremental layers, each reusable independently:
 | **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, builder and executable-encoder checks, offset-decoder checks (including degenerate and truncated buffers), human-readable ABI tests, compiled-codec checks against the same spec vectors, and its negative vectors |
 | **Bench** | `Bench` | `lake build bench` — `Spec.encode` vs `Spec.encodeByteArray` vs runtime `encode`, `Spec.decodeStrict` vs `decodeStrict`, compiled vs generic `encode`/`decodeStrict`, and the word codec against an unboxed-`Nat` and a four-limb ceiling |
 
-The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Codec)** is the key architectural decision:
+The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Spec)** is the key architectural decision:
 the combinatorial heart of the ABI offset arithmetic is proved once on `List Part`,
-then every type case in Codec reduces to it.
+then every type case in Spec reduces to it.
 
 ## Quick Example
 

@@ -183,7 +183,7 @@ Dynamic payloads (`bytes`, `string`, `T[]`) carry a `< 2^64` length bound
 in their subtype, and the decoders enforce it — see `Ty.Val` for why that
 is tighter than soundness needs.
 
-### 3.3 Codec Architecture (`Spec.lean`)
+### 3.3 Spec Codec Architecture (`Spec.lean`)
 
 Encoding and decoding are defined by structural recursion on `Ty`:
 
