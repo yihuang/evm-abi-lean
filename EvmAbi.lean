@@ -40,8 +40,8 @@ the historical build order, nodes 1–8):
 * `EvmAbi.Static`  — static primitives: `uintM`, `intM`, `bool`, `address`,
                   `bytesN`, with roundtrips
 * `EvmAbi.Dynamic` — dynamic `bytes` / `string` with roundtrips, prefix decoder
-* `EvmAbi.Spec`    — the specification codec (`EvmAbi.Spec` and its
-                  `Roundtrip` / `Sound` / `Strict` families): list-based
+* `EvmAbi.Spec`    — the specification codec (with its `Spec.Roundtrip` /
+                  `Spec.Sound` / `Spec.Strict` theorem families): list-based
                   `Spec.encode` / `Spec.decode` / `Spec.decodeStrict` and
                   `Spec.IsCanonical`, the surface every theorem is stated
                   over
@@ -77,15 +77,3 @@ commands — are deliberately *not* re-exported here: they need `import Lean`,
 and this library is otherwise free of the Lean frontend.  Import them
 explicitly to use the macros.
 -/
-
-namespace EvmAbi
-
--- Re-export the user-facing runtime API at the root namespace, as documented:
--- users write `EvmAbi.encode`, `EvmAbi.decode`, `EvmAbi.decodeStrict`, and
--- `EvmAbi.IsCanonical` without opening `EvmAbi.Codec`.
-export EvmAbi.Codec
-  (encode decode decodeStrict IsCanonical
-   decodeStrict_encode encode_of_decodeStrict
-   decodeStrict_eq_some_iff isCanonical_iff)
-
-end EvmAbi

@@ -8,8 +8,8 @@ import EvmAbi.ValBA
 The runtime decoder internals, nested under `EvmAbi.Codec`: primitive reads
 **at an offset in a `ByteArray`**, the `ValBA` walkers, and the agreement
 lemmas that transport the `EvmAbi.Spec` theorems onto them.  The public
-runtime API (`EvmAbi.encode`, `EvmAbi.decode`, `EvmAbi.decodeStrict`,
-`EvmAbi.IsCanonical`) lives in `EvmAbi.Codec`.
+runtime API (`encode`, `decode`, `decodeStrict`, `IsCanonical`) lives in
+`EvmAbi.Codec`.
 
 Every primitive is paired with an agreement lemma against its `EvmAbi.Spec`
 counterpart under the translation `offset off ↦ ba.data.toList.drop off`,

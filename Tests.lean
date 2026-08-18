@@ -1,17 +1,6 @@
-import EvmAbi.Bytes
-import EvmAbi.Align
-import EvmAbi.Word
-import EvmAbi.Ty
-import EvmAbi.Builder
-import EvmAbi.Static
-import EvmAbi.Dynamic
-import EvmAbi.Spec
-import EvmAbi.Spec.Strict
-import EvmAbi.Codec.ByteArray
+-- The root module carries the library's import closure; the meta modules
+-- are deliberately not re-exported there.
 import EvmAbi
-import EvmAbi.Parts
-import EvmAbi.Packed
-import EvmAbi.HumanReadable
 import EvmAbi.HumanReadable.Meta
 import EvmAbi.Compile.Meta
 
@@ -26,6 +15,7 @@ namespace EvmAbi
 
 open Binary
 open Ty
+open EvmAbi.Codec
 open EvmAbi.Codec.ByteArray
 
 /-! ## pad32 -/
