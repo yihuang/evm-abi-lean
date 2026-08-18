@@ -15,6 +15,7 @@ namespace EvmAbi
 
 open Binary
 open Ty
+open EvmAbi.Codec
 open EvmAbi.Codec.ByteArray
 
 /-! ## pad32 -/

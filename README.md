@@ -392,12 +392,12 @@ unable to emit code it cannot justify, and that is the design here:
   but those lemmas applied to the sub-codecs' theorems.  The emitter never
   invents a proof step;
 * Lean's kernel checks each one as it is emitted.  A compiled encoder that
-  disagrees with `EvmAbi.encode` therefore cannot be produced — the command
+  disagrees with `EvmAbi.Codec.encode` therefore cannot be produced — the command
   fails at compile time instead.
 
 ### It reduces in the kernel
 
-`EvmAbi.encode` is well-founded-recursive over `Ty`, so the kernel cannot
+`EvmAbi.Codec.encode` is well-founded-recursive over `Ty`, so the kernel cannot
 evaluate it — `decide +kernel` on a concrete encoding gets stuck at the
 `Decidable` instance.  A compiled codec has no recursion in it for a fixed
 type, so the kernel walks it, and `_eq` carries the result back:
@@ -416,8 +416,8 @@ concrete encoding checked on the base axioms has otherwise needed a
 fuel-indexed mirror of the encoder to rewrite through first.
 
 So the compiled code inherits the whole verified stack: `foo.encode_eq` and
-`foo.decode_eq` rewrite any statement about `EvmAbi.encode` /
-`EvmAbi.decodeStrict` onto the compiled names, which is how `foo.roundtrip`
+`foo.decode_eq` rewrite any statement about `EvmAbi.Codec.encode` /
+`EvmAbi.Codec.decodeStrict` onto the compiled names, which is how `foo.roundtrip`
 and `foo.decodeStrict_uniq` come out for free — the bijection of the *Core
 Theorems* section, on compiled code.
 

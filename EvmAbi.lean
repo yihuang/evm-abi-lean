@@ -48,8 +48,7 @@ the historical build order, nodes 1–8):
 * `EvmAbi.Codec`    — the **runtime codec users run**: `encode`
                   (`ByteArray` out), `decode` / `decodeStrict` (`ValBA`
                   values out), `IsCanonical`, plus the encoder agreement
-                  `toList_putBA` that ties it to `Spec`.  The `EvmAbi.*`
-                  spellings are exported from the module itself
+                  `toList_putBA` that ties it to `Spec`
 * `EvmAbi.Codec.ByteArray` — internal runtime decoder details:
                   offset primitives, the `ValBA` walkers, and the agreement
                   lemmas that carry the `Spec` theorems onto the `ByteArray`

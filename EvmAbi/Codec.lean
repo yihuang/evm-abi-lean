@@ -403,18 +403,3 @@ theorem isCanonical_iff (t : Ty) (hv : t.Valid) (ba : ByteArray)
     rfl
 
 end EvmAbi.Codec
-
-namespace EvmAbi
-
--- The documented root spellings (`EvmAbi.encode`, …).  Exported here
--- rather than from the root module so that any import reaching this
--- module provides them; the agreement lemmas ride along because
--- downstream proofs rewrite with them.
-export EvmAbi.Codec
-  (encode decode decodeStrict IsCanonical
-   decodeStrict_encode encode_of_decodeStrict
-   decodeStrict_eq_some_iff isCanonical_iff
-   toList_putBA data_toList_encode encode_eq size_encode
-   encode_eq_encodeByteArray)
-
-end EvmAbi
