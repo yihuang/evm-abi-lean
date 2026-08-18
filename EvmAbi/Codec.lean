@@ -618,7 +618,7 @@ theorem take_eq_encodeBytes_of_decodeBytesPrefix (buf : List UInt8) (bs : List U
   | none => simp only [hlen, Option.bind_none] at h; contradiction
   | some len =>
       simp only [hlen, Option.bind_some] at h
-      by_cases hc : ((buf.drop 32).take len).length = len ∧
+      by_cases hc : len < 2 ^ 64 ∧ ((buf.drop 32).take len).length = len ∧
           ((buf.drop 32).drop len).take ((32 - len % 32) % 32) =
             List.replicate ((32 - len % 32) % 32) 0
       · rw [if_pos hc] at h
@@ -627,7 +627,7 @@ theorem take_eq_encodeBytes_of_decodeBytesPrefix (buf : List UInt8) (bs : List U
         have hm : 32 + len + (32 - len % 32) % 32 = m := congrArg Prod.snd h2
         have htake32 := take_32_eq_encodeUint_of_natAt buf 0 len hlen
         simp only [Nat.mul_zero, List.drop_zero] at htake32
-        have hblen : bs.length = len := by rw [← hbs]; exact hc.1
+        have hblen : bs.length = len := by rw [← hbs]; exact hc.2.1
         subst hm
         constructor
         · have hsplit : buf.take (32 + len + (32 - len % 32) % 32) =
@@ -635,7 +635,7 @@ theorem take_eq_encodeBytes_of_decodeBytesPrefix (buf : List UInt8) (bs : List U
             rw [← List.take_add]
             congr 1
             omega
-          rw [hsplit, htake32, List.take_add, hbs, hc.2]
+          rw [hsplit, htake32, List.take_add, hbs, hc.2.2]
           rw [encodeBytes, pad32, ← hblen]
         · rw [encodeBytes, List.length_append, length_encodeUint, length_pad32, ← hblen]
           omega
@@ -712,12 +712,13 @@ def decode : (t : Ty) → List UInt8 → Option (t.Val × Nat × List UInt8)
           | none => none
       | none => none
   | .array t, buf => if t.headSize = 0 then none else
-      match hk : natAt buf 0 with
+      match natAt buf 0 with
       | none => none
-      | some k => match (decodeElems t k).run (buf.drop 32) (buf.drop (32 + k * t.headSize)) (k * t.headSize) with
-          | some ⟨vs, _, rest, E⟩ =>
-              some (⟨vs.val, by rw [vs.property]; exact natAt_lt hk⟩, 32 + E, rest)
+      | some k => if hb : k < 2 ^ 64 then
+          match (decodeElems t k).run (buf.drop 32) (buf.drop (32 + k * t.headSize)) (k * t.headSize) with
+          | some ⟨vs, _, rest, E⟩ => some (⟨vs.val, by rw [vs.property]; exact hb⟩, 32 + E, rest)
           | none => none
+        else none
   | .fixedArray t n, buf => match (decodeElems t n).run buf (buf.drop (n * t.headSize)) (n * t.headSize) with
       | some ⟨vs, _, rest, E⟩ => some (vs, E, rest)
       | none => none

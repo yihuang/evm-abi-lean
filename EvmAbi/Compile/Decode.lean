@@ -104,7 +104,7 @@ theorem reads_bytesN (m : Nat) : Reads (.bytesN m) (readBytesN m) := by
 the `bytes` and `string` values carry. -/
 theorem size_lt_of_decodeBytesPrefixBAVal {ba : ByteArray} {off : Nat}
     {bs : ByteArray} {n : Nat} (hp : decodeBytesPrefixBAVal ba off = some (bs, n)) :
-    bs.size < 2 ^ 256 := by
+    bs.size < 2 ^ 64 := by
   have hma : decodeBytesPrefixBA ba off = some (bs.data.toList, n) := by
     rw [← decodeBytesPrefixBAVal_eq ba off, hp]
     rfl
@@ -117,7 +117,7 @@ theorem size_lt_of_decodeBytesPrefixBAVal {ba : ByteArray} {off : Nat}
 theorem size_toUTF8_lt_of_decodeBytesPrefixBAVal {ba : ByteArray} {off : Nat}
     {bs : ByteArray} {n : Nat} {s : String}
     (hp : decodeBytesPrefixBAVal ba off = some (bs, n))
-    (hs : String.fromUTF8? bs = some s) : s.toUTF8.size < 2 ^ 256 := by
+    (hs : String.fromUTF8? bs = some s) : s.toUTF8.size < 2 ^ 64 := by
   have hma : decodeBytesPrefixBA ba off = some (bs.data.toList, n) := by
     rw [← decodeBytesPrefixBAVal_eq ba off, hp]
     rfl
@@ -278,12 +278,13 @@ def readArray {t : Ty} (hsz : Nat)
     (loop : (k : Nat) → GetBA ({ vs : List (ValBA t) // vs.length = k }))
     (ba : ByteArray) (off : Nat) : Option (ValBA (.array t) × Nat) :=
   if hsz = 0 then none else
-    match hk : natAtBA ba off with
+    match natAtBA ba off with
     | none => none
-    | some k =>
+    | some k => if hb : k < 2 ^ 64 then
         match (loop k).run ba (off + 32) (off + 32 + k * hsz) (k * hsz) with
-        | some r => some (⟨r.val.val, by rw [r.val.property]; exact natAtBA_lt hk⟩, 32 + r.frontier)
+        | some r => some (⟨r.val.val, by rw [r.val.property]; exact hb⟩, 32 + r.frontier)
         | none => none
+      else none
 
 theorem reads_array {t : Ty} {hsz : Nat}
     {loop : (k : Nat) → GetBA ({ vs : List (ValBA t) // vs.length = k })}

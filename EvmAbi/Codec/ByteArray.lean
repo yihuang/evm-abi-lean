@@ -225,7 +225,7 @@ which is the value. -/
 def decodeBytesPrefixBA (ba : ByteArray) (off : Nat) : Option (List UInt8 × Nat) :=
   (natAtBA ba off).bind fun len =>
     let pad := (32 - len % 32) % 32
-    if min len (ba.size - (off + 32)) = len ∧
+    if len < 2 ^ 64 ∧ min len (ba.size - (off + 32)) = len ∧
        allZerosBA ba (off + 32 + len) pad then
       some (windowList ba (off + 32) len, 32 + len + pad)
     else none
@@ -268,7 +268,7 @@ window instead of a cons list. -/
 def decodeBytesPrefixBAVal (ba : ByteArray) (off : Nat) : Option (ByteArray × Nat) :=
   (natAtBA ba off).bind fun len =>
     let pad := (32 - len % 32) % 32
-    if min len (ba.size - (off + 32)) = len ∧
+    if len < 2 ^ 64 ∧ min len (ba.size - (off + 32)) = len ∧
        allZerosBA ba (off + 32 + len) pad then
       some (windowBA ba (off + 32) len, 32 + len + pad)
     else none
@@ -282,7 +282,7 @@ theorem decodeBytesPrefixBAVal_eq (ba : ByteArray) (off : Nat) :
   | none => simp
   | some len =>
       simp only [Option.bind_some]
-      by_cases hc : min len (ba.size - (off + 32)) = len ∧
+      by_cases hc : len < 2 ^ 64 ∧ min len (ba.size - (off + 32)) = len ∧
           allZerosBA ba (off + 32 + len) ((32 - len % 32) % 32)
       · rw [if_pos hc, if_pos hc]
         simp [windowBA_data_toList]
@@ -385,13 +385,14 @@ private def decodeBA : (t : Ty) → ByteArray → Nat → Option (t.Val × Nat)
           | none => none
       | none => none
   | .array t, ba, off => if t.headSize = 0 then none else
-      match hk : natAtBA ba off with
+      match natAtBA ba off with
       | none => none
-      | some k =>
+      | some k => if hb : k < 2 ^ 64 then
           match (decodeElemsBA t k).run ba (off + 32) (off + 32 + k * t.headSize)
               (k * t.headSize) with
-          | some r => some (⟨r.val.val, by rw [r.val.property]; exact natAtBA_lt hk⟩, 32 + r.frontier)
+          | some r => some (⟨r.val.val, by rw [r.val.property]; exact hb⟩, 32 + r.frontier)
           | none => none
+        else none
   | .fixedArray t n, ba, off =>
       match (decodeElemsBA t n).run ba off (off + n * t.headSize) (n * t.headSize) with
       | some r => some (r.val, r.frontier)
@@ -500,13 +501,14 @@ def decodeBAVal : (t : Ty) → ByteArray → Nat → Option (ValBA t × Nat)
           | none => none
       | none => none
   | .array t, ba, off => if t.headSize = 0 then none else
-      match hk : natAtBA ba off with
+      match natAtBA ba off with
       | none => none
-      | some k =>
+      | some k => if hb : k < 2 ^ 64 then
           match (decodeElemsBAVal t k).run ba (off + 32) (off + 32 + k * t.headSize)
               (k * t.headSize) with
-          | some r => some (⟨r.val.val, by rw [r.val.property]; exact natAtBA_lt hk⟩, 32 + r.frontier)
+          | some r => some (⟨r.val.val, by rw [r.val.property]; exact hb⟩, 32 + r.frontier)
           | none => none
+        else none
   | .fixedArray t n, ba, off =>
       match (decodeElemsBAVal t n).run ba off (off + n * t.headSize) (n * t.headSize) with
       | some r => some (r.val, r.frontier)
@@ -571,18 +573,28 @@ private theorem decode_array_none {t : Ty} {buf : List UInt8} (hhs : ¬ t.headSi
   · next k h => rw [hk] at h; contradiction
 
 private theorem decode_array_pos {t : Ty} {buf : List UInt8} {k : Nat} (hhs : ¬ t.headSize = 0)
-    (hk : natAt buf 0 = some k) :
+    (hk : natAt buf 0 = some k) (hb : k < 2 ^ 64) :
     decode (.array t) buf =
       match (decodeElems t k).run (buf.drop 32) (buf.drop (32 + k * t.headSize))
           (k * t.headSize) with
       | some ⟨vs, _, rest, E⟩ =>
-          some (⟨vs.val, by rw [vs.property]; exact natAt_lt hk⟩, 32 + E, rest)
+          some (⟨vs.val, by rw [vs.property]; exact hb⟩, 32 + E, rest)
       | none => none := by
   simp only [decode]
   rw [if_neg hhs]
   split
   · next h => rw [hk] at h; contradiction
-  · next k' h => rw [hk] at h; obtain rfl := Option.some.inj h; rfl
+  · next k' h => rw [hk] at h; obtain rfl := Option.some.inj h; rw [dif_pos hb] <;> rfl
+
+/-- Above the length bound both decoders reject, so the agreement proofs
+dispose of that branch without touching the element walk. -/
+private theorem decode_array_big {t : Ty} {buf : List UInt8} {k : Nat} (hhs : ¬ t.headSize = 0)
+    (hk : natAt buf 0 = some k) (hb : ¬ k < 2 ^ 64) : decode (.array t) buf = none := by
+  simp only [decode]
+  rw [if_neg hhs]
+  split
+  · next h => rw [hk] at h
+  · next k' h => rw [hk] at h; obtain rfl := Option.some.inj h; rw [dif_neg hb]
 
 private theorem decodeBA_array_none {t : Ty} {ba : ByteArray} {off : Nat}
     (hhs : ¬ t.headSize = 0) (hk : natAtBA ba off = none) : decodeBA (.array t) ba off = none := by
@@ -593,18 +605,28 @@ private theorem decodeBA_array_none {t : Ty} {ba : ByteArray} {off : Nat}
   · next k h => rw [hk] at h; contradiction
 
 private theorem decodeBA_array_pos {t : Ty} {ba : ByteArray} {off k : Nat}
-    (hhs : ¬ t.headSize = 0) (hk : natAtBA ba off = some k) :
+    (hhs : ¬ t.headSize = 0) (hk : natAtBA ba off = some k) (hb : k < 2 ^ 64) :
     decodeBA (.array t) ba off =
       match (decodeElemsBA t k).run ba (off + 32) (off + 32 + k * t.headSize)
           (k * t.headSize) with
-      | some r => some (⟨r.val.val, by rw [r.val.property]; exact natAtBA_lt hk⟩,
+      | some r => some (⟨r.val.val, by rw [r.val.property]; exact hb⟩,
           32 + r.frontier)
       | none => none := by
   simp only [decodeBA]
   rw [if_neg hhs]
   split
   · next h => rw [hk] at h; contradiction
-  · next k' h => rw [hk] at h; obtain rfl := Option.some.inj h; rfl
+  · next k' h => rw [hk] at h; obtain rfl := Option.some.inj h; rw [dif_pos hb] <;> rfl
+
+/-- Above the length bound both decoders reject, so the agreement proofs
+dispose of that branch without touching the element walk. -/
+private theorem decodeBA_array_big {t : Ty} {ba : ByteArray} {off k : Nat} (hhs : ¬ t.headSize = 0)
+    (hk : natAtBA ba off = some k) (hb : ¬ k < 2 ^ 64) : decodeBA (.array t) ba off = none := by
+  simp only [decodeBA]
+  rw [if_neg hhs]
+  split
+  · next h => rw [hk] at h
+  · next k' h => rw [hk] at h; obtain rfl := Option.some.inj h; rw [dif_neg hb]
 
 /-- The list decoder's remainder is exactly the drop by what it consumed —
 a corollary of soundness, and what lets an offset stand in for a cursor. -/
@@ -665,7 +687,9 @@ theorem decodeBA_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) (off : Nat) :
             rfl
         | some k =>
             have hkl : natAt (ba.data.toList.drop off) 0 = some k := by rw [← hne, hk]
-            rw [decodeBA_array_pos hhs hk, decode_array_pos hhs hkl]
+            by_cases hb : k < 2 ^ 64
+            case neg => rw [decodeBA_array_big hhs hk hb, decode_array_big hhs hkl hb]; rfl
+            rw [decodeBA_array_pos hhs hk hb, decode_array_pos hhs hkl hb]
             have hw := decodeElemsBA_eq t hva.1 k ba (off + 32) (off + 32 + k * t.headSize)
               (k * t.headSize)
             rw [drop_drop_ba, drop_drop_ba,
@@ -817,17 +841,27 @@ private theorem decodeBAVal_array_none {t : Ty} {ba : ByteArray} {off : Nat}
   · next k h => rw [hk] at h; contradiction
 
 private theorem decodeBAVal_array_pos {t : Ty} {ba : ByteArray} {off k : Nat}
-    (hhs : ¬ t.headSize = 0) (hk : natAtBA ba off = some k) :
+    (hhs : ¬ t.headSize = 0) (hk : natAtBA ba off = some k) (hb : k < 2 ^ 64) :
     decodeBAVal (.array t) ba off =
       match (decodeElemsBAVal t k).run ba (off + 32) (off + 32 + k * t.headSize)
           (k * t.headSize) with
-      | some r => some (⟨r.val.val, by rw [r.val.property]; exact natAtBA_lt hk⟩, 32 + r.frontier)
+      | some r => some (⟨r.val.val, by rw [r.val.property]; exact hb⟩, 32 + r.frontier)
       | none => none := by
   simp only [decodeBAVal]
   rw [if_neg hhs]
   split
   · next h => rw [hk] at h; contradiction
-  · next k' h => rw [hk] at h; obtain rfl := Option.some.inj h; rfl
+  · next k' h => rw [hk] at h; obtain rfl := Option.some.inj h; rw [dif_pos hb] <;> rfl
+
+/-- Above the length bound both decoders reject, so the agreement proofs
+dispose of that branch without touching the element walk. -/
+private theorem decodeBAVal_array_big {t : Ty} {ba : ByteArray} {off k : Nat} (hhs : ¬ t.headSize = 0)
+    (hk : natAtBA ba off = some k) (hb : ¬ k < 2 ^ 64) : decodeBAVal (.array t) ba off = none := by
+  simp only [decodeBAVal]
+  rw [if_neg hhs]
+  split
+  · next h => rw [hk] at h
+  · next k' h => rw [hk] at h; obtain rfl := Option.some.inj h; rw [dif_neg hb]
 
 /-- `String.fromUTF8?` is injective on the same bytes: the packed window
 and its list denotation give the same string. -/
@@ -953,7 +987,9 @@ theorem decodeBAVal_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) (off : Nat) :
             rw [decodeBAVal_array_none hhs hk, decodeBA_array_none hhs hk]
             rfl
         | some k =>
-            rw [decodeBAVal_array_pos hhs hk, decodeBA_array_pos hhs hk]
+            by_cases hb : k < 2 ^ 64
+            case neg => rw [decodeBAVal_array_big hhs hk hb, decodeBA_array_big hhs hk hb]; rfl
+            rw [decodeBAVal_array_pos hhs hk hb, decodeBA_array_pos hhs hk hb]
             cases h1 :
               (decodeElemsBAVal t k).run ba (off + 32) (off + 32 + k * t.headSize) (k * t.headSize) with
             | none =>
