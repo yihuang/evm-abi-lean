@@ -22,4 +22,4 @@ root = "Bench"
 [[require]]
 name = "binary"
 git = "https://github.com/yihuang/lean-binary.git"
-rev = "main"
+rev = "build"
