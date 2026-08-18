@@ -301,7 +301,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
       rw [drop_append_of_length rfl]
   | string =>
       obtain ⟨s, hlb⟩ := v
-      have hb2 : s.toUTF8.data.toList.length < 2 ^ 256 := by
+      have hb2 : s.toUTF8.data.toList.length < 2 ^ 64 := by
         rw [← Binary.ByteArray.size_eq_toList_length s.toUTF8]
         exact hlb
       have hr := decodeBytesPrefix_append (bs := s.toUTF8.data.toList) (rest := rest) hb2
@@ -345,7 +345,7 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
           (UInt256.ofNat vs.length) 0 (by simp)
         rw [List.nil_append] at hw
         rw [hw, UInt256.toNat_ofNat, Nat.mod_eq_of_lt
-          (show vs.length < UInt256.size from hlk)]
+          (show vs.length < UInt256.size from lt_two_pow_256_of_lt_two_pow_64 hlk)]
       simp only [encode, put, decode, toList_append, toList_putUint, List.append_assoc]
       rw [← encodeParts, if_neg hhs]
       split
@@ -353,7 +353,8 @@ theorem decode_roundtrip (t : Ty) (hv : t.Valid) (v : t.Val)
       · next k hk' =>
           rw [hcnt] at hk'
           obtain rfl := Option.some.inj hk'
-          rw [← List.drop_drop]
+          -- the length word is the value's own length, which its type bounds
+          rw [dif_pos hlk, ← List.drop_drop]
           rw [show (encodeUint vs.length ++ (encodeParts (vs.map (partOf t)) ++ rest)).drop 32 =
               encodeParts (vs.map (partOf t)) ++ rest from drop_append_of_length (length_encodeUint _)]
           rw [hwalk]

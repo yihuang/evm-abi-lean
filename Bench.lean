@@ -43,27 +43,27 @@ open EvmAbi.Codec.ByteArray
 def flatTy : Ty := .array .bytes
 
 /-- A `bytes` value of `payload` bytes, packed (`ValBA` family). -/
-def mkBytesBAOf (payload : Nat) (p : payload < 2 ^ 256) : {bs : ByteArray // bs.size < 2 ^ 256} :=
+def mkBytesBAOf (payload : Nat) (p : payload < 2 ^ 64) : {bs : ByteArray // bs.size < 2 ^ 64} :=
   ⟨(List.replicate payload 7).toByteArray, by
     simp [Binary.ByteArray.size_eq_toList_length, List.length_replicate]
     exact p⟩
 
 /-- A flat `bytes[]` of `payload`-byte packed payloads. -/
-def flatValBAOf (payload : Nat) (p : payload < 2 ^ 256)
-    (n : Nat) (h : n < 2 ^ 256) : {vs : List (ValBA .bytes) // vs.length < 2 ^ 256} :=
+def flatValBAOf (payload : Nat) (p : payload < 2 ^ 64)
+    (n : Nat) (h : n < 2 ^ 64) : {vs : List (ValBA .bytes) // vs.length < 2 ^ 64} :=
   ⟨List.replicate n (mkBytesBAOf payload p), by simpa using h⟩
 
 /-- A `bytes` value of `payload` bytes. -/
-def mkBytesOf (payload : Nat) (p : payload < 2 ^ 256) : Ty.Val .bytes :=
+def mkBytesOf (payload : Nat) (p : payload < 2 ^ 64) : Ty.Val .bytes :=
   ⟨List.replicate payload 7, by simpa using p⟩
 
 /-- A flat `bytes[]` of `payload`-byte elements. -/
-def flatValOf (payload : Nat) (p : payload < 2 ^ 256)
-    (n : Nat) (h : n < 2 ^ 256) : flatTy.Val :=
+def flatValOf (payload : Nat) (p : payload < 2 ^ 64)
+    (n : Nat) (h : n < 2 ^ 64) : flatTy.Val :=
   ⟨List.replicate n (mkBytesOf payload p), by simpa using h⟩
 
 /-- A `bytes` value of `n` bytes. -/
-def mkBytes (n : Nat) (h : n < 2 ^ 256) : Ty.Val .bytes :=
+def mkBytes (n : Nat) (h : n < 2 ^ 64) : Ty.Val .bytes :=
   ⟨List.replicate n 7, by simpa using h⟩
 
 /-- A `uint256[]` of full-width values — token amounts, hashes and addresses
@@ -71,7 +71,7 @@ are all above `2 ^ 63`, so every word goes through `Nat`'s bignum path.  This
 is the case `Binary.Fast`'s chunked encoder exists for. -/
 def wideTy : Ty := .array (.uint 256)
 
-def wideVal (n : Nat) (h : n < 2 ^ 256) : wideTy.Val :=
+def wideVal (n : Nat) (h : n < 2 ^ 64) : wideTy.Val :=
   ⟨List.replicate n ⟨0x123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0,
     by decide⟩, by simpa using h⟩
 
@@ -120,7 +120,7 @@ def benchDecode (label : String) (ba : ByteArray) : IO Unit := do
   timeIt "fast  decodeStrictBA       " (fun _ =>
     if (decodeStrictBA flatTy ba).isSome then ba.size else 0)
 
-def benchValBA (payload : Nat) (p : payload < 2 ^ 256) (n : Nat) (h : n < 2 ^ 256) : IO Unit := do
+def benchValBA (payload : Nat) (p : payload < 2 ^ 64) (n : Nat) (h : n < 2 ^ 64) : IO Unit := do
   let v := flatValOf payload p n h
   let vba := flatValBAOf payload p n h
   -- Not `Spec.encodeByteArray flatTy v`: that shares the subexpression with the
@@ -140,7 +140,7 @@ def benchValBA (payload : Nat) (p : payload < 2 ^ 256) (n : Nat) (h : n < 2 ^ 25
 payload as a ≤32-cell cons list (`windowList`) and repacks it;
 `decodeStrict` now extracts the payload in one `copySlice` with the padding
 checked by index (`allZerosBA`), so this row isolates the list round-trip. -/
-def benchBytesN (n : Nat) (h : n < 2 ^ 256) : IO Unit := do
+def benchBytesN (n : Nat) (h : n < 2 ^ 64) : IO Unit := do
   let t : Ty := .array (.bytesN 32)
   let el : Ty.Val (.bytesN 32) := ⟨List.replicate 32 7, by simp⟩
   let v : t.Val := ⟨List.replicate n el, by simpa using h⟩
@@ -184,16 +184,16 @@ def callDynVal : ValBA callArgsDyn.ty :=
 
 def flagsVal : ValBA flags.ty := (true, false, true, false, true, false, true, false, ())
 
-def flagArrayVal (n : Nat) (h : n < 2 ^ 256) : ValBA flagArray.ty :=
+def flagArrayVal (n : Nat) (h : n < 2 ^ 64) : ValBA flagArray.ty :=
   ⟨List.replicate n true, by simpa using h⟩
 
-def wordArrayVal (n : Nat) (h : n < 2 ^ 256) : ValBA wordArray.ty :=
+def wordArrayVal (n : Nat) (h : n < 2 ^ 64) : ValBA wordArray.ty :=
   ⟨List.replicate n wideWord, by simpa using h⟩
 
-def bytesArrayVal (n : Nat) (h : n < 2 ^ 256) : ValBA bytesArray.ty :=
+def bytesArrayVal (n : Nat) (h : n < 2 ^ 64) : ValBA bytesArray.ty :=
   ⟨List.replicate n (mkBytesBAOf 256 (by decide)), by simpa using h⟩
 
-def pairArrayVal (n : Nat) (h : n < 2 ^ 256) : ValBA pairArray.ty :=
+def pairArrayVal (n : Nat) (h : n < 2 ^ 64) : ValBA pairArray.ty :=
   ⟨List.replicate n (wideWord, true, ()), by simpa using h⟩
 
 /-- Time `n` repetitions (the compiled rows are nanoseconds apart, so the
@@ -226,22 +226,28 @@ half of the encoder and, for ordinary calldata, much the larger half:
 addresses, token amounts and hashes are all full-width, and `uint256[]` runs
 ~20× the per-element cost of `bool[]` through the very same layout.
 
-An ABI word is a `UInt256`, which wraps `BitVec 256` = `Fin (2 ^ 256)` =
-`Nat`.  Above `2 ^ 63` that is a heap GMP bignum, so each of the four
-`n >>> 64` steps `Binary.Fast`'s chunked codec takes per word allocates, as
-does each `acc <<< 64` on the way back in.
+An ABI word *was* a `Nat` — `UInt256` wrapped `BitVec 256` = `Fin (2 ^ 256)`,
+a heap GMP bignum above `2 ^ 63`, so every step of the codec allocated at both
+ends.  `UInt256` is four `UInt64` limbs since lean-binary#5, which settled the
+write side: it goes straight from the limbs and no longer touches a bignum at
+any width, and the two write rows below have converged accordingly.
+
+Reading is the half still to close.  `Binary.decodeBEBytesFrom` accumulates
+into a `Nat`, so each `acc <<< 64` on the way back in allocates for a
+full-width word — which is what separates the **wide** and **small** read rows.
 
 The rows isolate that:
 
 * **wide** — full-width words, the case the rest of the benchmark uses.
 * **small** — the same codec on words below `2 ^ 63`, where `Nat` is
-  unboxed.  Wide minus small is the bignum cost and nothing else.
-* **limbs** (read only) — the ceiling: the same 32 bytes read straight into
-  four `UInt64`s, i.e. what the codec would cost if `UInt256` were a
-  four-limb structure rather than a `Nat`.  This is a `lean-binary`
-  question, not an `EvmAbi` one, which is why it is a ceiling here and not a
-  patch.  There is no matching *write* row because it would not say
-  anything: with the bignum gone, writing is 32 `ByteArray.push`es either
+  unboxed.  Wide minus small is the bignum cost and nothing else, so on the
+  *read* rows it is most of the time and on the *write* rows it is now
+  nothing: writing goes straight from the limbs.
+* **limbs** (read only) — the same 32 bytes read straight into four
+  `UInt64`s.  Not a ceiling: it is written with `ba[i]!`, and
+  `EvmAbi.beWord8At` takes its in-bounds proof as an argument and reads
+  below this row.  There is no matching *write* row because it would not say
+  anything — with the bignum gone, writing is 32 `ByteArray.push`es either
   way, which is what the floors below measure.
 
 Then three local groups: what `Chunks.emitZeros` pays to write a dynamic
@@ -288,8 +294,10 @@ def decodeWords (ba : ByteArray) (seed : Nat) : Nat := Id.run do
     if decodeBEBytesFrom ba (32 * i) 32 == 0 then s := s + 1
   return s
 
-/-- The ceiling for the row above: the same 32 bytes read into four `UInt64`
-limbs, with no 256-bit `Nat` ever built. -/
+/-- The same 32 bytes read into four `UInt64` limbs, with no 256-bit `Nat` ever
+built.  Still `ba[i]!`, so it pays a bounds test and a panic branch per byte —
+`EvmAbi.beWord8At` takes the in-bounds proof as an argument and reads below
+this row. -/
 def decodeWordLimbs (ba : ByteArray) (seed : Nat) : Nat := Id.run do
   let mut s := seed
   for i in [0:wordCount] do
@@ -365,12 +373,12 @@ def timeWord (label : String) (n : Nat) (act : Nat → Nat) : IO Unit := do
 def benchWordCodec : IO Unit := do
   IO.println s!"== the word codec ({wordCount} words per op) =="
   IO.println "-- write one uint256 as 32 big-endian bytes"
-  timeWord "wide  (bignum)          " 200 (encodeWords wideWords)
+  timeWord "wide                    " 200 (encodeWords wideWords)
   timeWord "small (< 2^63)          " 200 (encodeWords smallWords)
   IO.println "-- read one uint256 from 32 big-endian bytes"
   timeWord "wide  (bignum)          " 200 (decodeWords wideBuf)
   timeWord "small (< 2^63)          " 200 (decodeWords smallBuf)
-  timeWord "limbs (ceiling)         " 200 (decodeWordLimbs wideBuf)
+  timeWord "limbs (checked reads)   " 200 (decodeWordLimbs wideBuf)
   IO.println "-- 28 bytes of zero padding (the unaligned `bytes` tail)"
   timeWord "Chunks.emitZeros        " 200 (padByEmitZeros 28)
   timeWord "copySlice from zero buf " 200 (padByCopy 28)

@@ -81,11 +81,11 @@ in `namespace EvmAbi.Spec`).
   `ByteArray.extract` sizes its copy from the range it is handed, so an
   unclamped window asks the allocator for up to `2 ^ 256` bytes.  `take`
   clamps on the list side, so clamping costs nothing in the spec.
-* **The `array` clause matches dependently.**  Both decoders read the
-  length word with `match hk : … with` because the `some k` branch needs
-  `hk` for the `Ty.Val` bound, so neither scrutinee can be rewritten in
-  place (`motive is not type correct`).  Resolve the match once against a
-  known word with the `decode_array_pos` / `_none` pair — the device
+* **The `array` clause tests its length word.**  Both decoders reject a
+  length word at `2 ^ 64` — `Ty.Val`'s bound — and hand the `hb` in scope
+  to the refined value, so the bound is local and the scrutinee needs no
+  equation binder.  Resolve the word once against a known value with the
+  `decode_array_pos` / `_big` / `_none` trio — the device
   `decode_bytes_pos` already uses — and work with the plain match that
   leaves.
 * **Never measure a cursor.**  `decode` returns the bytes it consumed

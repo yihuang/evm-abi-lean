@@ -119,6 +119,17 @@ example : Spec.decodeStrict .bytes (Spec.encode .bytes ⟨[0x61, 0x62, 0x63], by
 example : Spec.decodeStrict .string (Spec.encode .string ⟨"Hello, world!", by native_decide⟩)
     = some ⟨"Hello, world!", by native_decide⟩ := by native_decide
 
+-- A length word at or above `2 ^ 64` is rejected up front: `bytes`/`string`
+-- in the prefix decoder, `T[]` in the array clause.  No buffer is lost to
+-- this — satisfying such a word takes that many payload bytes or elements,
+-- so the length check already rejected these.  The bound makes an
+-- unreachable case explicit.
+example : Spec.decode .bytes (encodeUint (2 ^ 64)) = none := by native_decide
+example : Spec.decode .string (encodeUint (2 ^ 64)) = none := by native_decide
+example : Spec.decode (.array (.uint 8)) (encodeUint (2 ^ 64)) = none := by native_decide
+example : decode .bytes (encodeUint (2 ^ 64)).toByteArray = none := by native_decide
+example : decode (.array (.uint 8)) (encodeUint (2 ^ 64)).toByteArray = none := by native_decide
+
 -- The same instances via library theorems (no computation)
 
 example : Spec.decodeStrict (.uint 8) (Spec.encode (.uint 8) ⟨200, by decide⟩) = some ⟨200, by decide⟩ :=

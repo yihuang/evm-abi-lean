@@ -474,6 +474,12 @@ theorem decode_sound (t : Ty) (hv : t.Valid) (v : t.Val) (buf rest : List UInt8)
       split at h
       · contradiction
       · next k hk =>
+          -- a decoded array has a length word below `2 ^ 64`, or `decode` rejected it
+          have hkb : k < 2 ^ 64 := by
+            by_cases hc : k < 2 ^ 64
+            · exact hc
+            · rw [dif_neg hc] at h; contradiction
+          rw [dif_pos hkb] at h
           cases he : (decodeElems t k).run (buf.drop 32) (buf.drop (32 + k * t.headSize))
             (k * t.headSize) with
           | none => simp only [he] at h; contradiction

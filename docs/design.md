@@ -179,6 +179,10 @@ This design gives definitional reduction — `Val (.uint 8)` *is*
 `Subtype (fun n => n < 2^8)` — so dependent pattern matching in
 `Spec.encode`/`Spec.decode` sees through the index.
 
+Dynamic payloads (`bytes`, `string`, `T[]`) carry a `< 2^64` length bound
+in their subtype, and the decoders enforce it — see `Ty.Val` for why that
+is tighter than soundness needs.
+
 ### 3.3 Codec Architecture (`Codec.lean`)
 
 Encoding and decoding are defined by structural recursion on `Ty`:

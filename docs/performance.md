@@ -80,22 +80,38 @@ which for ordinary calldata is the larger half: addresses, token amounts and
 hashes are all full-width, and `uint256[]` costs ~20× per element what
 `bool[]` does through the very same layout.
 
-An ABI word is a `UInt256`, which wraps `BitVec 256` = `Fin (2 ^ 256)` =
-`Nat` — above `2 ^ 63` a heap GMP bignum, so every `n >>> 64` on the way out
-and every `acc <<< 64` on the way back in allocates. Per word:
+An ABI word used to be a `Nat` — `UInt256` wrapped `BitVec 256` = `Fin (2 ^ 256)`,
+a heap GMP bignum above `2 ^ 63`, so every `n >>> 64` on the way out and every
+`acc <<< 64` on the way back in allocated. `UInt256` is four `UInt64` limbs now
+(lean-binary#5), which settled the write side: writing goes straight from the
+limbs and no longer touches a bignum at any width. Per word:
 
 | | full width | value < 2^63 |
 |---|---|---|
-| write 32 big-endian bytes | 523 ns | 93 ns |
-| read 32 big-endian bytes | 854 ns | 22 ns |
+| write 32 big-endian bytes | 85 ns | 83 ns |
+| read 32 big-endian bytes | 803 ns | 22 ns |
+| read into limbs, `ba[i]!` | 16 ns | 16 ns |
 
-The second column is the same codec on a value `Nat` keeps unboxed, so the gap
-to it is the bignum and nothing else: **82% of a write and 97% of a read**.
-Reading straight into four `UInt64` limbs is 16 ns, so a four-limb `UInt256`
-would be worth ~5.6× and ~53× — but that is a `lean-binary` change, since it
-moves the representation every proof in `Binary.UInt256` is stated over. There
-is no four-limb *write* figure because with the bignum gone writing is 32
-`ByteArray.push`es either way: 78 ns, against 5 ns to copy the same bytes.
+The write columns have converged, and what is left of them is not arithmetic:
+writing is 32 `ByteArray.push`es either way, against 5 ns to copy the same
+bytes. Reading is the row still to close — `Binary.decodeBEBytesFrom`
+accumulates into a `Nat`, so a full-width read is 50× a limb read, and even a
+small one is 6 ns above it.
+
+That 6 ns is collectable where the value is known small, which for the ABI is
+every length and offset word: `natAtBAFast` reads the four limbs and returns
+the low one when the top three are zero, falling back to the accumulation when
+they are not, swapped in by `@[csimp]`.
+
+The limb read is half of it. The other half is that `beWord8At` takes its
+in-bounds proof as an argument, so the eight reads are `ba[i]` and compile to
+unchecked loads; `ba[i]!` would re-test `i < ba.size` and carry a panic branch
+for every byte. The decoder has already checked `off + 32 ≤ ba.size` to decide
+whether the word exists at all, so the proof is free — the last table row is
+*not* a floor, since it is written with `ba[i]!` and the real reader is below
+it. Together, on `decode bytes[]` 2000: 292 → 260 → 229 µs/op, 1.28×. The gain
+tracks words read per element — `bytes32[]`, which reads one length word for a
+whole array, holds at 170 either way.
 
 What was available here is the work that never needed a bignum. The ABI writes
 a word for every array length, dynamic offset, `bytes` length and `bool`, all
@@ -131,6 +147,25 @@ reasoned about.
 * **Chunking `allZerosBA`'s padding check** through `beWord8`: 25 ns → 15 ns
   per 28-byte check, 6% of the `decodeStrict` row it sits in — not worth the
   correctness argument.
+* **Reading a word's limbs as a `UInt256`** — `(UInt256.ofBEByteArrayAt ba
+  off).l3` — in place of four bare `UInt64` locals: no change at all on any
+  row, twice measured. Assembling the structure costs about what the bignum
+  accumulation cost, so the limb read only pays when nothing is allocated to
+  hold the limbs. `Bench`'s `limbs (checked reads)` row is the shape that works
+  — bare locals, no structure.
+* **A `UInt64` length in place of the `Nat` one** — sound, the `2 ^ 64` cap being
+  exactly `UInt64.size`. The twelve `Nat` ops an element in
+  `decodeBytesPrefixBAVal` go 4.3 → 1.27 ns, 0.95 of it `len < 2 ^ 64` comparing
+  against a *bignum* literal. That is 2.6% of a 117 ns element, under its row's
+  own spread, bought with a `toNat` on every take/drop proof — the specification
+  is `List`-indexed. And the word read spends 32 `lean_nat_add`s an element
+  against these twelve: the arithmetic is in the indices, not the lengths.
+* **`USize` indices and `ByteArray.uget`** for those reads — 1.48× on a limb read,
+  and unreachable. Nothing takes a `Nat` offset to a `USize` one soundly:
+  `USize.toNat_ofNat` gives `n % 2 ^ System.Platform.numBits`, `usize` truncates
+  with no lemma back, and `a.size < USize.size` is unprovable. Core justifies
+  `uget` in prose, as a runtime invariant; taking it costs an assumption in the
+  public API.
 
 Generating EVM bytecode rather than Lean remains the interesting direction.
 
