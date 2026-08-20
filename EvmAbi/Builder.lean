@@ -128,18 +128,12 @@ theorem data_toList_emitZeros (acc : ByteArray) (n : Nat) :
 /-- Push one 32-byte word onto the accumulator, most significant limb
 first — no per-word scratch buffer, no `copySlice`. -/
 def emitWord (acc : ByteArray) (w : UInt256) : ByteArray :=
-  pushLimb w.l3 (pushLimb w.l2 (pushLimb w.l1 (pushLimb w.l0 acc)))
+  UInt256.pushBE w acc
 
 theorem data_toList_emitWord (acc : ByteArray) (w : UInt256) :
     (emitWord acc w).data.toList = acc.data.toList ++ bytesOfWord w := by
-  -- `toBEByteArrayFast` is the same limb chain seeded empty; expand both
-  -- chains with `pushBEChunk_eq` and rewrite across.
-  have h : (UInt256.toBEByteArrayFast w).data.toList = bytesOfWord w := by
-    rw [← congrFun UInt256.toBEByteArray_eq_fast w]
-    exact UInt256.toList_toBEByteArray w
-  simp only [emitWord, UInt256.toBEByteArrayFast, pushLimb_eq,
-    toList_emptyWithCapacity, List.nil_append, List.append_assoc] at h ⊢
-  rw [h]
+  rw [emitWord, UInt256.pushBE_eq]
+  rfl
 
 /-! ### zero runs, copied rather than pushed
 
@@ -262,12 +256,12 @@ zeros copied in one `copySlice`, then the single `UInt64` chunk that can be
 non-zero.  `encodeBEBytes 32` instead pushes all 32 bytes one at a time,
 three quarters of them known to be zero. -/
 def word32Small (n : Nat) : ByteArray :=
-  pushLimb (UInt64.ofNat n) (Chunks.pushZeros32 (ByteArray.emptyWithCapacity 32) 24)
+  pushBELimb (UInt64.ofNat n) (Chunks.pushZeros32 (ByteArray.emptyWithCapacity 32) 24)
 
 theorem data_toList_word32Small {n : Nat} (h : n < 2 ^ 64) :
     (word32Small n).data.toList = encodeBEU 32 n := by
   have h8 : n < 256 ^ 8 := by omega
-  rw [word32Small, pushLimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
+  rw [word32Small, pushBELimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
     encodeBEU_window (by omega), show (ByteArray.emptyWithCapacity 32).data.toList = [] from rfl,
     List.nil_append, show (32 : Nat) = 8 + 24 from rfl, encodeBEU_pad h8 24]
 

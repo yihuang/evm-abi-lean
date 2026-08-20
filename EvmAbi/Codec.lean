@@ -488,7 +488,7 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
   match t, v with
   | .array t, v =>
       if t.isStatic then
-        emitVals (pushLimb (UInt64.ofNat v.val.length)
+        emitVals (pushBELimb (UInt64.ofNat v.val.length)
           (Chunks.pushZeros32
             (ByteArray.emptyWithCapacity (32 + t.headSize * v.val.length)) 24)) t v.val
       else encode (.array t) v
@@ -502,7 +502,7 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
   | .array te, ⟨vs, h⟩ =>
       show encode (.array te) ⟨vs, h⟩
         = if te.isStatic then
-            emitVals (pushLimb (UInt64.ofNat vs.length)
+            emitVals (pushBELimb (UInt64.ofNat vs.length)
               (Chunks.pushZeros32
                 (ByteArray.emptyWithCapacity (32 + te.headSize * vs.length)) 24)) te vs
           else encode (.array te) ⟨vs, h⟩
@@ -515,7 +515,7 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
             = putUint vs.length ++ putParts (vs.map (partOfBA te)) := by
           rw [putBA]
         rw [hput, Builder.toList_append, toList_putUint, toList_putParts_static ht]
-        rw [data_toList_emitVals ht, pushLimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
+        rw [data_toList_emitVals ht, pushBELimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
           toList_emptyWithCapacity, List.nil_append, encodeBEU_window (by omega),
           encodeUint_eq, show (32 : Nat) = 8 + 24 from rfl,
           encodeBEU_pad (show vs.length < 256 ^ 8 by omega) 24, List.append_assoc]
