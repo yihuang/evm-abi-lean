@@ -731,6 +731,63 @@ theorem heads_tails_tuple : ∀ (ts : List Ty) (vs : TupleValBA ts) (acc : Nat),
 termination_by ts _ _ => (sizeOf ts, 1)
 end
 
+/-! ### static sizes
+
+A static value's size is fixed by its type, so the arms that write one size
+their buffer from `staticSize` and skip the size pass entirely.  It is
+`Ty.headSize` except at `bytesN m` with `m > 32`, where the payload is `m`
+bytes rather than one word — using `headSize` there would under-allocate. -/
+
+mutual
+/-- Encoded bytes of a static type, from the type alone. -/
+def staticSize : Ty → Nat
+  | .bytesN m => m + (32 - m)
+  | .fixedArray t n => n * staticSize t
+  | .tuple ts => staticSizeSum ts
+  | .uint _ | .int _ | .bool | .address | .bytes | .string | .array _ => 32
+termination_by t => sizeOf t
+
+/-- Encoded bytes of a static component list. -/
+def staticSizeSum : List Ty → Nat
+  | [] => 0
+  | t :: ts => staticSize t + staticSizeSum ts
+termination_by ts => sizeOf ts
+end
+
+mutual
+theorem sizeBA_static : ∀ {t : Ty}, t.isStatic = true → ∀ v : ValBA t,
+    sizeBA t v = staticSize t
+  | .uint _, _, ⟨_, _⟩ => by rw [sizeBA, staticSize]
+  | .int _, _, ⟨_, _⟩ => by rw [sizeBA, staticSize]
+  | .bool, _, _ => by rw [sizeBA, staticSize]
+  | .address, _, ⟨_, _⟩ => by rw [sizeBA, staticSize]
+  | .bytesN m, _, ⟨bs, hbs⟩ => by rw [sizeBA, staticSize, hbs]
+  | .fixedArray t n, ht, ⟨vs, hvs⟩ => by
+      rw [sizeBA, staticSize, sizeElems_static (t := t) ht vs, hvs]
+  | .tuple ts, ht, vs => by rw [sizeBA, staticSize, sizeTuple_static (ts := ts) ht vs]
+  | .bytes, ht, _ => Bool.noConfusion ht
+  | .string, ht, _ => Bool.noConfusion ht
+  | .array _, ht, _ => Bool.noConfusion ht
+termination_by t _ _ => (sizeOf t, 0)
+
+theorem sizeElems_static : ∀ {t : Ty}, t.isStatic = true → ∀ vs : List (ValBA t),
+    sizeElems t vs = vs.length * staticSize t
+  | t, ht, [] => by rw [sizeElems]; simp
+  | t, ht, v :: vs => by
+      rw [sizeElems, if_pos ht, sizeBA_static ht v, sizeElems_static ht vs]
+      simp [Nat.succ_mul, Nat.add_comm]
+termination_by t _ vs => (sizeOf t, 1 + vs.length)
+
+theorem sizeTuple_static : ∀ {ts : List Ty}, Ty.allStatic ts = true →
+    ∀ vs : TupleValBA ts, sizeTuple ts vs = staticSizeSum ts
+  | [], _, _ => by rw [sizeTuple, staticSizeSum]
+  | t :: ts, ht, (v, vs) => by
+      obtain ⟨h1, h2⟩ : Ty.isStatic t = true ∧ Ty.allStatic ts = true := by
+        simpa [Ty.allStatic] using ht
+      rw [sizeTuple, if_pos h1, sizeBA_static h1 v, sizeTuple_static h2 vs, staticSizeSum]
+termination_by ts _ _ => (sizeOf ts, 1)
+end
+
 /-! ### the size tree
 
 Calling `sizeBA` per head slot would re-walk each subtree once per ancestor
@@ -1072,19 +1129,19 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
   | .array t, v =>
       if t.isStatic then
         emitVals (emitUintWord
-          (ByteArray.emptyWithCapacity (32 + t.headSize * v.val.length)) v.val.length) t v.val
+          (ByteArray.emptyWithCapacity (32 + staticSize t * v.val.length)) v.val.length) t v.val
       else emitAnyRun (.array t) v
   | .bytes, v => emitPayload (ByteArray.emptyWithCapacity (dynTailSize v.val.size)) v.val
   | .string, v =>
       emitPayload (ByteArray.emptyWithCapacity (dynTailSize v.val.utf8ByteSize)) v.val.toUTF8
   | t, v =>
-      if t.isStatic then emitVal (ByteArray.emptyWithCapacity t.headSize) t v
+      if t.isStatic then emitVal (ByteArray.emptyWithCapacity (staticSize t)) t v
       else emitAnyRun t v
 
 /-- A static value's whole encoding is its head, so it streams through
 `emitVal` — a struct of words costs no `Part` per component. -/
 private theorem encode_static_arm {t : Ty} (v : ValBA t) (ht : t.isStatic = true) :
-    encode t v = emitVal (ByteArray.emptyWithCapacity t.headSize) t v := by
+    encode t v = emitVal (ByteArray.emptyWithCapacity (staticSize t)) t v := by
   apply ByteArray.data_inj
   rw [← Array.toList_inj]
   rw [encode, Builder.data_toList_run, data_toList_emitVal ht, toList_emptyWithCapacity,
@@ -1102,7 +1159,7 @@ private theorem encode_emitAny (t : Ty) (v : ValBA t) :
 /-- The catch-all arm agrees with `encode`, at any type. -/
 private theorem encode_nonarray_arm (t : Ty) (v : ValBA t) :
     encode t v
-      = if t.isStatic then emitVal (ByteArray.emptyWithCapacity t.headSize) t v
+      = if t.isStatic then emitVal (ByteArray.emptyWithCapacity (staticSize t)) t v
         else emitAnyRun t v := by
   by_cases ht : t.isStatic
   · rw [if_pos ht]
@@ -1116,7 +1173,7 @@ private theorem encode_array_static_arm (te : Ty) (vs : List (ValBA te))
     encode (.array te) ⟨vs, h⟩
       = if te.isStatic then
           emitVals (emitUintWord
-            (ByteArray.emptyWithCapacity (32 + te.headSize * vs.length)) vs.length) te vs
+            (ByteArray.emptyWithCapacity (32 + staticSize te * vs.length)) vs.length) te vs
         else emitAnyRun (.array te) ⟨vs, h⟩ := by
   by_cases ht : te.isStatic
   · rw [if_pos ht]
