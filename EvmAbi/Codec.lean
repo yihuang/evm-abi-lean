@@ -482,44 +482,283 @@ theorem data_toList_emitTupleVals :
 termination_by ts => (sizeOf ts, 0)
 end
 
-/-- `encode` with the static-element array arm fused (the swap the compiler
-acts on; every theorem stays stated over `encode`). -/
+/-- Write one `uint` word from a `Nat`: below `2 ^ 64` — every array
+length, offset and `bytes` length in practice — the 24 leading zeros are
+one `copySlice` and the value one limb, with no `UInt256.ofNat` (whose
+big-literal mods cost ~1 µs per word, measured); past it, the word the
+slow way. -/
+def emitUintWord (acc : ByteArray) (n : Nat) : ByteArray :=
+  if n < 2 ^ 64 then pushBELimb (UInt64.ofNat n) (Chunks.pushZeros32 acc 24)
+  else Chunks.emitWord acc (UInt256.ofNat n)
+
+theorem data_toList_emitUintWord (acc : ByteArray) (n : Nat) :
+    (emitUintWord acc n).data.toList = acc.data.toList ++ encodeUint n := by
+  rw [emitUintWord]
+  split
+  · next hn =>
+      rw [pushBELimb_eq, Chunks.data_toList_pushZeros32 _ (by omega), encodeUint_eq,
+        encodeBEU_window (by omega), show (32 : Nat) = 8 + 24 from rfl,
+        encodeBEU_pad (show n < 256 ^ 8 by omega) 24, List.append_assoc]
+  · next _ => rw [Chunks.data_toList_emitWord]; rfl
+
+/-! ### the `bytes[]` and `string[]` arms
+
+A dynamic element's head slot holds an offset, and in general that needs the
+preceding tails' sizes — the recursion the builder's cached size exists to
+avoid.  For an array of `bytes` or `string` there is no recursion: a tail is
+its payload's length word plus padding, read straight off the payload, so
+the offsets are a running sum and the whole array streams in one forward
+pass — the length word, every offset word, then every tail.  The walkers are
+generic in the payload projection: `bytes` reads it off the value, `string`
+through `toUTF8` — sized without materializing it, by `utf8ByteSize`. -/
+
+/-- The tail a dynamic payload of `n` bytes occupies: its length word plus
+the padded payload. -/
+def dynTailSize (n : Nat) : Nat := 32 + (n + (32 - n % 32) % 32)
+
+/-- The builder's cached tail size is `dynTailSize`. -/
+theorem size_putBytesBA (bs : ByteArray) : (putBytesBA bs).size = dynTailSize bs.size := by
+  rw [Builder.size_eq_length_toList, toList_putBytesBA, dynTailSize, encodeBytes]
+  simp [length_pad32]
+
+/-- Every dynamic part occupies 32 head bytes. -/
+private theorem headSizes_dynamic {t : Ty} (hd : t.isStatic = false)
+    (vs : List (ValBA t)) :
+    headSizes (vs.map (partOfBA t)) = 32 * vs.length := by
+  induction vs with
+  | nil => rfl
+  | cons v vs ih =>
+      simp only [List.map_cons, partOfBA, hd, headSizes, Part.headSize, ih,
+        List.length_cons]
+      omega
+
+/-- Write the offset words: `off` starts at the head section's size and
+steps by each tail, sized by `sizeF` without materializing the payload. -/
+@[specialize] def emitDynHeads {t : Ty} (sizeF : ValBA t → Nat)
+    (acc : ByteArray) (off : Nat) : List (ValBA t) → ByteArray
+  | [] => acc
+  | v :: vs => emitDynHeads sizeF (emitUintWord acc off) (off + dynTailSize (sizeF v)) vs
+
+/-- Write one dynamic payload: its length word, the payload, its padding —
+the padding skipped when the payload is already word-aligned. -/
+@[inline] def emitPayload (acc : ByteArray) (bs : ByteArray) : ByteArray :=
+  if bs.size % 32 == 0 then emitUintWord acc bs.size ++ bs
+  else Chunks.pushZeros32 (emitUintWord acc bs.size ++ bs) ((32 - bs.size % 32) % 32)
+
+theorem data_toList_emitPayload (acc bs : ByteArray) :
+    (emitPayload acc bs).data.toList = acc.data.toList ++ encodeBytes bs.data.toList := by
+  rw [emitPayload]
+  split
+  · next hbeq =>
+      have h0 : (32 - bs.size % 32) % 32 = 0 := by
+        have : bs.size % 32 = 0 := by simpa using hbeq
+        omega
+      simp [data_toList_emitUintWord, encodeBytes, pad32, h0, List.append_assoc]
+  · next _ =>
+      rw [Chunks.data_toList_pushZeros32 _ (by omega)]
+      simp [data_toList_emitUintWord, encodeBytes, pad32, List.append_assoc]
+
+/-- Write the tails: each element's payload in order. -/
+@[specialize] def emitDynTails {t : Ty} (payloadF : ValBA t → ByteArray)
+    (acc : ByteArray) : List (ValBA t) → ByteArray
+  | [] => acc
+  | v :: vs => emitDynTails payloadF (emitPayload acc (payloadF v)) vs
+
+theorem data_toList_emitDynHeads {t : Ty} (hd : t.isStatic = false)
+    {sizeF : ValBA t → Nat}
+    (hsize : ∀ v : ValBA t, (putBA t v).size = dynTailSize (sizeF v))
+    (acc : ByteArray) (off : Nat) (vs : List (ValBA t)) :
+    (emitDynHeads sizeF acc off vs).data.toList
+      = acc.data.toList ++ (putHeads off (vs.map (partOfBA t))).toList := by
+  induction vs generalizing acc off with
+  | nil => simp [emitDynHeads, putHeads]
+  | cons v vs ih =>
+      rw [emitDynHeads, ih, data_toList_emitUintWord]
+      simp only [List.map_cons, partOfBA, hd, putHeads, Builder.toList_append,
+        toList_putUint, hsize v, List.append_assoc]
+
+theorem data_toList_emitDynTails {t : Ty} (hd : t.isStatic = false)
+    {payloadF : ValBA t → ByteArray}
+    (hput : ∀ v : ValBA t, (putBA t v).toList = encodeBytes (payloadF v).data.toList)
+    (acc : ByteArray) (vs : List (ValBA t)) :
+    (emitDynTails payloadF acc vs).data.toList
+      = acc.data.toList ++ (putTails (vs.map (partOfBA t))).toList := by
+  induction vs generalizing acc with
+  | nil => simp [emitDynTails, putTails]
+  | cons v vs ih =>
+      rw [emitDynTails, ih, data_toList_emitPayload]
+      simp only [List.map_cons, partOfBA, hd, putTails, Builder.toList_append, hput v,
+        List.append_assoc]
+
+/-! The per-type facts the walkers are instantiated with. -/
+
+private theorem size_putBA_bytes : ∀ v : ValBA .bytes,
+    (putBA .bytes v).size = dynTailSize v.val.size
+  | ⟨_, _⟩ => by simp only [putBA, size_putBytesBA]
+
+private theorem toList_putBA_bytes : ∀ v : ValBA .bytes,
+    (putBA .bytes v).toList = encodeBytes v.val.data.toList
+  | ⟨_, _⟩ => by simp only [putBA, toList_putBytesBA]
+
+private theorem toUTF8_size (s : String) : s.toUTF8.size = s.utf8ByteSize :=
+  Nat.add_zero _
+
+private theorem size_putBA_string : ∀ v : ValBA .string,
+    (putBA .string v).size = dynTailSize v.val.utf8ByteSize
+  | ⟨s, _⟩ => by
+      simp only [putBA]
+      show (putBytesBA s.toUTF8).size = _
+      rw [size_putBytesBA, toUTF8_size]
+
+private theorem toList_putBA_string : ∀ v : ValBA .string,
+    (putBA .string v).toList = encodeBytes (v.val.toUTF8).data.toList
+  | ⟨s, _⟩ => by simp only [putBA, toList_putString, encodeString]
+
+/-- `encode` with the static-element, `bytes[]` and `string[]` array arms
+fused (the swap the compiler acts on; every theorem stays stated over
+`encode`). -/
 def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
   match t, v with
+  | .array .bytes, v =>
+      emitDynTails (fun u : ValBA .bytes => u.val)
+        (emitDynHeads (fun u : ValBA .bytes => u.val.size)
+          (emitUintWord
+            (ByteArray.emptyWithCapacity
+              (v.val.foldl (fun s u => s + 32 + dynTailSize u.val.size) 32)) v.val.length)
+          (32 * v.val.length) v.val)
+        v.val
+  | .array .string, v =>
+      emitDynTails (fun u : ValBA .string => u.val.toUTF8)
+        (emitDynHeads (fun u : ValBA .string => u.val.utf8ByteSize)
+          (emitUintWord
+            (ByteArray.emptyWithCapacity
+              (v.val.foldl (fun s u => s + 32 + dynTailSize u.val.utf8ByteSize) 32))
+            v.val.length)
+          (32 * v.val.length) v.val)
+        v.val
   | .array t, v =>
       if t.isStatic then
-        emitVals (pushBELimb (UInt64.ofNat v.val.length)
-          (Chunks.pushZeros32
-            (ByteArray.emptyWithCapacity (32 + t.headSize * v.val.length)) 24)) t v.val
+        emitVals (emitUintWord
+          (ByteArray.emptyWithCapacity (32 + t.headSize * v.val.length)) v.val.length) t v.val
       else encode (.array t) v
-  | t, v => encode t v
+  | .bytes, v => emitPayload (ByteArray.emptyWithCapacity (dynTailSize v.val.size)) v.val
+  | .string, v =>
+      emitPayload (ByteArray.emptyWithCapacity (dynTailSize v.val.utf8ByteSize)) v.val.toUTF8
+  | t, v =>
+      if t.isStatic then emitVal (ByteArray.emptyWithCapacity t.headSize) t v
+      else encode t v
+
+/-- A static value's whole encoding is its head, so it streams through
+`emitVal` — a struct of words costs no `Part` per component. -/
+private theorem encode_static_arm {t : Ty} (v : ValBA t) (ht : t.isStatic = true) :
+    encode t v = emitVal (ByteArray.emptyWithCapacity t.headSize) t v := by
+  apply ByteArray.data_inj
+  rw [← Array.toList_inj]
+  rw [encode, Builder.data_toList_run, data_toList_emitVal ht, toList_emptyWithCapacity,
+    List.nil_append]
+
+/-- The non-array arm agrees with `encode`, at any type. -/
+private theorem encode_nonarray_arm (t : Ty) (v : ValBA t) :
+    encode t v
+      = if t.isStatic then emitVal (ByteArray.emptyWithCapacity t.headSize) t v
+        else encode t v := by
+  by_cases ht : t.isStatic
+  · rw [if_pos ht]
+    exact encode_static_arm v ht
+  · rw [if_neg ht]
+
+/-- The static-element arm agrees with `encode`, at any element type. -/
+private theorem encode_array_static_arm (te : Ty) (vs : List (ValBA te))
+    (h : vs.length < 2 ^ 64) :
+    encode (.array te) ⟨vs, h⟩
+      = if te.isStatic then
+          emitVals (emitUintWord
+            (ByteArray.emptyWithCapacity (32 + te.headSize * vs.length)) vs.length) te vs
+        else encode (.array te) ⟨vs, h⟩ := by
+  by_cases ht : te.isStatic
+  · rw [if_pos ht]
+    apply ByteArray.data_inj
+    rw [← Array.toList_inj]
+    rw [encode, Builder.data_toList_run]
+    have hput : putBA (.array te) ⟨vs, h⟩
+        = putUint vs.length ++ putParts (vs.map (partOfBA te)) := by
+      rw [putBA]
+    rw [hput, Builder.toList_append, toList_putUint, toList_putParts_static ht]
+    rw [data_toList_emitVals ht, data_toList_emitUintWord, toList_emptyWithCapacity,
+      List.nil_append]
+  · rw [if_neg ht]
 
 @[csimp] theorem encode_eq_fast : @encode = @encodeFast := by
   funext t v
   match t, v with
-  | .uint _, _ | .int _, _ | .bool, _ | .address, _ | .bytesN _, _ | .bytes, _
-  | .string, _ | .fixedArray _ _, _ | .tuple _, _ => rfl
-  | .array te, ⟨vs, h⟩ =>
-      show encode (.array te) ⟨vs, h⟩
-        = if te.isStatic then
-            emitVals (pushBELimb (UInt64.ofNat vs.length)
-              (Chunks.pushZeros32
-                (ByteArray.emptyWithCapacity (32 + te.headSize * vs.length)) 24)) te vs
-          else encode (.array te) ⟨vs, h⟩
-      by_cases ht : te.isStatic
-      · rw [if_pos ht]
-        apply ByteArray.data_inj
-        rw [← Array.toList_inj]
-        rw [encode, Builder.data_toList_run]
-        have hput : putBA (.array te) ⟨vs, h⟩
-            = putUint vs.length ++ putParts (vs.map (partOfBA te)) := by
-          rw [putBA]
-        rw [hput, Builder.toList_append, toList_putUint, toList_putParts_static ht]
-        rw [data_toList_emitVals ht, pushBELimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
-          toList_emptyWithCapacity, List.nil_append, encodeBEU_window (by omega),
-          encodeUint_eq, show (32 : Nat) = 8 + 24 from rfl,
-          encodeBEU_pad (show vs.length < 256 ^ 8 by omega) 24, List.append_assoc]
-      · rw [if_neg ht]
+  | .uint _, v | .int _, v | .bool, v | .address, v | .bytesN _, v
+  | .fixedArray _ _, v | .tuple _, v =>
+      exact encode_nonarray_arm _ v
+  | .bytes, ⟨bs, h⟩ =>
+      apply ByteArray.data_inj
+      rw [← Array.toList_inj]
+      show (encode .bytes ⟨bs, h⟩).data.toList
+        = (emitPayload (ByteArray.emptyWithCapacity (dynTailSize bs.size)) bs).data.toList
+      rw [encode, Builder.data_toList_run, data_toList_emitPayload, toList_emptyWithCapacity,
+        List.nil_append]
+      exact toList_putBA_bytes ⟨bs, h⟩
+  | .string, ⟨s, h⟩ =>
+      apply ByteArray.data_inj
+      rw [← Array.toList_inj]
+      show (encode .string ⟨s, h⟩).data.toList
+        = (emitPayload (ByteArray.emptyWithCapacity (dynTailSize s.utf8ByteSize))
+            s.toUTF8).data.toList
+      rw [encode, Builder.data_toList_run, data_toList_emitPayload, toList_emptyWithCapacity,
+        List.nil_append]
+      exact toList_putBA_string ⟨s, h⟩
+  | .array (.uint _), ⟨vs, h⟩ | .array (.int _), ⟨vs, h⟩ | .array .bool, ⟨vs, h⟩
+  | .array .address, ⟨vs, h⟩ | .array (.bytesN _), ⟨vs, h⟩
+  | .array (.array _), ⟨vs, h⟩ | .array (.fixedArray _ _), ⟨vs, h⟩
+  | .array (.tuple _), ⟨vs, h⟩ =>
+      exact encode_array_static_arm _ vs h
+  | .array .bytes, ⟨vs, h⟩ =>
+      apply ByteArray.data_inj
+      rw [← Array.toList_inj]
+      show (encode (.array .bytes) ⟨vs, h⟩).data.toList
+        = (emitDynTails (fun u : ValBA .bytes => u.val)
+            (emitDynHeads (fun u : ValBA .bytes => u.val.size)
+              (emitUintWord
+                (ByteArray.emptyWithCapacity
+                  (vs.foldl (fun s u => s + 32 + dynTailSize u.val.size) 32)) vs.length)
+              (32 * vs.length) vs)
+            vs).data.toList
+      rw [encode, Builder.data_toList_run]
+      have hput : putBA (.array .bytes) ⟨vs, h⟩
+          = putUint vs.length ++ putParts (vs.map (partOfBA .bytes)) := by
+        rw [putBA]
+      rw [hput, Builder.toList_append, toList_putUint, putParts, Builder.toList_append,
+        headSizes_dynamic rfl]
+      rw [data_toList_emitDynTails rfl toList_putBA_bytes,
+        data_toList_emitDynHeads rfl size_putBA_bytes, data_toList_emitUintWord,
+        toList_emptyWithCapacity, List.nil_append]
+      simp only [List.append_assoc]
+  | .array .string, ⟨vs, h⟩ =>
+      apply ByteArray.data_inj
+      rw [← Array.toList_inj]
+      show (encode (.array .string) ⟨vs, h⟩).data.toList
+        = (emitDynTails (fun u : ValBA .string => u.val.toUTF8)
+            (emitDynHeads (fun u : ValBA .string => u.val.utf8ByteSize)
+              (emitUintWord
+                (ByteArray.emptyWithCapacity
+                  (vs.foldl (fun s u => s + 32 + dynTailSize u.val.utf8ByteSize) 32))
+                vs.length)
+              (32 * vs.length) vs)
+            vs).data.toList
+      rw [encode, Builder.data_toList_run]
+      have hput : putBA (.array .string) ⟨vs, h⟩
+          = putUint vs.length ++ putParts (vs.map (partOfBA .string)) := by
+        rw [putBA]
+      rw [hput, Builder.toList_append, toList_putUint, putParts, Builder.toList_append,
+        headSizes_dynamic rfl]
+      rw [data_toList_emitDynTails rfl toList_putBA_string,
+        data_toList_emitDynHeads rfl size_putBA_string, data_toList_emitUintWord,
+        toList_emptyWithCapacity, List.nil_append]
+      simp only [List.append_assoc]
 
 /-! ## the runtime decoder -/
 
