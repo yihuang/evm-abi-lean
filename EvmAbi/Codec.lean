@@ -319,14 +319,16 @@ theorem encode_eq (t : Ty) (v : ValBA t) :
   rw [encode, Builder.size_run, Builder.size_eq_length_toList]
   rw [toList_putBA t v]
 
-/-! ## the `uint` array fast path
+/-! ## the static-element array fast paths
 
 The array arm of `putBA` builds a `Part`, two `Builder`s and an `append`
-node per element, and `emit` then walks them all; for an array of `uint`
-the layout is plain concatenation, so the walk below writes the length
-word and every element straight into the pre-sized output.  The `@[csimp]`
-swap sits on `encode`, not `putBA`: two builders with different trees are
-never equal, but the `ByteArray`s they run to are. -/
+node per element, and `emit` then walks them all; for an array of static
+elements the layout is plain concatenation (`toList_putParts_static`), so
+the walks below write the length word and every element straight into the
+pre-sized output — `uint` elements as words, `bytesN` elements as a payload
+append plus padding.  The `@[csimp]` swap sits on `encode`, not `putBA`:
+two builders with different trees are never equal, but the `ByteArray`s
+they run to are. -/
 
 /-- `emitWord` each value in order. -/
 def emitWords {m : Nat} (acc : ByteArray) : List (ValBA (.uint m)) → ByteArray
@@ -340,29 +342,75 @@ theorem data_toList_emitWords {m : Nat} (acc : ByteArray) (vs : List (ValBA (.ui
   | nil => simp [emitWords]
   | cons v vs ih => simp [emitWords, ih, Chunks.data_toList_emitWord]
 
-private theorem toList_putHeads_uint (m : Nat) (vs : List (ValBA (.uint m))) (acc : Nat) :
-    (putHeads acc (vs.map (partOfBA (.uint m)))).toList
-      = (vs.map fun v => bytesOfWord v.val).flatten := by
+private theorem toList_putHeads_static {t : Ty} (h : t.isStatic = true)
+    (vs : List (ValBA t)) (acc : Nat) :
+    (putHeads acc (vs.map (partOfBA t))).toList
+      = (vs.map fun v => (putBA t v).toList).flatten := by
   induction vs generalizing acc with
   | nil => rfl
   | cons v vs ih =>
-      obtain ⟨w, hw⟩ := v
-      simp only [List.map_cons, partOfBA, putBA, Ty.isStatic, putHeads,
-        Builder.toList_append, toList_putWord, ih acc, List.flatten_cons]
+      simp only [List.map_cons, partOfBA, h, putHeads, Builder.toList_append, ih acc,
+        List.flatten_cons]
 
-private theorem toList_putTails_uint (m : Nat) (vs : List (ValBA (.uint m))) :
-    (putTails (vs.map (partOfBA (.uint m)))).toList = [] := by
+private theorem toList_putTails_static {t : Ty} (h : t.isStatic = true)
+    (vs : List (ValBA t)) :
+    (putTails (vs.map (partOfBA t))).toList = [] := by
   induction vs with
   | nil => rfl
-  | cons v vs ih => simpa only [List.map_cons, partOfBA, Ty.isStatic, putTails] using ih
+  | cons v vs ih => simpa only [List.map_cons, partOfBA, h, putTails] using ih
 
 /-- Static parts lay out as concatenation: the heads are the encodings and
 the tail section is empty. -/
+theorem toList_putParts_static {t : Ty} (h : t.isStatic = true) (vs : List (ValBA t)) :
+    (putParts (vs.map (partOfBA t))).toList
+      = (vs.map fun v => (putBA t v).toList).flatten := by
+  rw [putParts, Builder.toList_append, toList_putHeads_static h, toList_putTails_static h,
+    List.append_nil]
+
 theorem toList_putParts_uint (m : Nat) (vs : List (ValBA (.uint m))) :
     (putParts (vs.map (partOfBA (.uint m)))).toList
       = (vs.map fun v => bytesOfWord v.val).flatten := by
-  rw [putParts, Builder.toList_append, toList_putHeads_uint, toList_putTails_uint,
-    List.append_nil]
+  rw [toList_putParts_static rfl]
+  congr 1
+  refine List.map_congr_left fun v _ => ?_
+  obtain ⟨w, hw⟩ := v
+  simp only [putBA, toList_putWord]
+
+theorem toList_putParts_bytesN (m : Nat) (vs : List (ValBA (.bytesN m))) :
+    (putParts (vs.map (partOfBA (.bytesN m)))).toList
+      = (vs.map fun v => encodeBytesN v.val.data.toList).flatten := by
+  rw [toList_putParts_static rfl]
+  congr 1
+  refine List.map_congr_left fun v _ => ?_
+  obtain ⟨bs, hbs⟩ := v
+  simp only [putBA, toList_putBytesNBA]
+
+/-- Append each `bytesN` payload and its zero padding in order: the payload
+by one `ByteArray` append, the padding by one `copySlice` — skipped when the
+payload already fills its word, which is every element of a `bytes32[]`. -/
+def emitBytesNs {m : Nat} (acc : ByteArray) : List (ValBA (.bytesN m)) → ByteArray
+  | [] => acc
+  | v :: vs =>
+      emitBytesNs (if v.val.size == 32 then acc ++ v.val
+        else Chunks.pushZeros32 (acc ++ v.val) (32 - v.val.size)) vs
+
+theorem data_toList_emitBytesNs {m : Nat} (acc : ByteArray) (vs : List (ValBA (.bytesN m))) :
+    (emitBytesNs acc vs).data.toList
+      = acc.data.toList ++ (vs.map fun v => encodeBytesN v.val.data.toList).flatten := by
+  induction vs generalizing acc with
+  | nil => simp [emitBytesNs]
+  | cons v vs ih =>
+      have hstep : (if v.val.size == 32 then acc ++ v.val
+          else Chunks.pushZeros32 (acc ++ v.val) (32 - v.val.size)).data.toList
+          = acc.data.toList ++ encodeBytesN v.val.data.toList := by
+        split
+        · next hbeq =>
+            have h32 : v.val.size = 32 := by simpa using hbeq
+            simp [encodeBytesN, h32]
+        · next _ =>
+            rw [Chunks.data_toList_pushZeros32 _ (by omega)]
+            simp [encodeBytesN, List.append_assoc]
+      rw [emitBytesNs, ih, hstep, List.map_cons, List.flatten_cons, List.append_assoc]
 
 /-- `encode` with the `uint` array arm fused (the swap the compiler acts
 on; every theorem stays stated over `encode`). -/
@@ -371,6 +419,9 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
   | .array (.uint _), ⟨vs, _⟩ =>
       emitWords (pushLimb (UInt64.ofNat vs.length)
         (Chunks.pushZeros32 (ByteArray.emptyWithCapacity (32 + 32 * vs.length)) 24)) vs
+  | .array (.bytesN _), ⟨vs, _⟩ =>
+      emitBytesNs (pushLimb (UInt64.ofNat vs.length)
+        (Chunks.pushZeros32 (ByteArray.emptyWithCapacity (32 + 32 * vs.length)) 24)) vs
   | t, v => encode t v
 
 @[csimp] theorem encode_eq_fast : @encode = @encodeFast := by
@@ -378,7 +429,7 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
   match t, v with
   | .uint _, _ | .int _, _ | .bool, _ | .address, _ | .bytesN _, _ | .bytes, _
   | .string, _ | .fixedArray _ _, _ | .tuple _, _ => rfl
-  | .array (.int _), _ | .array .bool, _ | .array .address, _ | .array (.bytesN _), _
+  | .array (.int _), _ | .array .bool, _ | .array .address, _
   | .array .bytes, _ | .array .string, _ | .array (.array _), _
   | .array (.fixedArray _ _), _ | .array (.tuple _), _ => rfl
   | .array (.uint m), ⟨vs, h⟩ =>
@@ -394,6 +445,22 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
         rw [putBA]
       rw [hput, Builder.toList_append, toList_putUint, toList_putParts_uint]
       rw [data_toList_emitWords, pushLimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
+        toList_emptyWithCapacity, List.nil_append, encodeBEU_window (by omega),
+        encodeUint_eq, show (32 : Nat) = 8 + 24 from rfl,
+        encodeBEU_pad (show vs.length < 256 ^ 8 by omega) 24, List.append_assoc]
+  | .array (.bytesN m), ⟨vs, h⟩ =>
+      apply ByteArray.data_inj
+      rw [← Array.toList_inj]
+      show (encode (.array (.bytesN m)) ⟨vs, h⟩).data.toList
+        = (emitBytesNs (pushLimb (UInt64.ofNat vs.length)
+            (Chunks.pushZeros32 (ByteArray.emptyWithCapacity (32 + 32 * vs.length)) 24))
+            vs).data.toList
+      rw [encode, Builder.data_toList_run]
+      have hput : putBA (.array (.bytesN m)) ⟨vs, h⟩
+          = putUint vs.length ++ putParts (vs.map (partOfBA (.bytesN m))) := by
+        rw [putBA]
+      rw [hput, Builder.toList_append, toList_putUint, toList_putParts_bytesN]
+      rw [data_toList_emitBytesNs, pushLimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
         toList_emptyWithCapacity, List.nil_append, encodeBEU_window (by omega),
         encodeUint_eq, show (32 : Nat) = 8 + 24 from rfl,
         encodeBEU_pad (show vs.length < 256 ^ 8 by omega) 24, List.append_assoc]
