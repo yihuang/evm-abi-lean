@@ -134,6 +134,12 @@ the output built so far — `emitWord` unrolls it into straight-line `push`es
 instead. When a linear loop measures quadratic, read the generated C: a
 `lean_dec_ref` *after* an argument is passed means the callee borrows it.
 
+The decode mirror: the generic walk costs ~eight allocations per element,
+`decodeUintElems` reads a `uint256[]` word with a bounds check, a `UInt256`
+and a cons, swapped in by `@[csimp]` at the `decodeBAVal` boundary (a
+`mutual` block's bodies are compiled before any attribute placed after
+them). `decode uint256[]` 2000: 173 → 66 µs/op, 1.3× ahead of go-ethereum.
+
 ## Measured negatives
 
 Recorded so they are not retried. Each was implemented and benchmarked, not

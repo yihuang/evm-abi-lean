@@ -903,6 +903,122 @@ private theorem fromUTF8?_none_ne_some_data {b : ByteArray} {l : List UInt8} {s 
   have h1' : String.fromUTF8? l.toByteArray = none := by rwa [← hq]
   cases h1'.symm.trans h2
 
+/-! ## the `uint` array fast path
+
+The generic walk costs ~eight allocations per element (`GetBA` bind,
+`Result`, `Option`, pair); for `.array (.uint m)` at width ≥ 256 the walk
+below reads a word with a cons, a `UInt256` and an `Option`.  The `@[csimp]`
+swap sits on `decodeBAVal` rather than `decodeElemsBAVal` because the
+`mutual` block's bodies are already compiled when any later attribute
+appears; nested arrays keep the generic walk for the same reason. -/
+
+/-- Read `k` consecutive `uint` words at `ho`, width ≥ 256 so every word is
+in range by `toNat_lt_two_pow_of_le`. -/
+def decodeUintElems (m : Nat) (hm : 256 ≤ m) (ba : ByteArray) :
+    (k ho : Nat) → Option { vs : List (ValBA (.uint m)) // vs.length = k }
+  | 0, _ => some ⟨[], rfl⟩
+  | k + 1, ho =>
+      if h : ho + 32 ≤ ba.size then
+        match decodeUintElems m hm ba k (ho + 32) with
+        | some ⟨vs, hl⟩ =>
+            some ⟨⟨UInt256.ofBEByteArrayAt ba ho h, toNat_lt_two_pow_of_le _ hm⟩ :: vs,
+              by simp [hl]⟩
+        | none => none
+      else none
+
+/-- One `uint` element read, width ≥ 256: a word if it is in bounds, cursors
+advanced by 32 on the head side only. -/
+private theorem decodeElemBAVal_uint_run (m : Nat) (hm : 256 ≤ m) (ba : ByteArray)
+    (ho to E : Nat) : (decodeElemBAVal (.uint m)).run ba ho to E =
+      if h : ho + 32 ≤ ba.size then
+        some ⟨⟨UInt256.ofBEByteArrayAt ba ho h, toNat_lt_two_pow_of_le _ hm⟩, ho + 32, to, E⟩
+      else none := by
+  rw [decodeElemBAVal]
+  by_cases h : ho + 32 ≤ ba.size
+  · simp only [decodeBAVal, wordAtBA, Ty.isStatic, dif_pos h, dif_pos hm]
+  · simp only [decodeBAVal, wordAtBA, Ty.isStatic, dif_neg h]
+
+/-- The fused walk is the generic one.  Static elements never touch the tail
+cursor or the frontier, so the run only advances the head — by 32 per word. -/
+theorem decodeUintElems_run (m : Nat) (hm : 256 ≤ m) (ba : ByteArray) (k : Nat) :
+    ∀ ho to E, (decodeElemsBAVal (.uint m) k).run ba ho to E =
+      match decodeUintElems m hm ba k ho with
+      | some vs => some ⟨vs, ho + 32 * k, to, E⟩
+      | none => none := by
+  induction k with
+  | zero => intro ho to E; simp [decodeElemsBAVal, decodeUintElems]
+  | succ k ih =>
+      intro ho to E
+      rw [decodeElemsBAVal, decodeUintElems]
+      simp only [GetBA.bind_run, decodeElemBAVal_uint_run m hm]
+      by_cases h : ho + 32 ≤ ba.size
+      · simp only [dif_pos h, ih, GetBA.pure_run]
+        cases hrec : decodeUintElems m hm ba k (ho + 32) with
+        | none => rfl
+        | some vs =>
+            rw [show ho + 32 + 32 * k = ho + 32 * (k + 1) by omega]
+      · simp only [dif_neg h]
+
+/-- `decodeBAVal` with the `uint` array walk fused (the swap the compiler
+acts on; every theorem stays stated over `decodeBAVal`). -/
+def decodeBAValFast (t : Ty) (ba : ByteArray) (off : Nat) : Option (ValBA t × Nat) :=
+  match t with
+  | .array (.uint m) =>
+      if hm : 256 ≤ m then
+        match natAtBA ba off with
+        | none => none
+        | some k =>
+            if hb : k < 2 ^ 64 then
+              match decodeUintElems m hm ba k (off + 32) with
+              | some vs => some (⟨vs.val, by rw [vs.property]; exact hb⟩, 32 + k * 32)
+              | none => none
+            else none
+      else decodeBAVal (.array (.uint m)) ba off
+  | t => decodeBAVal t ba off
+
+@[csimp] theorem decodeBAVal_eq_fastPath : @decodeBAVal = @decodeBAValFast := by
+  funext t ba off
+  match t with
+  | .uint _ | .int _ | .bool | .address | .bytesN _ | .bytes | .string
+  | .fixedArray _ _ | .tuple _ => rfl
+  | .array (.int _) | .array .bool | .array .address | .array (.bytesN _)
+  | .array .bytes | .array .string | .array (.array _) | .array (.fixedArray _ _)
+  | .array (.tuple _) => rfl
+  | .array (.uint m) =>
+      show decodeBAVal (.array (.uint m)) ba off =
+        if hm : 256 ≤ m then
+          match natAtBA ba off with
+          | none => none
+          | some k =>
+              if hb : k < 2 ^ 64 then
+                match decodeUintElems m hm ba k (off + 32) with
+                | some vs => some (⟨vs.val, by rw [vs.property]; exact hb⟩, 32 + k * 32)
+                | none => none
+              else none
+        else decodeBAVal (.array (.uint m)) ba off
+      by_cases hm : 256 ≤ m
+      · rw [dif_pos hm]
+        cases hk : natAtBA ba off with
+        | none =>
+            simp only [decodeBAVal]
+            rw [if_neg (show ¬ (Ty.uint m).headSize = 0 by simp [Ty.headSize])]
+            split
+            · rfl
+            · next k h => rw [hk] at h; contradiction
+        | some k =>
+            by_cases hb : k < 2 ^ 64
+            · rw [decodeBAVal_array_pos (show ¬ (Ty.uint m).headSize = 0 by
+                  simp [Ty.headSize]) hk hb,
+                decodeUintElems_run m hm ba k]
+              simp only [dif_pos hb]
+              cases hrec : decodeUintElems m hm ba k (off + 32) with
+              | none => rfl
+              | some vs => rfl
+            · rw [decodeBAVal_array_big (show ¬ (Ty.uint m).headSize = 0 by
+                  simp [Ty.headSize]) hk hb]
+              simp only [dif_neg hb]
+      · rw [dif_neg hm]
+
 mutual
 /-- **Agreement**: the `ValBA` walker is the `…BA` walker under
 `ValBA.toList`. -/
