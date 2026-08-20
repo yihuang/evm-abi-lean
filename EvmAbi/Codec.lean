@@ -319,28 +319,17 @@ theorem encode_eq (t : Ty) (v : ValBA t) :
   rw [encode, Builder.size_run, Builder.size_eq_length_toList]
   rw [toList_putBA t v]
 
-/-! ## the static-element array fast paths
+/-! ## the static-element array fast path
 
 The array arm of `putBA` builds a `Part`, two `Builder`s and an `append`
-node per element, and `emit` then walks them all; for an array of static
-elements the layout is plain concatenation (`toList_putParts_static`), so
-the walks below write the length word and every element straight into the
-pre-sized output — `uint` elements as words, `bytesN` elements as a payload
-append plus padding.  The `@[csimp]` swap sits on `encode`, not `putBA`:
-two builders with different trees are never equal, but the `ByteArray`s
-they run to are. -/
-
-/-- `emitWord` each value in order. -/
-def emitWords {m : Nat} (acc : ByteArray) : List (ValBA (.uint m)) → ByteArray
-  | [] => acc
-  | v :: vs => emitWords (Chunks.emitWord acc v.val) vs
-
-theorem data_toList_emitWords {m : Nat} (acc : ByteArray) (vs : List (ValBA (.uint m))) :
-    (emitWords acc vs).data.toList
-      = acc.data.toList ++ (vs.map fun v => bytesOfWord v.val).flatten := by
-  induction vs generalizing acc with
-  | nil => simp [emitWords]
-  | cons v vs ih => simp [emitWords, ih, Chunks.data_toList_emitWord]
+node per element, and `emit` then walks them all; for a static element
+type the layout is plain concatenation (`toList_putParts_static`), so the
+fused arm writes the length word and every element straight into the
+pre-sized output.  `emitVal` is the one writer for every static type — a
+dynamic element cannot stream in one pass, because each head slot holds an
+offset that depends on every preceding tail's size.  The `@[csimp]` swap
+sits on `encode`, not `putBA`: two builders with different trees are never
+equal, but the `ByteArray`s they run to are. -/
 
 private theorem toList_putHeads_static {t : Ty} (h : t.isStatic = true)
     (vs : List (ValBA t)) (acc : Nat) :
@@ -367,61 +356,142 @@ theorem toList_putParts_static {t : Ty} (h : t.isStatic = true) (vs : List (ValB
   rw [putParts, Builder.toList_append, toList_putHeads_static h, toList_putTails_static h,
     List.append_nil]
 
-theorem toList_putParts_uint (m : Nat) (vs : List (ValBA (.uint m))) :
-    (putParts (vs.map (partOfBA (.uint m)))).toList
-      = (vs.map fun v => bytesOfWord v.val).flatten := by
-  rw [toList_putParts_static rfl]
-  congr 1
-  refine List.map_congr_left fun v _ => ?_
-  obtain ⟨w, hw⟩ := v
-  simp only [putBA, toList_putWord]
+/-- The components' encodings, concatenated — what a static tuple's parts
+lay out as. -/
+def tupleEncodings : (ts : List Ty) → TupleValBA ts → List UInt8
+  | [], _ => []
+  | t :: ts, (v, vs) => (putBA t v).toList ++ tupleEncodings ts vs
 
-theorem toList_putParts_bytesN (m : Nat) (vs : List (ValBA (.bytesN m))) :
-    (putParts (vs.map (partOfBA (.bytesN m)))).toList
-      = (vs.map fun v => encodeBytesN v.val.data.toList).flatten := by
-  rw [toList_putParts_static rfl]
-  congr 1
-  refine List.map_congr_left fun v _ => ?_
-  obtain ⟨bs, hbs⟩ := v
-  simp only [putBA, toList_putBytesNBA]
+private theorem toList_putHeads_tupleStatic :
+    ∀ {ts : List Ty}, Ty.allStatic ts = true → ∀ (vs : TupleValBA ts) (acc : Nat),
+      (putHeads acc (partsOfTupleBA ts vs)).toList = tupleEncodings ts vs
+  | [], _, _, _ => by simp [partsOfTupleBA, putHeads, tupleEncodings]
+  | t :: ts, ht, (v, vs), acc => by
+      obtain ⟨ht1, ht2⟩ : Ty.isStatic t = true ∧ Ty.allStatic ts = true := by
+        simpa [Ty.allStatic] using ht
+      simp only [partsOfTupleBA, partOfBA, ht1, putHeads, Builder.toList_append,
+        toList_putHeads_tupleStatic ht2 vs acc, tupleEncodings]
 
-/-- Append each `bytesN` payload and its zero padding in order: the payload
-by one `ByteArray` append, the padding by one `copySlice` — skipped when the
-payload already fills its word, which is every element of a `bytes32[]`. -/
-def emitBytesNs {m : Nat} (acc : ByteArray) : List (ValBA (.bytesN m)) → ByteArray
+private theorem toList_putTails_tupleStatic :
+    ∀ {ts : List Ty}, Ty.allStatic ts = true → ∀ (vs : TupleValBA ts),
+      (putTails (partsOfTupleBA ts vs)).toList = []
+  | [], _, _ => by simp [partsOfTupleBA, putTails]
+  | t :: ts, ht, (v, vs) => by
+      obtain ⟨ht1, ht2⟩ : Ty.isStatic t = true ∧ Ty.allStatic ts = true := by
+        simpa [Ty.allStatic] using ht
+      simpa only [partsOfTupleBA, partOfBA, ht1, putTails]
+        using toList_putTails_tupleStatic ht2 vs
+
+/-- Static tuple parts lay out as concatenation — the `partsOfTupleBA`
+sibling of `toList_putParts_static`. -/
+theorem toList_putParts_tupleStatic {ts : List Ty} (ht : Ty.allStatic ts = true)
+    (vs : TupleValBA ts) :
+    (putParts (partsOfTupleBA ts vs)).toList = tupleEncodings ts vs := by
+  rw [putParts, Builder.toList_append, toList_putHeads_tupleStatic ht,
+    toList_putTails_tupleStatic ht, List.append_nil]
+
+mutual
+/-- Write one static value straight into the accumulator: words by their
+limbs, `bytesN` payloads by one append and one padding copy (skipped when
+the payload fills its word, which is every element of a `bytes32[]`), and
+static compounds by concatenation.  Dynamic types return `acc` untouched —
+`data_toList_emitVal` is guarded by `isStatic`, and the fused arm never
+reaches them. -/
+def emitVal (acc : ByteArray) : (t : Ty) → ValBA t → ByteArray
+  | .uint _, ⟨w, _⟩ => Chunks.emitWord acc w
+  | .int _, ⟨i, _⟩ =>
+      Chunks.emitWord acc (UInt256.ofNat (if 0 ≤ i then i.toNat else 2 ^ 256 - (-i).toNat))
+  | .bool, b => Chunks.emitWord acc (UInt256.ofNat (if b then 1 else 0))
+  | .address, ⟨n, _⟩ => Chunks.emitWord acc (UInt256.ofNat n)
+  | .bytesN _, ⟨bs, _⟩ =>
+      if bs.size == 32 then acc ++ bs else Chunks.pushZeros32 (acc ++ bs) (32 - bs.size)
+  | .fixedArray t _, ⟨vs, _⟩ => emitVals acc t vs
+  | .tuple ts, vs => emitTupleVals acc ts vs
+  | .bytes, _ => acc
+  | .string, _ => acc
+  | .array _, _ => acc
+termination_by t _ => (sizeOf t, 0)
+
+/-- `emitVal` each element in order. -/
+def emitVals (acc : ByteArray) (t : Ty) : List (ValBA t) → ByteArray
   | [] => acc
-  | v :: vs =>
-      emitBytesNs (if v.val.size == 32 then acc ++ v.val
-        else Chunks.pushZeros32 (acc ++ v.val) (32 - v.val.size)) vs
+  | v :: vs => emitVals (emitVal acc t v) t vs
+termination_by vs => (sizeOf t, 1 + vs.length)
 
-theorem data_toList_emitBytesNs {m : Nat} (acc : ByteArray) (vs : List (ValBA (.bytesN m))) :
-    (emitBytesNs acc vs).data.toList
-      = acc.data.toList ++ (vs.map fun v => encodeBytesN v.val.data.toList).flatten := by
-  induction vs generalizing acc with
-  | nil => simp [emitBytesNs]
-  | cons v vs ih =>
-      have hstep : (if v.val.size == 32 then acc ++ v.val
-          else Chunks.pushZeros32 (acc ++ v.val) (32 - v.val.size)).data.toList
-          = acc.data.toList ++ encodeBytesN v.val.data.toList := by
-        split
-        · next hbeq =>
-            have h32 : v.val.size = 32 := by simpa using hbeq
-            simp [encodeBytesN, h32]
-        · next _ =>
-            rw [Chunks.data_toList_pushZeros32 _ (by omega)]
-            simp [encodeBytesN, List.append_assoc]
-      rw [emitBytesNs, ih, hstep, List.map_cons, List.flatten_cons, List.append_assoc]
+/-- `emitVal` each component in order. -/
+def emitTupleVals (acc : ByteArray) : (ts : List Ty) → TupleValBA ts → ByteArray
+  | [], _ => acc
+  | t :: ts, (v, vs) => emitTupleVals (emitVal acc t v) ts vs
+termination_by ts _ => (sizeOf ts, 0)
+end
 
-/-- `encode` with the `uint` array arm fused (the swap the compiler acts
-on; every theorem stays stated over `encode`). -/
+mutual
+theorem data_toList_emitVal :
+    ∀ {t : Ty}, t.isStatic = true → ∀ (acc : ByteArray) (v : ValBA t),
+      (emitVal acc t v).data.toList = acc.data.toList ++ (putBA t v).toList
+  | .uint _, ht, acc, ⟨w, hw⟩ => by
+      rw [emitVal, Chunks.data_toList_emitWord, putBA, toList_putWord]
+  | .int _, ht, acc, ⟨i, hi⟩ => by
+      rw [emitVal, Chunks.data_toList_emitWord, putBA]
+      simp only [toList_putInt, encodeInt, encodeUint]
+  | .bool, ht, acc, b => by
+      rw [emitVal, Chunks.data_toList_emitWord, putBA]
+      simp only [toList_putBool, encodeBool, encodeUint]
+  | .address, ht, acc, ⟨n, hn⟩ => by
+      rw [emitVal, Chunks.data_toList_emitWord, putBA]
+      simp only [toList_putAddress, encodeAddress, encodeUint]
+  | .bytesN _, ht, acc, ⟨bs, hbs⟩ => by
+      rw [emitVal, putBA, toList_putBytesNBA]
+      split
+      · next hbeq =>
+          have h32 : bs.size = 32 := by simpa using hbeq
+          simp [encodeBytesN, h32]
+      · next _ =>
+          rw [Chunks.data_toList_pushZeros32 _ (by omega)]
+          simp [encodeBytesN, List.append_assoc]
+  | .fixedArray t _, ht, acc, ⟨vs, hvs⟩ => by
+      have ht' : t.isStatic = true := ht
+      rw [emitVal, putBA, toList_putParts_static ht', data_toList_emitVals ht']
+  | .tuple ts, ht, acc, vs => by
+      have ht' : Ty.allStatic ts = true := ht
+      rw [emitVal, putBA, toList_putParts_tupleStatic ht', data_toList_emitTupleVals ht']
+  | .bytes, ht, _, _ => Bool.noConfusion ht
+  | .string, ht, _, _ => Bool.noConfusion ht
+  | .array _, ht, _, _ => Bool.noConfusion ht
+termination_by t => (sizeOf t, 0)
+
+theorem data_toList_emitVals {t : Ty} (ht : t.isStatic = true) (acc : ByteArray) :
+    ∀ (vs : List (ValBA t)),
+      (emitVals acc t vs).data.toList
+        = acc.data.toList ++ (vs.map fun v => (putBA t v).toList).flatten
+  | [] => by simp [emitVals]
+  | v :: vs => by
+      rw [emitVals, data_toList_emitVals ht (emitVal acc t v) vs,
+        data_toList_emitVal ht acc v, List.map_cons, List.flatten_cons, List.append_assoc]
+termination_by vs => (sizeOf t, 1 + vs.length)
+
+theorem data_toList_emitTupleVals :
+    ∀ {ts : List Ty}, Ty.allStatic ts = true → ∀ (acc : ByteArray) (vs : TupleValBA ts),
+      (emitTupleVals acc ts vs).data.toList = acc.data.toList ++ tupleEncodings ts vs
+  | [], _, acc, _ => by simp [emitTupleVals, tupleEncodings]
+  | t :: ts, ht, acc, (v, vs) => by
+      obtain ⟨ht1, ht2⟩ : Ty.isStatic t = true ∧ Ty.allStatic ts = true := by
+        simpa [Ty.allStatic] using ht
+      rw [emitTupleVals, data_toList_emitTupleVals ht2 (emitVal acc t v) vs,
+        data_toList_emitVal ht1 acc v, tupleEncodings, List.append_assoc]
+termination_by ts => (sizeOf ts, 0)
+end
+
+/-- `encode` with the static-element array arm fused (the swap the compiler
+acts on; every theorem stays stated over `encode`). -/
 def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
   match t, v with
-  | .array (.uint _), ⟨vs, _⟩ =>
-      emitWords (pushLimb (UInt64.ofNat vs.length)
-        (Chunks.pushZeros32 (ByteArray.emptyWithCapacity (32 + 32 * vs.length)) 24)) vs
-  | .array (.bytesN _), ⟨vs, _⟩ =>
-      emitBytesNs (pushLimb (UInt64.ofNat vs.length)
-        (Chunks.pushZeros32 (ByteArray.emptyWithCapacity (32 + 32 * vs.length)) 24)) vs
+  | .array t, v =>
+      if t.isStatic then
+        emitVals (pushLimb (UInt64.ofNat v.val.length)
+          (Chunks.pushZeros32
+            (ByteArray.emptyWithCapacity (32 + t.headSize * v.val.length)) 24)) t v.val
+      else encode (.array t) v
   | t, v => encode t v
 
 @[csimp] theorem encode_eq_fast : @encode = @encodeFast := by
@@ -429,41 +499,27 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
   match t, v with
   | .uint _, _ | .int _, _ | .bool, _ | .address, _ | .bytesN _, _ | .bytes, _
   | .string, _ | .fixedArray _ _, _ | .tuple _, _ => rfl
-  | .array (.int _), _ | .array .bool, _ | .array .address, _
-  | .array .bytes, _ | .array .string, _ | .array (.array _), _
-  | .array (.fixedArray _ _), _ | .array (.tuple _), _ => rfl
-  | .array (.uint m), ⟨vs, h⟩ =>
-      apply ByteArray.data_inj
-      rw [← Array.toList_inj]
-      show (encode (.array (.uint m)) ⟨vs, h⟩).data.toList
-        = (emitWords (pushLimb (UInt64.ofNat vs.length)
-            (Chunks.pushZeros32 (ByteArray.emptyWithCapacity (32 + 32 * vs.length)) 24))
-            vs).data.toList
-      rw [encode, Builder.data_toList_run]
-      have hput : putBA (.array (.uint m)) ⟨vs, h⟩
-          = putUint vs.length ++ putParts (vs.map (partOfBA (.uint m))) := by
-        rw [putBA]
-      rw [hput, Builder.toList_append, toList_putUint, toList_putParts_uint]
-      rw [data_toList_emitWords, pushLimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
-        toList_emptyWithCapacity, List.nil_append, encodeBEU_window (by omega),
-        encodeUint_eq, show (32 : Nat) = 8 + 24 from rfl,
-        encodeBEU_pad (show vs.length < 256 ^ 8 by omega) 24, List.append_assoc]
-  | .array (.bytesN m), ⟨vs, h⟩ =>
-      apply ByteArray.data_inj
-      rw [← Array.toList_inj]
-      show (encode (.array (.bytesN m)) ⟨vs, h⟩).data.toList
-        = (emitBytesNs (pushLimb (UInt64.ofNat vs.length)
-            (Chunks.pushZeros32 (ByteArray.emptyWithCapacity (32 + 32 * vs.length)) 24))
-            vs).data.toList
-      rw [encode, Builder.data_toList_run]
-      have hput : putBA (.array (.bytesN m)) ⟨vs, h⟩
-          = putUint vs.length ++ putParts (vs.map (partOfBA (.bytesN m))) := by
-        rw [putBA]
-      rw [hput, Builder.toList_append, toList_putUint, toList_putParts_bytesN]
-      rw [data_toList_emitBytesNs, pushLimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
-        toList_emptyWithCapacity, List.nil_append, encodeBEU_window (by omega),
-        encodeUint_eq, show (32 : Nat) = 8 + 24 from rfl,
-        encodeBEU_pad (show vs.length < 256 ^ 8 by omega) 24, List.append_assoc]
+  | .array te, ⟨vs, h⟩ =>
+      show encode (.array te) ⟨vs, h⟩
+        = if te.isStatic then
+            emitVals (pushLimb (UInt64.ofNat vs.length)
+              (Chunks.pushZeros32
+                (ByteArray.emptyWithCapacity (32 + te.headSize * vs.length)) 24)) te vs
+          else encode (.array te) ⟨vs, h⟩
+      by_cases ht : te.isStatic
+      · rw [if_pos ht]
+        apply ByteArray.data_inj
+        rw [← Array.toList_inj]
+        rw [encode, Builder.data_toList_run]
+        have hput : putBA (.array te) ⟨vs, h⟩
+            = putUint vs.length ++ putParts (vs.map (partOfBA te)) := by
+          rw [putBA]
+        rw [hput, Builder.toList_append, toList_putUint, toList_putParts_static ht]
+        rw [data_toList_emitVals ht, pushLimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
+          toList_emptyWithCapacity, List.nil_append, encodeBEU_window (by omega),
+          encodeUint_eq, show (32 : Nat) = 8 + 24 from rfl,
+          encodeBEU_pad (show vs.length < 256 ^ 8 by omega) 24, List.append_assoc]
+      · rw [if_neg ht]
 
 /-! ## the runtime decoder -/
 
