@@ -53,26 +53,26 @@ that bound is extracted here as a lemma so the reader can state it in one
 line (and so the emitter never has to print a proof). -/
 
 /-- Read a `uintM`. -/
-def readUint (m : Nat) (ba : ByteArray) (off : Nat) : Option (ValBA (.uint m) × Nat) :=
+def readUint (m : Width) (ba : ByteArray) (off : Nat) : Option (ValBA (.uint m) × Nat) :=
   match wordAtBA ba off with
   | some w =>
-      if hm : 256 ≤ m then
+      if hm : 256 ≤ m.bits then
         some (⟨w, toNat_lt_two_pow_of_le w hm⟩, 32)
-      else if h : w.toNat < 2 ^ m then some (⟨w, h⟩, 32) else none
+      else if h : w.toNat < 2 ^ m.bits then some (⟨w, h⟩, 32) else none
   | none => none
 
-theorem reads_uint (m : Nat) : Reads (.uint m) (readUint m) := by
+theorem reads_uint (m : Width) : Reads (.uint m) (readUint m) := by
   intro ba off; rw [decodeBAVal.eq_1]; rfl
 
 /-- Read an `intM`. -/
-def readInt (m : Nat) (ba : ByteArray) (off : Nat) : Option (ValBA (.int m) × Nat) :=
+def readInt (m : Width) (ba : ByteArray) (off : Nat) : Option (ValBA (.int m) × Nat) :=
   match decodeIntBA ba off with
-  | some i => if h : -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int) then
+  | some i => if h : -((2 ^ (m.bits - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m.bits - 1) : Nat) : Int) then
       some (⟨i, h⟩, 32)
     else none
   | none => none
 
-theorem reads_int (m : Nat) : Reads (.int m) (readInt m) := by
+theorem reads_int (m : Width) : Reads (.int m) (readInt m) := by
   intro ba off; rw [decodeBAVal.eq_2]; rfl
 
 /-- Read a `bool`. -/
@@ -87,19 +87,21 @@ theorem reads_bool : Reads .bool readBool := by
 /-- Read an `address`. -/
 def readAddress (ba : ByteArray) (off : Nat) : Option (ValBA .address × Nat) :=
   match decodeAddressBA ba off with
-  | some n => if h : n < 2 ^ 160 then some (⟨n, h⟩, 32) else none
+  | some bs => if h : bs.length = 20 then
+      some (⟨bs.toByteArray, by rw [Binary.ByteArray.size_eq_toList_length]; simpa using h⟩, 32)
+    else none
   | none => none
 
 theorem reads_address : Reads .address readAddress := by
   intro ba off; rw [decodeBAVal.eq_4]; rfl
 
 /-- Read a `bytesN`. -/
-def readBytesN (m : Nat) (ba : ByteArray) (off : Nat) : Option (ValBA (.bytesN m) × Nat) :=
-  match decodeBytesNBAVal m ba off with
-  | some bs => if h : bs.size = m then some (⟨bs, h⟩, 32) else none
+def readBytesN (m : Width) (ba : ByteArray) (off : Nat) : Option (ValBA (.bytesN m) × Nat) :=
+  match decodeBytesNBAVal m.bytes ba off with
+  | some bs => if h : bs.size = m.bytes then some (⟨bs, h⟩, 32) else none
   | none => none
 
-theorem reads_bytesN (m : Nat) : Reads (.bytesN m) (readBytesN m) := by
+theorem reads_bytesN (m : Width) : Reads (.bytesN m) (readBytesN m) := by
   intro ba off; rw [decodeBAVal.eq_5]; rfl
 
 /-- A prefix-decoded payload is bounded by its own length word — the bound
@@ -279,14 +281,13 @@ the numeral is the head size the type really has. -/
 def readArray {t : Ty} (hsz : Nat)
     (loop : (k : Nat) → GetBA ({ vs : List (ValBA t) // vs.length = k }))
     (ba : ByteArray) (off : Nat) : Option (ValBA (.array t) × Nat) :=
-  if hsz = 0 then none else
-    match natAtBA ba off with
-    | none => none
-    | some k => if hb : k < 2 ^ 64 then
-        match (loop k).run ba (off + 32) (off + 32 + k * hsz) (k * hsz) with
-        | some r => some (⟨r.val.val, by rw [r.val.property]; exact hb⟩, 32 + r.frontier)
-        | none => none
-      else none
+  match natAtBA ba off with
+  | none => none
+  | some k => if hb : k < 2 ^ 64 then
+      match (loop k).run ba (off + 32) (off + 32 + k * hsz) (k * hsz) with
+      | some r => some (⟨r.val.val, by rw [r.val.property]; exact hb⟩, 32 + r.frontier)
+      | none => none
+    else none
 
 theorem reads_array {t : Ty} {hsz : Nat}
     {loop : (k : Nat) → GetBA ({ vs : List (ValBA t) // vs.length = k })}
@@ -299,36 +300,43 @@ theorem reads_array {t : Ty} {hsz : Nat}
   rfl
 
 /-- Read a `T[k]`: `k` elements, no length word. -/
-def readFixedArray {t : Ty} {n : Nat} (hsz : Nat)
+def readFixedArray {t : Ty} {n : Nat} (hn : 0 < n) (hsz : Nat)
     (loop : (k : Nat) → GetBA ({ vs : List (ValBA t) // vs.length = k }))
-    (ba : ByteArray) (off : Nat) : Option (ValBA (.fixedArray t n) × Nat) :=
+    (ba : ByteArray) (off : Nat) : Option (ValBA (.fixedArray t n hn) × Nat) :=
   match (loop n).run ba off (off + n * hsz) (n * hsz) with
   | some r => some (r.val, r.frontier)
   | none => none
 
-theorem reads_fixedArray {t : Ty} {n : Nat} {hsz : Nat}
+theorem reads_fixedArray {t : Ty} {n : Nat} (hn : 0 < n) {hsz : Nat}
     {loop : (k : Nat) → GetBA ({ vs : List (ValBA t) // vs.length = k })}
     (hh : hsz = t.headSize) (he : ∀ k, loop k = decodeElemsBAVal t k) :
-    Reads (.fixedArray t n) (readFixedArray hsz loop) := by
+    Reads (.fixedArray t n hn) (readFixedArray hn hsz loop) := by
   subst hh
   intro ba off
   rw [decodeBAVal.eq_9, readFixedArray, he]
   rfl
 
 /-- Read a `(T₁, …, Tₙ)`: run the component chain over the two cursors. -/
-def readTuple {ts : List Ty} (hss : Nat) (k : GetBA (TupleValBA ts))
-    (ba : ByteArray) (off : Nat) : Option (ValBA (.tuple ts) × Nat) :=
+def readTuple {head : Ty} {tail : List Ty} (hss : Nat) (k : GetBA (TupleValBA (head :: tail)))
+    (ba : ByteArray) (off : Nat) : Option (ValBA (.tuple head tail) × Nat) :=
   match k.run ba off (off + hss) hss with
   | some r => some (r.val, r.frontier)
   | none => none
 
-theorem reads_tuple {ts : List Ty} {hss : Nat} {k : GetBA (TupleValBA ts)}
-    (hh : hss = headSizeSum ts) (hk : k = decodeTupleBAVal ts) :
-    Reads (.tuple ts) (readTuple hss k) := by
+theorem reads_tuple {head : Ty} {tail : List Ty} {hss : Nat}
+    {k : GetBA (TupleValBA (head :: tail))}
+    (hh : hss = head.headSize + headSizeSum tail) (hk : k = decodeTupleBAVal (head :: tail)) :
+    Reads (.tuple head tail) (readTuple hss k) := by
   subst hh; subst hk
   intro ba off
   rw [decodeBAVal.eq_10, readTuple]
-  rfl
+  cases h : (decodeElemBAVal head).run ba off (off + (head.headSize + headSizeSum tail))
+      (head.headSize + headSizeSum tail) with
+  | none => simp [decodeTupleBAVal, GetBA.bind_run, h]
+  | some r =>
+      cases h2 : (decodeTupleBAVal tail).run ba r.head r.tails r.frontier with
+      | none => simp [decodeTupleBAVal, GetBA.bind_run, h, h2]
+      | some s => simp [decodeTupleBAVal, GetBA.bind_run, h, h2]
 
 /-! ## from reader to the user's decoder -/
 
@@ -350,17 +358,17 @@ theorem runStrict_eq {t : Ty} {g : ByteArray → Nat → Option (ValBA t × Nat)
 /-- The compiled decoder inherits the verified roundtrip: it reads back what
 `encode` wrote, as the very same value. -/
 theorem runStrict_encode {t : Ty} {g : ByteArray → Nat → Option (ValBA t × Nat)}
-    (hg : Reads t g) (hv : t.Valid) (v : ValBA t) (hb : (encode t v).size < 2 ^ 256) :
+    (hg : Reads t g) (v : ValBA t) (hb : (encode t v).size < 2 ^ 256) :
     runStrict g (encode t v) = some v := by
   rw [runStrict_eq hg]
-  exact decodeStrict_encode t hv v hb
+  exact decodeStrict_encode t v hb
 
 /-- …and the uniqueness direction: a buffer a compiled decoder accepts *is*
 the encoding of what it read. -/
 theorem encode_of_runStrict {t : Ty} {g : ByteArray → Nat → Option (ValBA t × Nat)}
-    (hg : Reads t g) (hv : t.Valid) (ba : ByteArray) (v : ValBA t)
+    (hg : Reads t g) (ba : ByteArray) (v : ValBA t)
     (h : runStrict g ba = some v) : encode t v = ba := by
   rw [runStrict_eq hg] at h
-  exact encode_of_decodeStrict t hv ba v h
+  exact encode_of_decodeStrict t ba v h
 
 end EvmAbi.Compile.Decode

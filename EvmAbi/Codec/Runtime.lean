@@ -46,6 +46,13 @@ def putBytesNBA (bs : ByteArray) : Builder :=
     (putBytesNBA bs).toList = encodeBytesN bs.data.toList := by
   simp [putBytesNBA, encodeBytesN]
 
+/-- Write an `address` from a packed 20-byte payload. -/
+def putAddressBA (bs : ByteArray) : Builder := putAddress bs.data.toList
+
+@[simp] theorem toList_putAddressBA (bs : ByteArray) :
+    (putAddressBA bs).toList = encodeAddress bs.data.toList := by
+  simp [putAddressBA]
+
 mutual
 /-- ABI encoder over packed values: same layout as `Spec.put`, `chunk`
 leaves for the payloads. -/
@@ -53,13 +60,13 @@ def putBA : (t : Ty) → ValBA t → Builder
   | .uint _, ⟨w, _⟩ => putWord w
   | .int _, ⟨i, _⟩ => putInt i
   | .bool, b => putBool b
-  | .address, ⟨n, _⟩ => putAddress n
+  | .address, ⟨bs, _⟩ => putAddressBA bs
   | .bytesN _, ⟨bs, _⟩ => putBytesNBA bs
   | .bytes, ⟨bs, _⟩ => putBytesBA bs
   | .string, ⟨s, _⟩ => putString s
   | .array t, ⟨vs, _⟩ => putUint vs.length ++ putParts (vs.map (partOfBA t))
-  | .fixedArray t _, ⟨vs, _⟩ => putParts (vs.map (partOfBA t))
-  | .tuple ts, vs => putParts (partsOfTupleBA ts vs)
+  | .fixedArray t _ _, ⟨vs, _⟩ => putParts (vs.map (partOfBA t))
+  | .tuple head tail, (v, vs) => putParts (partOfBA head v :: partsOfTupleBA tail vs)
 termination_by t => (sizeOf t, 0)
 
 /-- A packed value seen as a head/tail part. -/
@@ -232,8 +239,9 @@ theorem toList_putBA (t : Ty) (v : ValBA t) :
   | bool =>
       rw [putBA.eq_3, ValBA.toList.eq_3, Spec.encode, Spec.put.eq_3]
   | address =>
-      obtain ⟨n, hn⟩ := v
+      obtain ⟨bs, hbs⟩ := v
       rw [putBA.eq_4, ValBA.toList.eq_4, Spec.encode, Spec.put.eq_4]
+      rw [toList_putAddressBA, toList_putAddress]
   | bytesN m =>
       obtain ⟨bs, hbs⟩ := v
       rw [putBA.eq_5, ValBA.toList.eq_5, Spec.encode, Spec.put.eq_5]
@@ -264,7 +272,7 @@ theorem toList_putBA (t : Ty) (v : ValBA t) :
                 constructor
                 · exact partOfBA_toList t v (toList_putBA t v)
                 · exact ih))
-  | fixedArray t n =>
+  | fixedArray t n hn =>
       obtain ⟨vs, hvs⟩ := v
       rw [putBA.eq_9, ValBA.toList.eq_9, Spec.encode, Spec.put.eq_9]
       change encodeParts (vs.map (partOfBA t)) =
@@ -279,11 +287,16 @@ theorem toList_putBA (t : Ty) (v : ValBA t) :
               constructor
               · exact partOfBA_toList t v (toList_putBA t v)
               · exact ih)
-  | tuple ts =>
+  | tuple head tail =>
+      obtain ⟨v', vs⟩ := v
       rw [putBA.eq_10, ValBA.toList.eq_10, Spec.encode, Spec.put.eq_10]
-      change encodeParts (partsOfTupleBA ts v) =
-        encodeParts (Spec.partsOfTuple ts (TupleValBA.toList ts v))
-      exact encodeParts_eq_of_equiv (partsOfTupleBA_equiv ts v)
+      change encodeParts (partOfBA head v' :: partsOfTupleBA tail vs) =
+        encodeParts (Spec.partOf head (ValBA.toList head v') ::
+          Spec.partsOfTuple tail (TupleValBA.toList tail vs))
+      apply encodeParts_eq_of_equiv
+      constructor
+      · exact partOfBA_toList head v' (toList_putBA head v')
+      · exact partsOfTupleBA_equiv tail vs
 termination_by sizeOf t
 
 /-- The runtime tuple parts denote the spec tuple parts. -/
@@ -363,42 +376,42 @@ private theorem eq_some_of_map_eq {α β : Type} {f : α → β} {o : Option α}
 /-- **Runtime roundtrip** (capstone): what `encode` writes, `decodeStrict`
 reads back — as the very same `ValBA` value, not merely one with the same
 denotation. -/
-theorem decodeStrict_encode (t : Ty) (hv : t.Valid) (v : ValBA t)
+theorem decodeStrict_encode (t : Ty) (v : ValBA t)
     (hb : (encode t v).size < 2 ^ 256) :
     decodeStrict t (encode t v) = some v := by
   refine eq_some_of_map_eq (fun {_ _} hab => ValBA.toList_injective t hab) ?_
-  rw [decodeStrict, decodeStrictBAVal_eq t hv, encode_eq_encodeByteArray]
-  exact decodeStrictBA_encodeByteArray t hv _ (by rwa [← encode_eq_encodeByteArray])
+  rw [decodeStrict, decodeStrictBAVal_eq t, encode_eq_encodeByteArray]
+  exact decodeStrictBA_encodeByteArray t _ (by rwa [← encode_eq_encodeByteArray])
 
 /-- **Runtime uniqueness** (capstone): a strictly decodable buffer *is* the
 encoding of its decoded value. -/
-theorem encode_of_decodeStrict (t : Ty) (hv : t.Valid) (ba : ByteArray) (v : ValBA t)
+theorem encode_of_decodeStrict (t : Ty) (ba : ByteArray) (v : ValBA t)
     (h : decodeStrict t ba = some v) : encode t v = ba := by
   rw [encode_eq_encodeByteArray]
-  refine encodeByteArray_of_decodeStrictBA t hv ba _ ?_
-  rw [← decodeStrictBAVal_eq t hv, ← decodeStrict, h, Option.map_some]
+  refine encodeByteArray_of_decodeStrictBA t ba _ ?_
+  rw [← decodeStrictBAVal_eq t, ← decodeStrict, h, Option.map_some]
 
 /-- **Runtime strict-decoder characterization** (capstone). -/
-theorem decodeStrict_eq_some_iff (t : Ty) (hv : t.Valid) (ba : ByteArray)
+theorem decodeStrict_eq_some_iff (t : Ty) (ba : ByteArray)
     (v : ValBA t) (hb : ba.size < 2 ^ 256) :
     decodeStrict t ba = some v ↔ encode t v = ba := by
   constructor
-  · exact encode_of_decodeStrict t hv ba v
+  · exact encode_of_decodeStrict t ba v
   · intro he
     rw [← he]
-    exact decodeStrict_encode t hv v (by rw [he]; exact hb)
+    exact decodeStrict_encode t v (by rw [he]; exact hb)
 
 /-- **Runtime image characterization** (capstone): the canonical buffers are
 exactly the image of `encode`. -/
-theorem isCanonical_iff (t : Ty) (hv : t.Valid) (ba : ByteArray)
+theorem isCanonical_iff (t : Ty) (ba : ByteArray)
     (hb : ba.size < 2 ^ 256) :
     IsCanonical t ba ↔ ∃ v : ValBA t, encode t v = ba := by
   constructor
   · intro hc
     obtain ⟨v, hvv⟩ := Option.isSome_iff_exists.mp hc
-    exact ⟨v, encode_of_decodeStrict t hv ba v hvv⟩
+    exact ⟨v, encode_of_decodeStrict t ba v hvv⟩
   · rintro ⟨v, he⟩
-    have hr := decodeStrict_encode t hv v (by rw [he]; exact hb)
+    have hr := decodeStrict_encode t v (by rw [he]; exact hb)
     rw [he] at hr
     rw [IsCanonical, hr]
     rfl

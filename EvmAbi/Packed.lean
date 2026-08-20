@@ -52,7 +52,7 @@ claim. -/
 def PackedSupported : Ty → Bool
   | .bytes | .string => true
   | .array t => PackedScalar t
-  | .fixedArray t _ => PackedScalar t
+  | .fixedArray t _ _ => PackedScalar t
   | t => PackedScalar t
 
 /-! ## Primitive packed encoders -/
@@ -64,7 +64,7 @@ def encodeIntPacked (m : Nat) (i : Int) : List UInt8 :=
 
 def encodeBoolPacked (b : Bool) : List UInt8 := [if b then 1 else 0]
 
-def encodeAddressPacked (a : Nat) : List UInt8 := encodeUintPacked 160 a
+def encodeAddressPacked (a : List UInt8) : List UInt8 := a
 
 def encodeBytesNPacked (bs : List UInt8) : List UInt8 := bs
 
@@ -87,7 +87,8 @@ def decodeIntPacked (m : Nat) (buf : List UInt8) : Option Int :=
 def decodeBoolPacked (buf : List UInt8) : Option Bool :=
   match buf with | 0 :: _ => some false | 1 :: _ => some true | _ => none
 
-def decodeAddressPacked (buf : List UInt8) : Option Nat := decodeUintPacked 160 buf
+def decodeAddressPacked (buf : List UInt8) : Option (List UInt8) :=
+  if (buf.take 20).length = 20 then some (buf.take 20) else none
 
 def decodeBytesNPacked (n : Nat) (buf : List UInt8) : Option (List UInt8) :=
   if (buf.take n).length = n then some (buf.take n) else none
@@ -159,16 +160,16 @@ mutual
 /-- Packed encoder (`abi.encodePacked`), builder form.  Total; the
 Solidity-conformant fragment is `PackedSupported`. -/
 def putPacked : (t : Ty) → t.Val → Builder
-  | .uint m, ⟨n, _⟩   => ofList (encodeUintPacked m n)
-  | .int m,  ⟨i, _⟩   => ofList (encodeIntPacked m i)
+  | .uint m, ⟨n, _⟩   => ofList (encodeUintPacked m.bits n)
+  | .int m,  ⟨i, _⟩   => ofList (encodeIntPacked m.bits i)
   | .bool,   b         => ofList (encodeBoolPacked b)
-  | .address, ⟨n, _⟩  => ofList (encodeAddressPacked n)
+  | .address, ⟨bs, _⟩  => ofList (encodeAddressPacked bs)
   | .bytesN _, ⟨bs, _⟩ => ofList (encodeBytesNPacked bs)
   | .bytes,   bs       => ofList bs
   | .string,  s        => ofList s.val.toUTF8.data.toList
   | .array t, vs       => putPackedElems t vs.val
-  | .fixedArray t _, ⟨vs, _⟩ => putPackedElems t vs
-  | .tuple ts, vs      => putPackedTuple ts vs
+  | .fixedArray t _ _, ⟨vs, _⟩ => putPackedElems t vs
+  | .tuple head tail, (v, vs) => putPacked head v ++ putPackedTuple tail vs
 
 /-- Packed encoder for the flat argument list of a multi-argument
 `abi.encodePacked(a, b, …)` call, builder form. -/
@@ -201,31 +202,36 @@ types are rejected.  The tail cursor and frontier are inert in packed
 layouts. -/
 def decodePackedElem (t : Ty) : Get2 t.Val := ⟨fun head tails E =>
   match t with
-  | .uint m => match decodeUintPacked m head with
-      | some n => if h : n < 2 ^ m then some ⟨⟨n, h⟩, head.drop (m / 8), tails, E⟩ else none
+  | .uint m => match decodeUintPacked m.bits head with
+      | some n => if h : n < 2 ^ m.bits then some ⟨⟨n, h⟩, head.drop (m.bits / 8), tails, E⟩ else none
       | none => none
-  | .int m => match decodeIntPacked m head with
-      | some i => if h : -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int) then
-          some ⟨⟨i, h⟩, head.drop (m / 8), tails, E⟩
+  | .int m => match decodeIntPacked m.bits head with
+      | some i => if h : -((2 ^ (m.bits - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m.bits - 1) : Nat) : Int) then
+          some ⟨⟨i, h⟩, head.drop (m.bits / 8), tails, E⟩
         else none
       | none => none
   | .bool => match decodeBoolPacked head with
       | some b => some ⟨b, head.drop 1, tails, E⟩
       | none => none
   | .address => match decodeAddressPacked head with
-      | some n => if h : n < 2 ^ 160 then some ⟨⟨n, h⟩, head.drop 20, tails, E⟩ else none
+      | some bs => if h : bs.length = 20 then some ⟨⟨bs, h⟩, head.drop 20, tails, E⟩ else none
       | none => none
-  | .bytesN m => match decodeBytesNPacked m head with
-      | some bs => if h : bs.length = m then some ⟨⟨bs, h⟩, head.drop m, tails, E⟩ else none
+  | .bytesN m => match decodeBytesNPacked m.bytes head with
+      | some bs => if h : bs.length = m.bytes then some ⟨⟨bs, h⟩, head.drop m.bytes, tails, E⟩ else none
       | none => none
-  | .fixedArray t n => match t.isStatic with
+  | .fixedArray t n _ => match t.isStatic with
       | true => match (decodeElems t n).run head (head.drop (n * t.headSize)) (n * t.headSize) with
           | some r => some ⟨r.val, head.drop (n * t.headSize), tails, E⟩
           | none => none
       | false => none
-  | .tuple ts => match (decodePackedTuple ts).run head (head.drop (packedSizeSum ts)) (packedSizeSum ts) with
-      | some r => some ⟨r.val, head.drop (packedSizeSum ts), tails, E⟩
+  | .tuple h0 tail =>
+      let hsz := h0.packedSize + packedSizeSum tail
+      match (decodePackedElem h0).run head (head.drop hsz) hsz with
       | none => none
+      | some ⟨v, head', tails', E'⟩ =>
+          match (decodePackedTuple tail).run head' tails' E' with
+          | none => none
+          | some ⟨vs, _, _, _⟩ => some ⟨(v, vs), head.drop hsz, tails, E⟩
   | .bytes | .string | .array _ => none⟩
 
 /-- Read a packed tuple as a `Get2` program, consuming components
@@ -252,59 +258,58 @@ def decodePacked (t : Ty) (buf : List UInt8) : Option t.Val :=
 
 /-- The standard encodings of a static element list occupy `vs.length`
 padded (32-byte-word) slots. -/
-theorem length_map_encode_static (t : Ty) (hs : t.isStatic = true) (hv : t.Valid) :
+theorem length_map_encode_static (t : Ty) (hs : t.isStatic = true) :
     (vs : List t.Val) → ((vs.map (Spec.encode t)).map List.length).sum = vs.length * t.headSize
   | [] => by simp
   | v :: vs => by
       simp only [List.map_cons, List.length_cons, List.sum_cons]
-      rw [encode_length_static t hs hv v, length_map_encode_static t hs hv vs]
+      rw [encode_length_static t hs v, length_map_encode_static t hs vs]
       rw [Nat.succ_mul]
       exact Nat.add_comm _ _
 
 mutual
 /-- The packed encoding of a static type occupies exactly `packedSize t` bytes. -/
-theorem length_encodePacked : (t : Ty) → t.isStatic = true → t.Valid → (v : t.Val) →
+theorem length_encodePacked : (t : Ty) → t.isStatic = true → (v : t.Val) →
     (encodePacked t v).length = t.packedSize
-  | .uint m, hs, hv, ⟨n, _⟩ => by
+  | .uint m, hs, ⟨n, _⟩ => by
       simp [encodePacked, putPacked, encodeUintPacked, length_encodeBEU, packedSize]
-  | .int m, hs, hv, ⟨i, _⟩ => by
+  | .int m, hs, ⟨i, _⟩ => by
       simp only [encodePacked, putPacked, encodeIntPacked, encodeUintPacked, toList_ofList]
       rw [length_encodeBEU]
       simp [packedSize]
-  | .bool, hs, hv, b => by simp [encodePacked, putPacked, encodeBoolPacked, packedSize]
-  | .address, hs, hv, ⟨n, _⟩ => by
-      simp only [encodePacked, putPacked, encodeAddressPacked, encodeUintPacked, toList_ofList]
-      rw [length_encodeBEU]
-      simp [packedSize]
-  | .bytesN m, hs, hv, ⟨bs, hbs⟩ => by
+  | .bool, hs, b => by simp [encodePacked, putPacked, encodeBoolPacked, packedSize]
+  | .address, hs, ⟨bs, hbs⟩ => by
+      simp [encodePacked, putPacked, encodeAddressPacked, packedSize, hbs]
+  | .bytesN m, hs, ⟨bs, hbs⟩ => by
       simp [encodePacked, putPacked, encodeBytesNPacked, packedSize, hbs]
-  | .bytes, hs, hv, v | .string, hs, hv, v | .array _, hs, hv, v => by simp [isStatic] at hs
-  | .fixedArray t n, hs, hv, ⟨vs, hvs⟩ => by
+  | .bytes, hs, v | .string, hs, v | .array _, hs, v => by simp [isStatic] at hs
+  | .fixedArray t n _, hs, ⟨vs, hvs⟩ => by
       have hst : t.isStatic = true := by simp only [isStatic] at hs; exact hs
-      have hvt : t.Valid := hv
       simp only [encodePacked, putPacked, toList_putPackedElems, List.length_flatten]
-      rw [length_map_encode_static t hst hvt vs, hvs, packedSize]
-  | .tuple ts, hs, hv, vs => by
-      have hss : allStatic ts = true := by simp only [isStatic] at hs; exact hs
-      have hvts : AllValid ts := hv
-      simp only [encodePacked, putPacked, packedSize]
-      change (encodePackedTuple ts vs).length = packedSizeSum ts
-      exact length_encodePackedTuple ts hss hvts vs
+      rw [length_map_encode_static t hst vs, hvs, packedSize]
+  | .tuple head tail, hs, (v, vs) => by
+      have hst : head.isStatic = true ∧ allStatic tail = true := by
+        simp only [isStatic] at hs
+        rw [Bool.and_eq_true] at hs
+        exact hs
+      simp only [encodePacked, putPacked, packedSize, Builder.toList_append, List.length_append]
+      change (encodePacked head v).length + (encodePackedTuple tail vs).length =
+        head.packedSize + packedSizeSum tail
+      rw [length_encodePacked head hst.1 v, length_encodePackedTuple tail hst.2 vs]
 termination_by t => 2 * sizeOf t
 
 /-- Length of a packed tuple encoding. -/
-theorem length_encodePackedTuple : (ts : List Ty) → allStatic ts = true → AllValid ts →
+theorem length_encodePackedTuple : (ts : List Ty) → allStatic ts = true →
     (vs : TupleVal ts) → (encodePackedTuple ts vs).length = packedSizeSum ts
-  | [], _, _, _ => by simp [encodePackedTuple, putPackedTuple, Builder.toList_empty, packedSizeSum]
-  | t :: ts, hs, hv, (v, vs) => by
+  | [], _, _ => by simp [encodePackedTuple, putPackedTuple, Builder.toList_empty, packedSizeSum]
+  | t :: ts, hs, (v, vs) => by
       simp only [allStatic] at hs
       rw [Bool.and_eq_true] at hs
       obtain ⟨hst, hss⟩ := hs
-      obtain ⟨hvt, hvs⟩ := hv
       simp [encodePackedTuple, putPackedTuple, Builder.toList_append, packedSizeSum]
       change (encodePacked t v).length + (encodePackedTuple ts vs).length =
         t.packedSize + packedSizeSum ts
-      rw [length_encodePacked t hst hvt v, length_encodePackedTuple ts hss hvs vs]
+      rw [length_encodePacked t hst v, length_encodePackedTuple ts hss vs]
 termination_by ts => 2 * sizeOf ts + 1
 end
 
@@ -358,11 +363,11 @@ theorem decodeIntPacked_append (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
     rw [hdec]
     dsimp
     apply Option.some.inj
-    have h_not_lt_int' : ¬ (↑(2 ^ m - (-i).toNat) < (2 ^ (m - 1) : Int)) := by
+    have h_not_lt_int : ¬ (↑(2 ^ m - (-i).toNat) < (2 ^ (m - 1) : Int)) := by
       have hp : ((2 ^ (m - 1) : Nat) : Int) = (2 : Int) ^ (m - 1) := by
         simp [Int.natCast_pow]
       omega
-    rw [if_neg h_not_lt_int']
+    rw [if_neg h_not_lt_int]
     have hle : (-i).toNat ≤ 2 ^ m :=
       Nat.le_trans h_abs (Nat.pow_le_pow_right (by decide) (by omega))
     have hgoal : (↑(2 ^ m - (-i).toNat) : Int) - ((2 ^ m : Nat) : Int) = i := by
@@ -375,9 +380,10 @@ theorem decodeBoolPacked_append (b : Bool) (rest : List UInt8) :
   cases b <;> simp [encodeBoolPacked, decodeBoolPacked]
 
 /-- `address` packed read-back over an appended suffix. -/
-theorem decodeAddressPacked_append (a : Nat) (h : a < 2 ^ 160) (rest : List UInt8) :
-    decodeAddressPacked (encodeAddressPacked a ++ rest) = some a :=
-  decodeUintPacked_append 160 a (by decide) ⟨20, by decide⟩ h rest
+theorem decodeAddressPacked_append (a : List UInt8) (h : a.length = 20) (rest : List UInt8) :
+    decodeAddressPacked (encodeAddressPacked a ++ rest) = some a := by
+  unfold decodeAddressPacked encodeAddressPacked
+  rw [if_pos (by rw [take_append_of_length h, h]), take_append_of_length h]
 
 /-- `bytesN` packed read-back over an appended suffix. -/
 theorem decodeBytesNPacked_append (bs : List UInt8) (h : bs.length = n) (rest : List UInt8) :
@@ -401,113 +407,127 @@ mutual
 /-- A static packed component reads back from the front of its own packed
 encoding, advancing the head cursor by its packed size; the tail cursor
 and frontier pass through untouched. -/
-theorem decodePackedElem_append : (t : Ty) → t.isStatic = true → t.Valid →
+theorem decodePackedElem_append : (t : Ty) → t.isStatic = true →
     (v : t.Val) → (head tails : List UInt8) → (E : Nat) →
     (decodePackedElem t).run (encodePacked t v ++ head) tails E =
       some ⟨v, head, tails, E⟩
-  | .uint m, hs, hv, ⟨n, hn⟩, head, tails, E => by
-      have hm : 0 < m := by have h := hv.1; omega
-      have h8 : 8 ∣ m := Nat.dvd_of_mod_eq_zero hv.2.2
-      have hdec := decodeUintPacked_append m n hm h8 hn head
-      have hdrop : (encodeUintPacked m n ++ head).drop (m / 8) = head := by
+  | .uint m, hs, ⟨n, hn⟩, head, tails, E => by
+      have hm : 0 < m.bits := by unfold Width.bits; omega
+      have h8 : 8 ∣ m.bits := by
+        unfold Width.bits
+        exact ⟨m.idx.val + 1, by omega⟩
+      have hdec := decodeUintPacked_append m.bits n hm h8 hn head
+      have hdrop : (encodeUintPacked m.bits n ++ head).drop (m.bits / 8) = head := by
         rw [drop_append_of_length (by rw [encodeUintPacked, length_encodeBEU])]
       simp only [decodePackedElem, encodePacked, putPacked, toList_ofList, hdec]
       rw [hdrop]
       exact dif_pos hn
-  | .int m, hs, hv, ⟨i, hi⟩, head, tails, E => by
-      have h0 : 0 < m := by have h8 := hv.1; omega
-      have h8 : 8 ∣ m := Nat.dvd_of_mod_eq_zero hv.2.2
-      have hdec := decodeIntPacked_append m h0 h8 hi.1 hi.2 head
-      have hlen : (encodeIntPacked m i).length = m / 8 := by
+  | .int m, hs, ⟨i, hi⟩, head, tails, E => by
+      have h0 : 0 < m.bits := by unfold Width.bits; omega
+      have h8 : 8 ∣ m.bits := by
+        unfold Width.bits
+        exact ⟨m.idx.val + 1, by omega⟩
+      have hdec := decodeIntPacked_append m.bits h0 h8 hi.1 hi.2 head
+      have hlen : (encodeIntPacked m.bits i).length = m.bits / 8 := by
         rw [encodeIntPacked, encodeUintPacked, length_encodeBEU]
-      have hdrop : (encodeIntPacked m i ++ head).drop (m / 8) = head :=
+      have hdrop : (encodeIntPacked m.bits i ++ head).drop (m.bits / 8) = head :=
         drop_append_of_length hlen
       simp only [decodePackedElem, encodePacked, putPacked, toList_ofList, hdec]
       rw [hdrop]
       exact dif_pos hi
-  | .bool, hs, hv, b, head, tails, E => by
+  | .bool, hs, b, head, tails, E => by
       have hdrop : (encodeBoolPacked b ++ head).drop 1 = head := by
         rw [drop_append_of_length (by simp [encodeBoolPacked])]
       simp only [decodePackedElem, encodePacked, putPacked, toList_ofList]
       rw [decodeBoolPacked_append b head, hdrop]
-  | .address, hs, hv, ⟨n, hn⟩, head, tails, E => by
-      have hdec := decodeAddressPacked_append n hn head
-      have hdrop : (encodeAddressPacked n ++ head).drop 20 = head := by
-        rw [drop_append_of_length (by rw [encodeAddressPacked, encodeUintPacked, length_encodeBEU])]
+  | .address, hs, ⟨bs, hbs⟩, head, tails, E => by
+      have hdec := decodeAddressPacked_append bs hbs head
+      have hdrop : (encodeAddressPacked bs ++ head).drop 20 = head := by
+        rw [drop_append_of_length (by simp [encodeAddressPacked, hbs])]
       simp only [decodePackedElem, encodePacked, putPacked, toList_ofList, hdec]
       rw [hdrop]
-      exact dif_pos hn
-  | .bytesN m, hs, hv, ⟨bs, hbs⟩, head, tails, E => by
+      exact dif_pos hbs
+  | .bytesN m, hs, ⟨bs, hbs⟩, head, tails, E => by
       have hdec := decodeBytesNPacked_append bs hbs head
-      have hdrop : (encodeBytesNPacked bs ++ head).drop m = head := by
+      have hdrop : (encodeBytesNPacked bs ++ head).drop m.bytes = head := by
         rw [drop_append_of_length (by simp [encodeBytesNPacked, hbs])]
       simp only [decodePackedElem, encodePacked, putPacked, toList_ofList, hdec]
       rw [hdrop]
       exact dif_pos hbs
-  | .bytes, hs, _, _, _, _, _ | .string, hs, _, _, _, _, _ | .array _, hs, _, _, _, _, _ => by
+  | .bytes, hs, _, _, _, _ | .string, hs, _, _, _, _ | .array _, hs, _, _, _, _ => by
       simp [isStatic] at hs
-  | .fixedArray t n, hs, hv, ⟨vs, hvs⟩, head, tails, E => by
+  | .fixedArray t n _, hs, ⟨vs, hvs⟩, head, tails, E => by
       have hst : t.isStatic = true := by simp only [isStatic] at hs; exact hs
-      have hvt : t.Valid := hv
       have hbuf : (vs.map (Spec.encode t)).flatten ++ head =
           encodeHeads (n * t.headSize) (vs.map (partOf t)) ++ head := by
         rw [encodeHeads_map_partOf_static t hst vs]
       have hlen_heads : (encodeHeads (n * t.headSize) (vs.map (partOf t))).length =
           n * t.headSize := by
-        rw [length_encodeHeads, headSizes_map_partOf_any t hvt vs, hvs]
+        rw [length_encodeHeads, headSizes_map_partOf_any t vs, hvs]
       simp only [decodePackedElem, encodePacked, putPacked, toList_putPackedElems, hst]
       rw [hbuf, drop_append_of_length hlen_heads]
-      have h := decodeElems_static_append t hst hvt vs n hvs (n * t.headSize) head head
+      have h := decodeElems_static_append t hst vs n hvs (n * t.headSize) head head
       rw [h]
-  | .tuple ts, hs, hv, vs, head, tails, E => by
-      have hss : allStatic ts = true := by simp only [isStatic] at hs; exact hs
-      have hvts : AllValid ts := hv
-      have hbuf : encodePacked (.tuple ts) vs ++ head =
-          encodePackedTuple ts vs ++ head := by
-        rw [encodePacked, putPacked, encodePackedTuple]
-      simp only [decodePackedElem]
-      rw [hbuf, drop_append_of_length (length_encodePackedTuple ts hss hvts vs)]
-      have h := decodePackedTuple_append ts hss hvts vs (packedSizeSum ts) head head
-      rw [h]
+  | .tuple h0 tail, hs, (vh, vtail), head, tails, E => by
+      have hst : h0.isStatic = true ∧ allStatic tail = true := by
+        simp only [isStatic] at hs
+        rw [Bool.and_eq_true] at hs
+        exact hs
+      have hbuf : encodePacked (tuple h0 tail) (vh, vtail) ++ head =
+          encodePacked h0 vh ++ (encodePackedTuple tail vtail ++ head) := by
+        simp [encodePacked, putPacked, encodePackedTuple, List.append_assoc]
+      have hlen : (encodePacked h0 vh ++ encodePackedTuple tail vtail).length =
+          h0.packedSize + packedSizeSum tail := by
+        rw [List.length_append, length_encodePacked h0 hst.1 vh,
+          length_encodePackedTuple tail hst.2 vtail]
+      have hdrop : (encodePacked h0 vh ++ (encodePackedTuple tail vtail ++ head)).drop
+          (h0.packedSize + packedSizeSum tail) = head := by
+        rw [← List.append_assoc, drop_append_of_length hlen]
+      rw [hbuf]
+      rw [decodePackedElem]
+      simp only []
+      rw [hdrop]
+      rw [decodePackedElem_append h0 hst.1 vh (encodePackedTuple tail vtail ++ head) head
+        (h0.packedSize + packedSizeSum tail)]
+      simp
+      rw [decodePackedTuple_append tail hst.2 vtail (h0.packedSize + packedSizeSum tail) head head]
 termination_by t => 4 * sizeOf t
 
 /-- A packed tuple reads back from its flattened packed encodings,
 advancing the head cursor by the tuple's packed size. -/
-theorem decodePackedTuple_append : (ts : List Ty) → allStatic ts = true → AllValid ts →
+theorem decodePackedTuple_append : (ts : List Ty) → allStatic ts = true →
     (vs : TupleVal ts) → (E : Nat) → (head tails : List UInt8) →
     (decodePackedTuple ts).run (encodePackedTuple ts vs ++ head) tails E =
       some ⟨vs, head, tails, E⟩
-  | [], _, _, _, E, head, tails => by
+  | [], _, _, E, head, tails => by
       simp [decodePackedTuple, Get2.pure_run, encodePackedTuple, putPackedTuple, Builder.toList_empty]
-  | t :: ts, hs, hv, (v, vs), E, head, tails => by
+  | t :: ts, hs, (v, vs), E, head, tails => by
       simp only [allStatic] at hs
       rw [Bool.and_eq_true] at hs
       obtain ⟨hst, hss⟩ := hs
-      obtain ⟨hvt, hvs⟩ := hv
       simp only [decodePackedTuple, Get2.bind_run, Get2.pure_run]
       have hbuf : encodePackedTuple (t :: ts) (v, vs) ++ head =
           encodePacked t v ++ (encodePackedTuple ts vs ++ head) := by
         rw [encodePackedTuple, putPackedTuple, Builder.toList_append, ← encodePacked,
           ← encodePackedTuple, List.append_assoc]
-      rw [hbuf, decodePackedElem_append t hst hvt v (encodePackedTuple ts vs ++ head) tails E]
+      rw [hbuf, decodePackedElem_append t hst v (encodePackedTuple ts vs ++ head) tails E]
       dsimp only []
-      rw [decodePackedTuple_append ts hss hvs vs E head tails]
+      rw [decodePackedTuple_append ts hss vs E head tails]
 termination_by ts => 4 * sizeOf ts + 1
 end
 
 /-- **Static packed roundtrip, prefix form**: a static value decodes from the front
 of its own packed encoding followed by an arbitrary suffix. -/
-theorem decodePacked_encodePacked_append (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
-    (v : t.Val) (rest : List UInt8) : decodePacked t (encodePacked t v ++ rest) = some v := by
+theorem decodePacked_encodePacked_append (t : Ty) (hs : t.isStatic = true) (v : t.Val) (rest : List UInt8) : decodePacked t (encodePacked t v ++ rest) = some v := by
   simp only [decodePacked, hs]
-  rw [drop_append_of_length (length_encodePacked t hs hv v)]
-  rw [decodePackedElem_append t hs hv v rest rest (packedSize t)]
+  rw [drop_append_of_length (length_encodePacked t hs v)]
+  rw [decodePackedElem_append t hs v rest rest (packedSize t)]
 
 /-- **Static packed roundtrip**: every static type decodes its own packed encoding
 without any side condition. -/
-theorem roundtrip_packed_static (t : Ty) (hs : t.isStatic = true) (hv : t.Valid) (v : t.Val) :
+theorem roundtrip_packed_static (t : Ty) (hs : t.isStatic = true) (v : t.Val) :
     decodePacked t (encodePacked t v) = some v := by
-  have h := decodePacked_encodePacked_append t hs hv v []
+  have h := decodePacked_encodePacked_append t hs v []
   rwa [List.append_nil] at h
 
 end EvmAbi

@@ -17,7 +17,7 @@ identity on a complete buffer — is:
 
 ```lean4
 -- in `namespace EvmAbi.Spec`
-theorem decodeStrict_encode (t : Ty) (hv : t.Valid) (v : t.Val)
+theorem decodeStrict_encode (t : Ty) (v : t.Val)
     (hb : (Spec.encode t v).length < 2 ^ 256) : Spec.decodeStrict t (Spec.encode t v) = some v
 ```
 
@@ -36,7 +36,7 @@ For **static types** (no dynamic offsets) the total-length bound is
 dispensed with entirely:
 
 ```lean4
-theorem decode_static_append (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
+theorem decode_static_append (t : Ty) (hs : t.isStatic = true)
     (v : t.Val) (rest : List UInt8) :
     Spec.decode t (Spec.encode t v ++ rest) = some (v, t.headSize, rest)
 ```
@@ -58,13 +58,13 @@ The capstone theorems characterise the bijection in purely extensional terms:
 
 ```lean4
 -- Under the buffer bound, canonical buffers are exactly the encodings.
-theorem isCanonical_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
+theorem isCanonical_iff (t : Ty) (buf : List UInt8)
     (hb : buf.length < 2 ^ 256) :
     Spec.IsCanonical t buf ↔ ∃ v, Spec.encode t v = buf
 
 -- The strict decoder succeeds exactly on encodings — no side condition on the
 -- value, since every t.Val carries its own bounds.
-theorem decodeStrict_eq_some_iff (t : Ty) (hv : t.Valid) (buf : List UInt8)
+theorem decodeStrict_eq_some_iff (t : Ty) (buf : List UInt8)
     (v : t.Val) (hb : buf.length < 2 ^ 256) :
     Spec.decodeStrict t buf = some v ↔ Spec.encode t v = buf
 ```
@@ -90,7 +90,7 @@ general; only the static fragment is decodable, and its roundtrip is
 proved:
 
 ```lean4
-theorem roundtrip_packed_static (t : Ty) (hs : t.isStatic = true) (hv : t.Valid)
+theorem roundtrip_packed_static (t : Ty) (hs : t.isStatic = true)
     (v : t.Val) : decodePacked t (encodePacked t v) = some v
 ```
 
@@ -166,10 +166,10 @@ materialising only the payloads that a `bytes`/`string`/`bytesN` value
 actually is:
 
 ```lean4
-theorem decodeStrictBAVal_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) :
+theorem decodeStrictBAVal_eq (t : Ty) (ba : ByteArray) :
     (decodeStrict t ba).map (ValBA.toList t) = decodeStrictBA t ba
 
-theorem decodeStrictBA_eq (t : Ty) (hv : t.Valid) (ba : ByteArray) :
+theorem decodeStrictBA_eq (t : Ty) (ba : ByteArray) :
     decodeStrictBA t ba = Spec.decodeStrict t ba.data.toList
 ```
 
@@ -179,10 +179,10 @@ through `ValBA.toList_injective`.  With it, the capstones are stated of the
 runtime names:
 
 ```lean4
-theorem decodeStrict_encode (t : Ty) (hv : t.Valid) (v : ValBA t)
+theorem decodeStrict_encode (t : Ty) (v : ValBA t)
     (hb : (encode t v).size < 2 ^ 256) : decodeStrict t (encode t v) = some v
 
-theorem isCanonical_iff (t : Ty) (hv : t.Valid) (ba : ByteArray)
+theorem isCanonical_iff (t : Ty) (ba : ByteArray)
     (hb : ba.size < 2 ^ 256) : IsCanonical t ba ↔ ∃ v : ValBA t, encode t v = ba
 ```
 
@@ -204,14 +204,14 @@ open EvmAbi
 
 -- Parse a type string
 #eval Ty.parse "uint256"
--- some (Ty.uint 256)
+-- some (Ty.uint 32)
 
 #eval Ty.parse "(address, uint256)[]"
--- some (Ty.array (Ty.tuple [Ty.address, Ty.uint 256]))
+-- some (Ty.array (Ty.tuple [Ty.address, Ty.uint 32]))
 
 -- Parse a full ABI item
 #eval AbiItem.parse "function approve(address spender, uint256 amount) returns (bool)"
--- some (AbiItem.function "approve" [⟨.address, "spender", false⟩, ⟨.uint 256, "amount", false⟩] ...)
+-- some (AbiItem.function "approve" [⟨.address, "spender", false⟩, ⟨.uint 32, "amount", false⟩] ...)
 
 #eval AbiItem.parse "event Transfer(address indexed from, address indexed to, uint256 value)"
 #eval AbiItem.parse "error Unauthorized(address caller)"
@@ -236,15 +236,15 @@ open EvmAbi.HumanReadable.Meta
 
 -- Type macro: expands to the Ty constructor term
 let t : Ty := ty! "uint256[]"
--- t = Ty.array (Ty.uint 256)
+-- t = Ty.array (Ty.uint 32)
 
 -- ABI item macro: expands to the AbiItem constructor term
 let item := item! "function balanceOf(address) view returns (uint256)"
--- item = AbiItem.function "balanceOf" [⟨.address, none, false⟩] [⟨.uint 256, none, false⟩] .view
+-- item = AbiItem.function "balanceOf" [⟨.address, none, false⟩] [⟨.uint 32, none, false⟩] .view
 
 -- Parameter list macro: expands to List AbiParam
 let p := params! "address spender, uint256 amount"
--- p = [⟨.address, "spender", false⟩, ⟨.uint 256, "amount", false⟩]
+-- p = [⟨.address, "spender", false⟩, ⟨.uint 32, "amount", false⟩]
 ```
 
 The macros fail at **compile time** if the string is not a valid
@@ -256,22 +256,30 @@ They can be used anywhere a term is expected — `def`, `let`, `example`,
 
 | Human-readable | `Ty` |
 |---|---|
-| `uint<N>` | `.uint N` |
-| `int<N>` | `.int N` |
-| `uint` / `int` | `.uint 256` / `.int 256` |
+| `uint<N>` | `.uint (N / 8)` |
+| `int<N>` | `.int (N / 8)` |
+| `uint` / `int` | `.uint 32` / `.int 32` |
 | `address` | `.address` |
 | `bool` | `.bool` |
 | `bytes` | `.bytes` |
 | `bytes<N>` | `.bytesN N` |
 | `string` | `.string` |
 | `T[]` | `.array T` |
-| `T[N]` | `.fixedArray T N` |
-| `(T₁, …, Tₙ)` | `.tuple [T₁, …, Tₙ]` |
+| `T[N]` | `.fixedArray T N (by decide)` (with `N > 0`) |
+| `(T₁, …, Tₙ)` | `.tuple T₁ [T₂, …, Tₙ]` (non-empty) |
+
+`Ty.uint`, `Ty.int`, and `Ty.bytesN` all take the same `Width` type, whose
+literal is the byte length `1..32`.  Thus `Ty.uint 1` is `uint8`, `Ty.uint 32`
+is `uint256`, `Ty.bytesN 1` is `bytes1`, and `Ty.bytesN 32` is `bytes32`.
+Invalid literals like `Ty.uint 0` or `Ty.bytesN 33` fail to elaborate.  The
+human-readable parser converts names like `uint256` to `Ty.uint 32`
+automatically.
 
 Array suffixes apply to tuples as well, so `(address,uint256)[]` — a Solidity
 `struct[]` — is a `.array (.tuple […])`.  Widths outside the range the
-specification allows (`uint7`, `bytes33`, …) are rejected, so every type a
-parse produces satisfies `Ty.Valid` and the codec theorems apply to it.
+specification allows (`uint7`, `bytes33`, …) are rejected, and the non-empty
+tuple / positive fixed-array guarantees are embedded in `Ty`, so every type a
+parse produces is well-formed and the codec theorems apply to it.
 
 ABI items: `function`, `event`, `error`, `constructor`, `fallback`, `receive`.
 
@@ -315,7 +323,7 @@ Print what the command emitted:
 -- fun v => (((Acc.start 64).static (putAddress v.fst.val)).static (putUint v.snd.fst.val)).finish
 
 #print transfer.read
--- readTuple 64 (cons elemStatic readAddress (cons elemStatic (readUint 256) consNil))
+-- readTuple 64 (cons elemStatic readAddress (cons elemStatic (readUint 32) consNil))
 ```
 
 No `Ty`, no `Part`, no list: straight-line code whose head size (`64`) and
@@ -476,8 +484,7 @@ let enc := Spec.encode t v
 
 -- strict roundtrip
 example : Spec.decodeStrict t (Spec.encode t v) = some v :=
-  decodeStrict_encode t (by
-    simp [Valid, AllValid])
+  decodeStrict_encode t
     v
     (by native_decide)
 ```

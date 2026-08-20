@@ -99,7 +99,7 @@ def leafFn : Ty → TermElabM Term
   | .uint _ => `(fun v => EvmAbi.Builder.putWord v.val)
   | .int _ => `(fun v => EvmAbi.putInt v.val)
   | .bool => `(fun v => EvmAbi.putBool v)
-  | .address => `(fun v => EvmAbi.putAddress v.val)
+  | .address => `(fun v => EvmAbi.Codec.putAddressBA v.val)
   | .bytesN _ => `(fun v => EvmAbi.Codec.putBytesNBA v.val)
   | .bytes => `(fun v => EvmAbi.Codec.putBytesBA v.val)
   | .string => `(fun v => EvmAbi.putString v.val)
@@ -111,7 +111,7 @@ def leafApp (t : Ty) (x : Term) : TermElabM Term :=
   | .uint _ => `(EvmAbi.Builder.putWord ($x).val)
   | .int _ => `(EvmAbi.putInt ($x).val)
   | .bool => `(EvmAbi.putBool $x)
-  | .address => `(EvmAbi.putAddress ($x).val)
+  | .address => `(EvmAbi.Codec.putAddressBA ($x).val)
   | .bytesN _ => `(EvmAbi.Codec.putBytesNBA ($x).val)
   | .bytes => `(EvmAbi.Codec.putBytesBA ($x).val)
   | .string => `(EvmAbi.putString ($x).val)
@@ -120,11 +120,11 @@ def leafApp (t : Ty) (x : Term) : TermElabM Term :=
 /-- The correctness of a leaf's compiled encoder — a lemma from
 `EvmAbi.Compile`, never a proof this module builds. -/
 def leafProof : Ty → TermElabM Term
-  | .uint m => `(EvmAbi.Compile.denotes_uint $(quote m))
-  | .int m => `(EvmAbi.Compile.denotes_int $(quote m))
+  | .uint m => `(EvmAbi.Compile.denotes_uint $(quote m.bytes))
+  | .int m => `(EvmAbi.Compile.denotes_int $(quote m.bytes))
   | .bool => `(EvmAbi.Compile.denotes_bool)
   | .address => `(EvmAbi.Compile.denotes_address)
-  | .bytesN m => `(EvmAbi.Compile.denotes_bytesN $(quote m))
+  | .bytesN m => `(EvmAbi.Compile.denotes_bytesN $(quote (m.idx.val + 1)))
   | .bytes => `(EvmAbi.Compile.denotes_bytes)
   | .string => `(EvmAbi.Compile.denotes_string)
   | t => throwError "abi_encoder: {repr t} is not a leaf type"
@@ -218,7 +218,7 @@ private partial def compileTy (root : Name) (trace : Bool) (t : Ty) (i : Nat)
     (top? : Option Name := none) : CommandElabM (Node × Nat) := do
   match t with
   | .uint _ | .int _ | .bool | .address | .bytesN _ | .bytes | .string => return (.leaf t, i)
-  | .array e | .fixedArray e _ =>
+  | .array e | .fixedArray e _ _ =>
       let (en, i) ← compileTy root trace e i
       let (fn, thm) := nodeNames root "node" "_denotes" i top?
       let tyStx ← liftTermElabM (mkTyStx t)
@@ -241,15 +241,16 @@ private partial def compileTy (root : Name) (trace : Bool) (t : Ty) (i : Nat)
         if isArray then `(fun v => EvmAbi.putUint v.val.length ++ $section_)
         else `(fun v => $section_))
       let proof ← liftTermElabM (do
-        if isArray then `(EvmAbi.Compile.denotes_array (by decide) $stepPf)
+        if isArray then `(EvmAbi.Compile.denotes_array $stepPf)
         else `(EvmAbi.Compile.denotes_fixedArray (by decide) $stepPf))
       emitNode trace fn thm (← liftTermElabM (encSig tyStx)) (← liftTermElabM (encContract tyStx fn))
         body proof
       return (.node t fn thm, i + 1)
-  | .tuple ts =>
+  | .tuple head tail =>
+      let comps := head :: tail
       let mut i := i
       let mut nodes : Array Node := #[]
-      for c in ts do
+      for c in comps do
         let (cn, i') ← compileTy root trace c i
         nodes := nodes.push cn
         i := i'
@@ -257,13 +258,13 @@ private partial def compileTy (root : Name) (trace : Bool) (t : Ty) (i : Nat)
       let tyStx ← liftTermElabM (mkTyStx t)
       -- the head section is a compile-time constant, so the first tail
       -- offset is a numeral and every later one an `O(1)` addition
-      let hss := quote (Ty.headSizeSum ts)
+      let hss := quote (head.headSize + Ty.headSizeSum tail)
       let vId := mkIdent (← MonadQuotation.addMacroScope `v)
       let (body, proof) ← liftTermElabM do
         let mut st ← `(EvmAbi.Compile.Acc.start $hss)
         let mut pf ← `(EvmAbi.Compile.Acc.start_inv $hss)
         let mut k := 0
-        for (c, cn) in ts.zip nodes.toList do
+        for (c, cn) in comps.zip nodes.toList do
           let x ← projStx vId k
           k := k + 1
           let cb ← cn.appStx x
@@ -275,14 +276,11 @@ private partial def compileTy (root : Name) (trace : Bool) (t : Ty) (i : Nat)
             st ← `(($st).dyn $cb)
             pf ← `(($pf).dyn (by decide) $cp)
         let body ← `(fun $vId:ident => ($st).finish)
-        let unfold ← if ts.isEmpty then
-            `(tactic| simp only [EvmAbi.Compile.partsOfTupleBA_nil])
-          else
-            `(tactic| simp only [EvmAbi.Compile.partsOfTupleBA_cons,
-                EvmAbi.Compile.partsOfTupleBA_nil])
+        let unfold ← `(tactic| simp only [EvmAbi.Compile.partsOfTupleBA_cons,
+            EvmAbi.Compile.partsOfTupleBA_nil])
         let proof ← `(by
           intro $vId:ident
-          refine EvmAbi.Compile.toList_tuple (by decide) _ ?_
+          refine EvmAbi.Compile.toList_tuple _ ?_
           $unfold:tactic
           exact $pf)
         return (body, proof)
@@ -301,9 +299,9 @@ def parseTarget (s : String) : Option Ty :=
       -- `transfer(address,uint256)` is how a signature is usually written;
       -- the item parser wants the keyword, so supply it.
       match EvmAbi.parseAbiItem s <|> EvmAbi.parseAbiItem ("function " ++ s) with
-      | some (.function _ inputs _ _) | some (.event _ inputs)
-      | some (.error _ inputs) | some (.constructor inputs _) =>
-          some (.tuple (inputs.map (·.ty)))
+      | some (.function _ (h :: t) _ _) | some (.event _ (h :: t))
+      | some (.error _ (h :: t)) | some (.constructor (h :: t) _) =>
+          some (.tuple h.ty (t.map (·.ty)))
       | _ => none
 
 /-! ## the decoder side
@@ -314,22 +312,22 @@ to numerals are justified by `rfl` against `Ty.headSize`/`headSizeSum`. -/
 
 /-- The reader of a leaf type. -/
 def leafRead : Ty → TermElabM Term
-  | .uint m => `(EvmAbi.Compile.Decode.readUint $(quote m))
-  | .int m => `(EvmAbi.Compile.Decode.readInt $(quote m))
+  | .uint m => `(EvmAbi.Compile.Decode.readUint $(quote m.bytes))
+  | .int m => `(EvmAbi.Compile.Decode.readInt $(quote m.bytes))
   | .bool => `(EvmAbi.Compile.Decode.readBool)
   | .address => `(EvmAbi.Compile.Decode.readAddress)
-  | .bytesN m => `(EvmAbi.Compile.Decode.readBytesN $(quote m))
+  | .bytesN m => `(EvmAbi.Compile.Decode.readBytesN $(quote (m.idx.val + 1)))
   | .bytes => `(EvmAbi.Compile.Decode.readBytes)
   | .string => `(EvmAbi.Compile.Decode.readString)
   | t => throwError "abi_decoder: {repr t} is not a leaf type"
 
 /-- The correctness of a leaf's reader. -/
 def leafReadProof : Ty → TermElabM Term
-  | .uint m => `(EvmAbi.Compile.Decode.reads_uint $(quote m))
-  | .int m => `(EvmAbi.Compile.Decode.reads_int $(quote m))
+  | .uint m => `(EvmAbi.Compile.Decode.reads_uint $(quote m.bytes))
+  | .int m => `(EvmAbi.Compile.Decode.reads_int $(quote m.bytes))
   | .bool => `(EvmAbi.Compile.Decode.reads_bool)
   | .address => `(EvmAbi.Compile.Decode.reads_address)
-  | .bytesN m => `(EvmAbi.Compile.Decode.reads_bytesN $(quote m))
+  | .bytesN m => `(EvmAbi.Compile.Decode.reads_bytesN $(quote (m.idx.val + 1)))
   | .bytes => `(EvmAbi.Compile.Decode.reads_bytes)
   | .string => `(EvmAbi.Compile.Decode.reads_string)
   | t => throwError "abi_decoder: {repr t} is not a leaf type"
@@ -352,7 +350,7 @@ private partial def compileDec (root : Name) (trace : Bool) (t : Ty) (i : Nat)
     (top? : Option Name := none) : CommandElabM (Node × Nat) := do
   match t with
   | .uint _ | .int _ | .bool | .address | .bytesN _ | .bytes | .string => return (.leaf t, i)
-  | .array e | .fixedArray e _ =>
+  | .array e | .fixedArray e _ _ =>
       let (en, i) ← compileDec root trace e i
       let (fn, thm) := nodeNames root "dnode" "_reads" i top?
       let tyStx ← liftTermElabM (mkTyStx t)
@@ -369,28 +367,29 @@ private partial def compileDec (root : Name) (trace : Bool) (t : Ty) (i : Nat)
           pure (← `(EvmAbi.Compile.Decode.readArray $hs $loop),
             ← `(EvmAbi.Compile.Decode.reads_array rfl $loopPf))
         else
-          pure (← `(EvmAbi.Compile.Decode.readFixedArray $hs $loop),
-            ← `(EvmAbi.Compile.Decode.reads_fixedArray rfl $loopPf)))
+          pure (← `(EvmAbi.Compile.Decode.readFixedArray (by decide) $hs $loop),
+            ← `(EvmAbi.Compile.Decode.reads_fixedArray (by decide) rfl $loopPf)))
       emitNode trace fn thm (← liftTermElabM (decSig tyStx)) (← liftTermElabM (decContract tyStx fn))
         body proof
       return (.node t fn thm, i + 1)
-  | .tuple ts =>
+  | .tuple head tail =>
+      let comps := head :: tail
       let mut i := i
       let mut nodes : Array Node := #[]
-      for c in ts do
+      for c in comps do
         let (cn, i') ← compileDec root trace c i
         nodes := nodes.push cn
         i := i'
       let (fn, thm) := nodeNames root "dnode" "_reads" i top?
       let tyStx ← liftTermElabM (mkTyStx t)
-      let hss := quote (Ty.headSizeSum ts)
+      let hss := quote (head.headSize + Ty.headSizeSum tail)
       let (body, proof) ← liftTermElabM do
         -- the component chain, built from the right: each link knows at
         -- compile time whether its component sits in the head or behind an
         -- offset word
         let mut chain ← `(EvmAbi.Compile.Decode.consNil)
         let mut chainPf ← `(EvmAbi.Compile.Decode.consNil_eq)
-        for (c, cn) in (ts.zip nodes.toList).reverse do
+        for (c, cn) in (comps.zip nodes.toList).reverse do
           let (mk, erPf) ← elemReader c (← cn.proof leafReadProof)
           chain ← `(EvmAbi.Compile.Decode.cons $mk $(← cn.code leafRead) $chain)
           chainPf ← `(EvmAbi.Compile.Decode.cons_eq $erPf $chainPf)
@@ -430,7 +429,7 @@ private def emitEncoder (root : Name) (trace : Bool) (t : Ty) (tyId : Ident) (en
   elabCommand (← `(theorem $(mkIdent (Name.appendAfter encName "_decodeStrict")) :
     ∀ (v : EvmAbi.ValBA $tyId), ($encId v).size < 2 ^ 256 →
       EvmAbi.Codec.decodeStrict $tyId ($encId v) = some v :=
-      fun v hb => EvmAbi.Compile.decodeStrict_run $putThmId (by decide) v hb))
+      fun v hb => EvmAbi.Compile.decodeStrict_run $putThmId v hb))
 
 /-- Emit the compiled strict decoder and its theorems, under the name
 `decName`.  `trace` prints each emitted definition and theorem. -/
@@ -452,11 +451,11 @@ private def emitDecoder (root : Name) (trace : Bool) (t : Ty) (tyId : Ident) (de
   elabCommand (← `(theorem $(mkIdent (Name.appendAfter decName "_encode")) :
     ∀ (v : EvmAbi.ValBA $tyId), (EvmAbi.Codec.encode $tyId v).size < 2 ^ 256 →
       $decId (EvmAbi.Codec.encode $tyId v) = some v :=
-      fun v hb => EvmAbi.Compile.Decode.runStrict_encode $readThmId (by decide) v hb))
+      fun v hb => EvmAbi.Compile.Decode.runStrict_encode $readThmId v hb))
   elabCommand (← `(theorem $(mkIdent (Name.appendAfter decName "_uniq")) :
     ∀ (ba : ByteArray) (v : EvmAbi.ValBA $tyId), $decId ba = some v →
       EvmAbi.Codec.encode $tyId v = ba :=
-      fun ba v h => EvmAbi.Compile.Decode.encode_of_runStrict $readThmId (by decide) ba v h))
+      fun ba v h => EvmAbi.Compile.Decode.encode_of_runStrict $readThmId ba v h))
   -- the runtime API has four public names; a codec compiles all of them
   if wholeApi then
     let preId := mkIdent (root ++ `decode)
@@ -476,17 +475,13 @@ private def emitDecoder (root : Name) (trace : Bool) (t : Ty) (tyId : Ident) (de
 
 /-- Parse the command's string argument, or fail with a useful message.
 
-The validity check is defensive: the human-readable parser only produces types
-that satisfy `Ty.Valid` — it rejects `uint7`, `bytes33`, an array whose element
-type has no head — so no string should reach it.  The emitted proofs are
-`by decide` against exactly this predicate, so it is checked rather than
-assumed. -/
+The human-readable parser only produces well-formed `Ty` values — it rejects
+`uint7`, `bytes33`, empty tuples and zero-length fixed arrays — so no
+additional validity check is needed here. -/
 private def targetOf (cmd : String) (s : TSyntax `str) : CommandElabM Ty := do
   let str := s.getString
   let some t := parseTarget str
     | throwErrorAt s "{cmd}: not an ABI type or signature: {str}"
-  unless decide t.Valid do
-    throwErrorAt s "{cmd}: {str} is not a valid ABI type"
   return t
 
 /--

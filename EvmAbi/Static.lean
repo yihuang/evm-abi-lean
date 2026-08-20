@@ -95,12 +95,16 @@ def decodeBool (buf : List UInt8) : Option Bool :=
 
 /-! ## address -/
 
-/-- EVM `address`: a 160-bit value, encoded exactly like `uint160`
+/-- EVM `address`: 20 raw bytes, ABI-encoded exactly like `uint160`
 (right-aligned in the word). -/
-def encodeAddress (a : Nat) : List UInt8 := encodeUint a
+def encodeAddress (a : List UInt8) : List UInt8 := encodeUint (decodeBEU a)
 
-/-- Decode an address word. -/
-def decodeAddress (buf : List UInt8) : Option Nat := decodeUint buf
+/-- Decode an address word: read the 160-bit value and re-expand it to its
+canonical 20-byte big-endian representation. -/
+def decodeAddress (buf : List UInt8) : Option (List UInt8) :=
+  match decodeUint buf with
+  | some n => if _ : n < 2 ^ 160 then some (encodeBEU 20 n) else none
+  | none => none
 
 /-! ## bytesN -/
 
@@ -191,9 +195,9 @@ def putBool (b : Bool) : Builder := putUint (if b then 1 else 0)
 
 
 /-- Write an `address` word. -/
-def putAddress (a : Nat) : Builder := putUint a
+def putAddress (a : List UInt8) : Builder := putUint (decodeBEU a)
 
-@[simp] theorem toList_putAddress (a : Nat) : (putAddress a).toList = encodeAddress a := by
+@[simp] theorem toList_putAddress (a : List UInt8) : (putAddress a).toList = encodeAddress a := by
   simp [putAddress, encodeAddress]
 
 

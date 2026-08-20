@@ -49,7 +49,7 @@ complete type grammar.
    is unrestricted (e.g., `string[][]`, `(uint256, (bool, bytes))[]`).
 
 2. **Type-indexed value family.**  `Val : Ty → Type` is an indexed family of
-   refined types: `Val (.uint 256) = {n : Nat // n < 2^256}`,
+   refined types: `Val (.uint 32) = {n : Nat // n < 2^256}`,
    `Val (.bytes) = List UInt8`, and compound types are structurally
    composed from their components.  The roundtrip statement
    `Spec.decode t (Spec.encode t v) = some v` needs no separate well-formedness
@@ -125,16 +125,8 @@ encoder of the denotation, so the `Spec` theorems transport by rewrite.
 
 ### 3.1 Type Universe (`Ty.lean`)
 
-The type grammar is an inductive `Ty` with ten constructors.  Four
+The type grammar is an inductive `Ty` with ten constructors.  Three
 auxiliary predicates/functions are defined alongside it:
-
-- **`Valid`** — size-parameter constraints (e.g., `uintM` requires `8∣M`,
-  `8≤M≤256`).  Defined as a `Prop` with a `Decidable` instance.  A dynamic
-  array additionally requires `0 < t.headSize` of its element type: an
-  element occupying no head (`()`, `T[0]`) would let a 32-byte length word
-  name arbitrarily many elements, leaving the decoder's element walk
-  bounded by nothing.  The specification has no such types, and `Spec.decode`
-  and the human-readable parser both reject them.
 
 - **`isStatic`** — whether the encoding size is fixed by the type (a `Bool`
   predicate, lowercase per Lean convention).  Used by the head/tail layout:
@@ -151,7 +143,7 @@ auxiliary predicates/functions are defined alongside it:
   statically known, and `decodePacked` rejects them).
 
 All are defined via **mutual recursion** with their `List`-indexed
-siblings (`AllValid`, `allStatic`, `headSizeSum`, `packedSizeSum`).  This
+siblings (`allStatic`, `headSizeSum`, `packedSizeSum`).  This
 avoids well-founded recursion (`Acc.rec`), which would make the predicates
 opaque to the elaborator and break `@[reducible]` on `Val`.
 
@@ -175,7 +167,7 @@ TupleVal []        = Unit
 TupleVal (t :: ts) = Val t × TupleVal ts
 ```
 
-This design gives definitional reduction — `Val (.uint 8)` *is*
+This design gives definitional reduction — `Val (.uint 1)` *is*
 `Subtype (fun n => n < 2^8)` — so dependent pattern matching in
 `Spec.encode`/`Spec.decode` sees through the index.
 
@@ -469,8 +461,8 @@ such theorem to state.  What is proved is every output, individually, by
 construction — a certificate per compilation, which for a code generator whose
 outputs are all checked is the same guarantee where it matters.  Second, the
 head-size constant the compiler folds into `Acc.start` is justified, not
-assumed: `headSizes_partsOfTupleBA` (which needs `AllValid ts`, discharged by
-`decide` at compile time) proves the numeral is the head section's real size.
+assumed: `headSizes_partsOfTupleBA` proves the numeral is the head section's
+real size.
 
 Measured (`Bench.lean`, compiled): encoding 2.2× on `(bool × 8)` and 1.8× on
 `bool[100]`, decoding 1.8× and 1.4× on the same, where the words are cheap and
@@ -492,20 +484,20 @@ before elaboration.  The transcript *is* the compiler's behaviour made
 visible.  For `transfer(address to, uint256 amount)` the encoder is:
 
 ```lean
-def callArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple [EvmAbi.Ty.address, EvmAbi.Ty.uint 256]) → EvmAbi.Builder :=
+def callArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple [EvmAbi.Ty.address, EvmAbi.Ty.uint 32]) → EvmAbi.Builder :=
   fun v =>
   (((EvmAbi.Compile.Acc.start 64).static (EvmAbi.putAddress (v.1).val)).static
       (EvmAbi.putUint (v.2.1).val)).finish
 
 theorem callArgs.put_denotes :
-    EvmAbi.Compile.Denotes (EvmAbi.Ty.tuple [EvmAbi.Ty.address, EvmAbi.Ty.uint 256]) callArgs.put :=
+    EvmAbi.Compile.Denotes (EvmAbi.Ty.tuple [EvmAbi.Ty.address, EvmAbi.Ty.uint 32]) callArgs.put :=
   by
   intro v
   refine EvmAbi.Compile.toList_tuple (by decide) _ ?_
   simp only [EvmAbi.Compile.partsOfTupleBA_cons, EvmAbi.Compile.partsOfTupleBA_nil]
   exact
     ((EvmAbi.Compile.Acc.start_inv 64).static (by decide) (EvmAbi.Compile.denotes_address (v).1)).static (by decide)
-      (EvmAbi.Compile.denotes_uint 256 (v).2.1)
+      (EvmAbi.Compile.denotes_uint 32 (v).2.1)
 ```
 
 Every decision the type made available is already taken.  The head section
@@ -527,7 +519,7 @@ The decoder is the mirror image:
 def callArgs.read : ByteArray → Nat → Option (EvmAbi.ValBA … × Nat) :=
   EvmAbi.Compile.Decode.readTuple 64
     (EvmAbi.Compile.Decode.cons EvmAbi.Compile.Decode.elemStatic EvmAbi.Compile.Decode.readAddress
-      (EvmAbi.Compile.Decode.cons EvmAbi.Compile.Decode.elemStatic (EvmAbi.Compile.Decode.readUint 256)
+      (EvmAbi.Compile.Decode.cons EvmAbi.Compile.Decode.elemStatic (EvmAbi.Compile.Decode.readUint 32)
         EvmAbi.Compile.Decode.consNil))
 ```
 
@@ -542,7 +534,7 @@ emits two definitions, the array sub-type first because the emitter works
 bottom-up:
 
 ```lean
-def samArgs.node0 : EvmAbi.ValBA (EvmAbi.Ty.array (EvmAbi.Ty.uint 256)) → EvmAbi.Builder :=
+def samArgs.node0 : EvmAbi.ValBA (EvmAbi.Ty.array (EvmAbi.Ty.uint 32)) → EvmAbi.Builder :=
   fun v =>
   EvmAbi.putUint v.val.length ++
     ((EvmAbi.Compile.Acc.start (v.val.length * 32)).elems EvmAbi.Compile.Acc.static
@@ -577,7 +569,7 @@ pattern like `⟨bs, h⟩` cannot match it.
 **Solution.**  `Val` is marked `@[reducible]` and defined in a `mutual`
 block with `TupleVal`.  The mutual block ensures the recursion is
 structurally visible, while `@[reducible]` forces definitional reduction
-during elaboration.  This gives `Val (.bytesN m) = Subtype (λ bs => bs.length = m)`
+during elaboration.  This gives `Val (.bytesN m) = Subtype (λ bs => bs.length = m.bytes)`
 and `Val (.tuple [t₁, t₂]) = Val t₁ × Val t₂ × Unit`, both definitionally.
 
 ### 4.2 Prefix-Tolerant Decoding

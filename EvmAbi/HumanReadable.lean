@@ -12,8 +12,8 @@ expansion into `Ty` / `AbiItem` expressions.
 Types are the grammar of the mapping table below.  Array suffixes apply to
 tuples too, so `(address,uint256)[]` is the human-readable form of a Solidity
 `struct[]`.  Widths outside the range the specification allows (`uint7`,
-`bytes33`, ...) are rejected, so a successful parse always yields a `Ty.Valid`
-type.
+`bytes33`, ...) are rejected, so a successful parse always yields a
+well-formed `Ty` value.
 
 ```
 ABI items:
@@ -45,7 +45,7 @@ whereas `'uint256a'` is a single (invalid) identifier.
 |-------------------|-------------------|
 | `uint<N>`         | `.uint N`         |
 | `int<N>`          | `.int N`          |
-| `uint` / `int`    | `.uint 256` / `.int 256` |
+| `uint` / `int`    | `.uint 32` / `.int 32` |
 | `address`         | `.address`        |
 | `address payable` | `.address`        |
 | `bool`            | `.bool`           |
@@ -53,8 +53,8 @@ whereas `'uint256a'` is a single (invalid) identifier.
 | `bytes<N>`        | `.bytesN N`       |
 | `string`          | `.string`         |
 | `T[]`             | `.array T`        |
-| `T[N]`            | `.fixedArray T N` |
-| `(T₁, ..., Tₙ)`   | `.tuple [T₁,…,Tₙ]` |
+| `T[N]`            | `.fixedArray T N` (with `N > 0`) |
+| `(T₁, ..., Tₙ)`   | `.tuple T₁ [T₂,…,Tₙ]` (non-empty) |
 -/
 
 namespace EvmAbi
@@ -88,21 +88,21 @@ inductive AbiItem where
 
 namespace AbiItem
 
-/-- Extract the input types as a tuple `Ty`: exactly the argument block of the
-call data.  The tuple is never collapsed, not even for a single argument —
+/-- Extract the input types as a tuple `Ty`, when the argument list is
+non-empty.  The tuple is never collapsed, not even for a single argument —
 `f(bytes)` encodes as `offset ‖ length ‖ payload`, whereas the bare `bytes`
-encoding would drop the offset word. -/
-def inputsTy (item : AbiItem) : Ty :=
+encoding would drop the offset word.  Items with no inputs have no tuple `Ty`. -/
+def inputsTy (item : AbiItem) : Option Ty :=
   match item with
-  | function _ inputs _ _ | event _ inputs | error _ inputs | constructor inputs _ =>
-      .tuple (inputs.map (·.ty))
-  | fallback _ | receive => .tuple []
+  | function _ (h :: t) _ _ | event _ (h :: t) | error _ (h :: t) | constructor (h :: t) _ =>
+      some (.tuple h.ty (t.map (·.ty)))
+  | _ => none
 
 /-- Extract the output types as a tuple `Ty`, with the same no-collapse rule as
-`inputsTy`.  `none` for items that have no return values at all. -/
+`inputsTy`.  `none` for items that have no output values at all. -/
 def outputsTy (item : AbiItem) : Option Ty :=
   match item with
-  | function _ _ outputs _ => some (.tuple (outputs.map (·.ty)))
+  | function _ _ (h :: t) _ => some (.tuple h.ty (t.map (·.ty)))
   | _ => none
 
 end AbiItem
@@ -177,13 +177,13 @@ end CharParsing
 section TypeParser
 
 /-- Helper: read `name` as `pref` followed by a width, e.g. `"uint256"`.  Widths
-outside the range the specification allows are rejected (`Ty.Valid`), so `uint7`,
-`uint999`, `bytes0` and `bytes33` fail to parse rather than producing a type no
-codec theorem applies to. -/
-def tryPrefix (name : String) (pref : String) (mkTy : Nat → Ty) (rest : List Char) :
-    Option (Ty × List Char) := do
-  let ty := mkTy (← (← name.dropPrefix? pref).toNat?)
-  if ty.Valid then some (ty, rest) else none
+outside the range the specification allows are rejected before a `Ty` is built,
+so `uint7`, `uint999`, `bytes0` and `bytes33` fail to parse rather than
+producing an unrepresentable width. -/
+def tryPrefix {W : Type} (name : String) (pref : String) (mkWidth : Nat → Option W)
+    (mkTy : W → Ty) (rest : List Char) : Option (Ty × List Char) := do
+  let w ← mkWidth (← (← name.dropPrefix? pref).toNat?)
+  some (mkTy w, rest)
 
 /-- Base types named outright, including the bare `uint`/`int` aliases for the
 256-bit widths. -/
@@ -192,8 +192,8 @@ def baseTypeOf : String → Option Ty
   | "bool"    => some .bool
   | "string"  => some .string
   | "bytes"   => some .bytes
-  | "uint"    => some (.uint 256)
-  | "int"     => some (.int 256)
+  | "uint"    => some (.uint 32)
+  | "int"     => some (.int 32)
   | _         => none
 
 /-- `address payable` is a Solidity type; the ABI knows only `address`, so the
@@ -240,29 +240,30 @@ partial def parseBaseType (cs : List Char) : Option (Ty × List Char) := do
   | some .address => some (.address, dropPayable rest)
   | some ty => some (ty, rest)
   | none =>
-    tryPrefix name "uint" Ty.uint rest
-      <|> tryPrefix name "int" Ty.int rest
-      <|> tryPrefix name "bytes" Ty.bytesN rest
+    tryPrefix name "uint" Width.ofBits? Ty.uint rest
+      <|> tryPrefix name "int" Width.ofBits? Ty.int rest
+      <|> tryPrefix name "bytes" Width.ofBytes? Ty.bytesN rest
 
 /-- Parse tuple type `(T1, T2, ..., Tn)`, with an optional array suffix:
 `(address,uint256)[]` and `(address,uint256)[2]` are tuple arrays. -/
 partial def parseTupleType (cs : List Char) : Option (Ty × List Char) := do
   let rest ← parseChar '(' cs
   match skipWS rest with
-  -- empty tuple ()
-  | ')' :: rest' => parseArraySuffix (.tuple []) rest'
+  -- empty tuple () is not a valid ABI type
+  | ')' :: _ => none
   | rest' => do
     let (tys, rest1) ← sepBy1 parseType rest'
     let rest2 ← parseChar ')' rest1
-    parseArraySuffix (.tuple tys) rest2
+    match tys with
+    | [] => none
+    | head :: tail => parseArraySuffix (.tuple head tail) rest2
 
 /-- Parse optional array suffix: `[]` (dynamic) or `[N]` (fixed), or none.
 
-The dynamic case rechecks `Ty.Valid`: a dynamic array needs an element
-type that occupies head bytes, so `()[]` and `uint8[0][]` are rejected
-here even though `()` and `uint8[0]` parse on their own.  Without the
-check a successful parse could yield an invalid type, which no codec
-theorem covers. -/
+The non-empty head guarantees are now embedded in `Ty`: every type
+occupies head bytes, so dynamic arrays need no extra validity check here.
+Fixed arrays still reject `[0]` because `Ty.fixedArray` requires a positive
+length. -/
 partial def parseArraySuffix (ty : Ty) (cs : List Char) : Option (Ty × List Char) :=
   let cs' := skipWS cs
   match cs' with
@@ -271,12 +272,14 @@ partial def parseArraySuffix (ty : Ty) (cs : List Char) : Option (Ty × List Cha
     match rest' with
     | ']' :: rest'' =>
       -- dynamic array: T[]
-      if (Ty.array ty).Valid then parseArraySuffix (.array ty) rest'' else none
+      parseArraySuffix (.array ty) rest''
     | _ =>
       match parseNat rest' with
       | some (n, restNum) =>
         (parseChar ']' restNum).bind fun restPost =>
-          parseArraySuffix (.fixedArray ty n) restPost
+          if h : 0 < n then
+            parseArraySuffix (.fixedArray ty n h) restPost
+          else none
       | none => none
   | _ =>
     some (ty, cs')
