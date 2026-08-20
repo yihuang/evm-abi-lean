@@ -125,29 +125,10 @@ theorem data_toList_emitZeros (acc : ByteArray) (n : Nat) :
   | zero => simp [emitZeros]
   | succ n ih => simp [emitZeros, ih, ByteArray.data_push, List.replicate_succ]
 
-/-- `pushBEChunk 8` unrolled into straight-line pushes.  Not cosmetic:
-`pushBEChunk` takes its accumulator *borrowed*, so every call pushes onto a
-shared `ByteArray` and copies the whole output built so far — harmless on a
-32-byte scratch, quadratic here.  Straight-line `push`es keep it uniquely
-referenced, so every push is in place. -/
-def emitLimb (acc : ByteArray) (x : UInt64) : ByteArray :=
-  let x1 := x >>> 8
-  let x2 := x1 >>> 8
-  let x3 := x2 >>> 8
-  let x4 := x3 >>> 8
-  let x5 := x4 >>> 8
-  let x6 := x5 >>> 8
-  let x7 := x6 >>> 8
-  ((((((((acc.push x7.toUInt8).push x6.toUInt8).push x5.toUInt8).push
-    x4.toUInt8).push x3.toUInt8).push x2.toUInt8).push x1.toUInt8).push x.toUInt8)
-
-theorem emitLimb_eq_pushBEChunk (acc : ByteArray) (x : UInt64) :
-    emitLimb acc x = pushBEChunk 8 x acc := rfl
-
 /-- Push one 32-byte word onto the accumulator, most significant limb
 first — no per-word scratch buffer, no `copySlice`. -/
 def emitWord (acc : ByteArray) (w : UInt256) : ByteArray :=
-  emitLimb (emitLimb (emitLimb (emitLimb acc w.l0) w.l1) w.l2) w.l3
+  pushLimb w.l3 (pushLimb w.l2 (pushLimb w.l1 (pushLimb w.l0 acc)))
 
 theorem data_toList_emitWord (acc : ByteArray) (w : UInt256) :
     (emitWord acc w).data.toList = acc.data.toList ++ bytesOfWord w := by
@@ -156,7 +137,7 @@ theorem data_toList_emitWord (acc : ByteArray) (w : UInt256) :
   have h : (UInt256.toBEByteArrayFast w).data.toList = bytesOfWord w := by
     rw [← congrFun UInt256.toBEByteArray_eq_fast w]
     exact UInt256.toList_toBEByteArray w
-  simp only [emitWord, emitLimb_eq_pushBEChunk, UInt256.toBEByteArrayFast, pushBEChunk_eq,
+  simp only [emitWord, UInt256.toBEByteArrayFast, pushLimb_eq,
     toList_emptyWithCapacity, List.nil_append, List.append_assoc] at h ⊢
   rw [h]
 
@@ -281,12 +262,12 @@ zeros copied in one `copySlice`, then the single `UInt64` chunk that can be
 non-zero.  `encodeBEBytes 32` instead pushes all 32 bytes one at a time,
 three quarters of them known to be zero. -/
 def word32Small (n : Nat) : ByteArray :=
-  pushBEChunk 8 (UInt64.ofNat n) (Chunks.pushZeros32 (ByteArray.emptyWithCapacity 32) 24)
+  pushLimb (UInt64.ofNat n) (Chunks.pushZeros32 (ByteArray.emptyWithCapacity 32) 24)
 
 theorem data_toList_word32Small {n : Nat} (h : n < 2 ^ 64) :
     (word32Small n).data.toList = encodeBEU 32 n := by
   have h8 : n < 256 ^ 8 := by omega
-  rw [word32Small, pushBEChunk_eq, Chunks.data_toList_pushZeros32 _ (by omega),
+  rw [word32Small, pushLimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
     encodeBEU_window (by omega), show (ByteArray.emptyWithCapacity 32).data.toList = [] from rfl,
     List.nil_append, show (32 : Nat) = 8 + 24 from rfl, encodeBEU_pad h8 24]
 
