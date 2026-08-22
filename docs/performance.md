@@ -124,6 +124,22 @@ payload is already word aligned, not written at all (`Builder.appendZeros`,
 encodes at 0.44 ns/byte and decodes at 0.34 ns/byte — memcpy-bound, and what
 is left above that floor is the word codec.
 
+Full-width words used to pay the scratch buffer anyway: `putWord` allocated
+a 32-byte `ByteArray` per word, filled it, and `emit` copied it again. The
+`Chunks.word` leaf removes both — the limbs ride in the tree and
+`Chunks.emitWord` pushes them straight into the pre-sized output. `encode
+uint256[]` 1000: 144 → 86 µs/op, parity with go-ethereum. One sharp edge:
+`Binary.pushBEChunk` takes its accumulator *borrowed*, so every call copies
+the output built so far — `emitWord` unrolls it into straight-line `push`es
+instead. When a linear loop measures quadratic, read the generated C: a
+`lean_dec_ref` *after* an argument is passed means the callee borrows it.
+
+The decode mirror: the generic walk costs ~eight allocations per element,
+`decodeUintElems` reads a `uint256[]` word with a bounds check, a `UInt256`
+and a cons, swapped in by `@[csimp]` at the `decodeBAVal` boundary (a
+`mutual` block's bodies are compiled before any attribute placed after
+them). `decode uint256[]` 2000: 173 → 66 µs/op, 1.3× ahead of go-ethereum.
+
 ## Measured negatives
 
 Recorded so they are not retried. Each was implemented and benchmarked, not
@@ -166,6 +182,15 @@ reasoned about.
   with no lemma back, and `a.size < USize.size` is unprovable. Core justifies
   `uget` in prose, as a runtime invariant; taking it costs an assumption in the
   public API.
+
+* **`putUint` as a `word` leaf**, like `putWord`: `bytes[]` +5%, `bool[]`
+  +37%. For a *small* word the chunk path was already cheap — one
+  `copySlice` beats 32 per-byte pushes. The leaf only wins where it deletes
+  the full-width word's alloc-and-fill; `putUint` keeps the chunk.
+* **`UInt256.ofNat` anywhere near a hot path** — ~560 ns even for tiny `n`
+  (the `BitVec.ofNat` route), against 4 ns for `⟨0, 0, 0, UInt64.ofNat n⟩`.
+  The old warning here said "no `ofNat` round trip per word"; it still
+  bites, now with a number.
 
 Generating EVM bytecode rather than Lean remains the interesting direction.
 

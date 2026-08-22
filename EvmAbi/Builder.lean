@@ -62,6 +62,9 @@ inductive Chunks where
   | chunk (ba : ByteArray) : Chunks
   /-- A run of `n` zero bytes (used for padding; never materialised). -/
   | zeros (n : Nat) : Chunks
+  /-- One 32-byte EVM word, kept as limbs (used by `putWord`; never
+  materialised — `emit` writes it straight into the output buffer). -/
+  | word (w : UInt256) : Chunks
   /-- Concatenation — a constructor, so it costs `O(1)`. -/
   | append (a b : Chunks) : Chunks
 
@@ -79,6 +82,7 @@ def toList : Chunks → List UInt8
   | .bytes bs => bs
   | .chunk ba => ba.data.toList
   | .zeros n => List.replicate n 0
+  | .word w => bytesOfWord w
   | .append a b => a.toList ++ b.toList
 
 /-! ## execution
@@ -87,12 +91,13 @@ def toList : Chunks → List UInt8
 pre-sizes the accumulator from the cached size, so the whole traversal is one
 linear pass with no reallocation.
 
-`acc ++ ba` per `.chunk` leaf looks quadratic — `putWord` makes every 32-byte
-word a chunk — but is not.  Compiled, `ByteArray.append` is `fastAppend`,
-`b.copySlice 0 a a.size b.size false`, which copies `b` *into* `a`, in place
-while `a` is uniquely referenced; `emit` threads `acc` linearly, so it is.
-Measured on `uint256[]`, encoding is linear in the element count over a 16×
-range.
+`acc ++ ba` per `.chunk` leaf looks quadratic but is not.  Compiled,
+`ByteArray.append` is `fastAppend`, `b.copySlice 0 a a.size b.size false`,
+which copies `b` *into* `a`, in place while `a` is uniquely referenced; `emit`
+threads `acc` linearly, so it is.  Measured on `uint256[]`, encoding is
+linear in the element count over a 16× range.  (Words themselves no longer
+go through `.chunk` at all — `putWord` stores a `.word` leaf and `emitWord`
+pushes the limbs directly.)
 
 **Invariant**: nothing may hold a second reference to `acc` across an `emit`
 call.  Reading `acc.size` back for a check would silently make every chunk
@@ -119,6 +124,16 @@ theorem data_toList_emitZeros (acc : ByteArray) (n : Nat) :
   induction n generalizing acc with
   | zero => simp [emitZeros]
   | succ n ih => simp [emitZeros, ih, ByteArray.data_push, List.replicate_succ]
+
+/-- Push one 32-byte word onto the accumulator, most significant limb
+first — no per-word scratch buffer, no `copySlice`. -/
+def emitWord (acc : ByteArray) (w : UInt256) : ByteArray :=
+  UInt256.pushBE w acc
+
+theorem data_toList_emitWord (acc : ByteArray) (w : UInt256) :
+    (emitWord acc w).data.toList = acc.data.toList ++ bytesOfWord w := by
+  rw [emitWord, UInt256.pushBE_eq]
+  rfl
 
 /-! ### zero runs, copied rather than pushed
 
@@ -197,6 +212,7 @@ def emit (acc : ByteArray) : Chunks → ByteArray
   | .bytes bs => emitBytes acc bs
   | .chunk ba => acc ++ ba
   | .zeros n => emitZeros acc n
+  | .word w => emitWord acc w
   | .append a b => emit (emit acc a) b
 
 theorem data_toList_emit (acc : ByteArray) (c : Chunks) :
@@ -206,6 +222,7 @@ theorem data_toList_emit (acc : ByteArray) (c : Chunks) :
   | bytes bs => simp [emit, toList, data_toList_emitBytes]
   | chunk ba => simp [emit, toList]
   | zeros n => simp [emit, toList, data_toList_emitZeros]
+  | word w => simp [emit, toList, data_toList_emitWord]
   | append a b iha ihb => simp [emit, toList, iha, ihb, List.append_assoc]
 
 end Chunks
@@ -239,12 +256,12 @@ zeros copied in one `copySlice`, then the single `UInt64` chunk that can be
 non-zero.  `encodeBEBytes 32` instead pushes all 32 bytes one at a time,
 three quarters of them known to be zero. -/
 def word32Small (n : Nat) : ByteArray :=
-  pushBEChunk 8 (UInt64.ofNat n) (Chunks.pushZeros32 (ByteArray.emptyWithCapacity 32) 24)
+  pushBELimb (UInt64.ofNat n) (Chunks.pushZeros32 (ByteArray.emptyWithCapacity 32) 24)
 
 theorem data_toList_word32Small {n : Nat} (h : n < 2 ^ 64) :
     (word32Small n).data.toList = encodeBEU 32 n := by
   have h8 : n < 256 ^ 8 := by omega
-  rw [word32Small, pushBEChunk_eq, Chunks.data_toList_pushZeros32 _ (by omega),
+  rw [word32Small, pushBELimb_eq, Chunks.data_toList_pushZeros32 _ (by omega),
     encodeBEU_window (by omega), show (ByteArray.emptyWithCapacity 32).data.toList = [] from rfl,
     List.nil_append, show (32 : Nat) = 8 + 24 from rfl, encodeBEU_pad h8 24]
 
@@ -328,14 +345,13 @@ its buffer in advance, and why the offset words the ABI layout computes from
 
 /-! ## word primitive -/
 
-/-- Write one 32-byte EVM word, big-endian.  A `chunk`, not a `bytes` leaf:
-`UInt256.toBEByteArray` writes the word straight into a `ByteArray` (and
-`Binary.Fast` gives it eight bytes per bignum operation), so no 32-cell
-cons list is allocated per word — and ABI encodings are mostly words. -/
-def putWord (w : UInt256) : Builder := chunk (UInt256.toBEByteArray w)
+/-- Write one 32-byte EVM word, big-endian.  A `word` leaf, not a `chunk`:
+the value rides in the tree as its four limbs, and `Chunks.emitWord` pushes
+them straight into the output buffer — so no per-word 32-byte `ByteArray` is
+allocated and then re-copied, and ABI encodings are mostly words. -/
+def putWord (w : UInt256) : Builder := ⟨.word w, 32, (length_bytesOfWord w).symm⟩
 
-@[simp] theorem toList_putWord (w : UInt256) : (putWord w).toList = bytesOfWord w :=
-  UInt256.toList_toBEByteArray w
+@[simp] theorem toList_putWord (w : UInt256) : (putWord w).toList = bytesOfWord w := rfl
 
 /-! ## execution -/
 
