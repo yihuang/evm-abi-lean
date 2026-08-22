@@ -392,6 +392,25 @@ theorem toList_putParts_tupleStatic {ts : List Ty} (ht : Ty.allStatic ts = true)
   rw [putParts, Builder.toList_append, toList_putHeads_tupleStatic ht,
     toList_putTails_tupleStatic ht, List.append_nil]
 
+/-- Write one `uint` word from a `Nat`, without ever building a `UInt256`:
+`UInt256.ofNat` goes through `BitVec.ofNat 256`, which is bignum work even
+for `0`.  Below `2 ^ 64` — every array length and offset in practice — the
+24 leading zeros are one `copySlice` and the value one limb; above it, the
+limbs come straight off the `Nat`. -/
+def emitUintWord (acc : ByteArray) (n : Nat) : ByteArray :=
+  if n < 2 ^ 64 then pushBELimb (UInt64.ofNat n) (Chunks.pushZeros32 acc 24)
+  else encodeBEBytesFast.loop acc 32 n
+
+theorem data_toList_emitUintWord (acc : ByteArray) (n : Nat) :
+    (emitUintWord acc n).data.toList = acc.data.toList ++ encodeUint n := by
+  rw [emitUintWord]
+  split
+  · next hn =>
+      rw [pushBELimb_eq, Chunks.data_toList_pushZeros32 _ (by omega), encodeUint_eq,
+        encodeBEU_window (by omega), show (32 : Nat) = 8 + 24 from rfl,
+        encodeBEU_pad (show n < 256 ^ 8 by omega) 24, List.append_assoc]
+  · next _ => rw [encodeBEBytesFast.loop_eq, encodeUint_eq]
+
 mutual
 /-- Write one static value straight into the accumulator: words by their
 limbs, `bytesN` payloads by one append and one padding copy (skipped when
@@ -402,9 +421,9 @@ reaches them. -/
 def emitVal (acc : ByteArray) : (t : Ty) → ValBA t → ByteArray
   | .uint _, ⟨w, _⟩ => Chunks.emitWord acc w
   | .int _, ⟨i, _⟩ =>
-      Chunks.emitWord acc (UInt256.ofNat (if 0 ≤ i then i.toNat else 2 ^ 256 - (-i).toNat))
-  | .bool, b => Chunks.emitWord acc (UInt256.ofNat (if b then 1 else 0))
-  | .address, ⟨n, _⟩ => Chunks.emitWord acc (UInt256.ofNat n)
+      emitUintWord acc (if 0 ≤ i then i.toNat else 2 ^ 256 - (-i).toNat)
+  | .bool, b => emitUintWord acc (if b then 1 else 0)
+  | .address, ⟨n, _⟩ => emitUintWord acc n
   | .bytesN _, ⟨bs, _⟩ =>
       if bs.size == 32 then acc ++ bs else Chunks.pushZeros32 (acc ++ bs) (32 - bs.size)
   | .fixedArray t _, ⟨vs, _⟩ => emitVals acc t vs
@@ -434,14 +453,14 @@ theorem data_toList_emitVal :
   | .uint _, ht, acc, ⟨w, hw⟩ => by
       rw [emitVal, Chunks.data_toList_emitWord, putBA, toList_putWord]
   | .int _, ht, acc, ⟨i, hi⟩ => by
-      rw [emitVal, Chunks.data_toList_emitWord, putBA]
-      simp only [toList_putInt, encodeInt, encodeUint]
+      rw [emitVal, data_toList_emitUintWord, putBA]
+      simp only [toList_putInt, encodeInt]
   | .bool, ht, acc, b => by
-      rw [emitVal, Chunks.data_toList_emitWord, putBA]
-      simp only [toList_putBool, encodeBool, encodeUint]
+      rw [emitVal, data_toList_emitUintWord, putBA]
+      simp only [toList_putBool, encodeBool]
   | .address, ht, acc, ⟨n, hn⟩ => by
-      rw [emitVal, Chunks.data_toList_emitWord, putBA]
-      simp only [toList_putAddress, encodeAddress, encodeUint]
+      rw [emitVal, data_toList_emitUintWord, putBA]
+      simp only [toList_putAddress, encodeAddress]
   | .bytesN _, ht, acc, ⟨bs, hbs⟩ => by
       rw [emitVal, putBA, toList_putBytesNBA]
       split
@@ -483,25 +502,6 @@ theorem data_toList_emitTupleVals :
         data_toList_emitVal ht1 acc v, tupleEncodings, List.append_assoc]
 termination_by ts => (sizeOf ts, 0)
 end
-
-/-- Write one `uint` word from a `Nat`: below `2 ^ 64` — every array
-length, offset and `bytes` length in practice — the 24 leading zeros are
-one `copySlice` and the value one limb, with no `UInt256.ofNat` (whose
-big-literal mods cost ~1 µs per word, measured); past it, the word the
-slow way. -/
-def emitUintWord (acc : ByteArray) (n : Nat) : ByteArray :=
-  if n < 2 ^ 64 then pushBELimb (UInt64.ofNat n) (Chunks.pushZeros32 acc 24)
-  else Chunks.emitWord acc (UInt256.ofNat n)
-
-theorem data_toList_emitUintWord (acc : ByteArray) (n : Nat) :
-    (emitUintWord acc n).data.toList = acc.data.toList ++ encodeUint n := by
-  rw [emitUintWord]
-  split
-  · next hn =>
-      rw [pushBELimb_eq, Chunks.data_toList_pushZeros32 _ (by omega), encodeUint_eq,
-        encodeBEU_window (by omega), show (32 : Nat) = 8 + 24 from rfl,
-        encodeBEU_pad (show n < 256 ^ 8 by omega) 24, List.append_assoc]
-  · next _ => rw [Chunks.data_toList_emitWord]; rfl
 
 /-! ### `bytes[]` and `string[]`
 
