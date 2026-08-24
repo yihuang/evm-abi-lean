@@ -360,7 +360,7 @@ theorem toList_putParts_static {t : Ty} (h : t.isStatic = true) (vs : List (ValB
 
 /-- The components' encodings, concatenated — what a static tuple's parts
 lay out as. -/
-def tupleEncodings : (ts : List Ty) → TupleValBA ts → List UInt8
+private def tupleEncodings : (ts : List Ty) → TupleValBA ts → List UInt8
   | [], _ => []
   | t :: ts, (v, vs) => (putBA t v).toList ++ tupleEncodings ts vs
 
@@ -614,11 +614,23 @@ private theorem toList_putBA_string : ∀ v : ValBA .string,
     (putBA .string v).toList = encodeBytes (v.val.toUTF8).data.toList
   | ⟨s, _⟩ => by simp only [putBA, toList_putString, encodeString]
 
+/-! `putBA`'s container arms, unfolded once so proofs can name them. -/
+
+private theorem putBA_array {t : Ty} (vs : List (ValBA t)) (h : vs.length < 2 ^ 64) :
+    putBA (.array t) ⟨vs, h⟩ = putUint vs.length ++ putParts (vs.map (partOfBA t)) := by
+  rw [putBA]
+
+private theorem putBA_fixedArray {t : Ty} {n : Nat} (vs : List (ValBA t)) (h : vs.length = n) :
+    putBA (.fixedArray t n) ⟨vs, h⟩ = putParts (vs.map (partOfBA t)) := by rw [putBA]
+
+private theorem putBA_tuple {ts : List Ty} (vs : TupleValBA ts) :
+    putBA (.tuple ts) vs = putParts (partsOfTupleBA ts vs) := by rw [putBA]
+
 /-! ### sizes
 
-`sizeBA t v` is the byte count `putBA t v` runs to — the builder's
-cached-size arithmetic replayed over the value, exact whether or not the
-type is `Valid`. -/
+`sizeBA t v` is the byte count `putBA t v` runs to, exact whether or not the
+type is `Valid`.  It is what the size tree below is proved against — nothing
+runs it, so the whole section is private. -/
 
 private theorem size_append (a b : Builder) : (a ++ b).size = a.size + b.size := rfl
 
@@ -632,7 +644,7 @@ private theorem size_putBytesNBA (bs : ByteArray) :
 
 mutual
 /-- The byte count `putBA t v` runs to. -/
-def sizeBA : (t : Ty) → ValBA t → Nat
+private def sizeBA : (t : Ty) → ValBA t → Nat
   | .uint _, _ => 32
   | .int _, _ => 32
   | .bool, _ => 32
@@ -646,13 +658,13 @@ def sizeBA : (t : Ty) → ValBA t → Nat
 termination_by t _ => (sizeOf t, 0)
 
 /-- Head plus tail bytes of an element run. -/
-def sizeElems (t : Ty) : List (ValBA t) → Nat
+private def sizeElems (t : Ty) : List (ValBA t) → Nat
   | [] => 0
   | v :: vs => (if t.isStatic then sizeBA t v else 32 + sizeBA t v) + sizeElems t vs
 termination_by vs => (sizeOf t, 1 + vs.length)
 
 /-- Head plus tail bytes of a component run. -/
-def sizeTuple : (ts : List Ty) → TupleValBA ts → Nat
+private def sizeTuple : (ts : List Ty) → TupleValBA ts → Nat
   | [], _ => 0
   | t :: ts, (v, vs) =>
       (if t.isStatic then sizeBA t v else 32 + sizeBA t v) + sizeTuple ts vs
@@ -660,7 +672,7 @@ termination_by ts _ => (sizeOf ts, 0)
 end
 
 mutual
-theorem sizeBA_eq : ∀ (t : Ty) (v : ValBA t), sizeBA t v = (putBA t v).size
+private theorem sizeBA_eq : ∀ (t : Ty) (v : ValBA t), sizeBA t v = (putBA t v).size
   | .uint _, ⟨w, _⟩ => by rw [sizeBA, putBA]; exact rfl
   | .int _, ⟨i, _⟩ => by rw [sizeBA, putBA]; exact (size_putUint _).symm
   | .bool, b => by rw [sizeBA, putBA]; exact (size_putUint _).symm
@@ -679,13 +691,13 @@ theorem sizeBA_eq : ∀ (t : Ty) (v : ValBA t), sizeBA t v = (putBA t v).size
       rw [sizeBA, putBA, size_parts_tuple ts vs]
 termination_by t _ => (sizeOf t, 0)
 
-theorem size_parts_elems : ∀ (t : Ty) (vs : List (ValBA t)),
+private theorem size_parts_elems : ∀ (t : Ty) (vs : List (ValBA t)),
     (putParts (vs.map (partOfBA t))).size = sizeElems t vs
   | t, vs => by
       rw [putParts, size_append, heads_tails_elems t vs (headSizes (vs.map (partOfBA t)))]
 termination_by t vs => (sizeOf t, 2 + vs.length)
 
-theorem heads_tails_elems : ∀ (t : Ty) (vs : List (ValBA t)) (acc : Nat),
+private theorem heads_tails_elems : ∀ (t : Ty) (vs : List (ValBA t)) (acc : Nat),
     (putHeads acc (vs.map (partOfBA t))).size + (putTails (vs.map (partOfBA t))).size
       = sizeElems t vs
   | t, [], acc => by simp [putHeads, putTails, sizeElems]
@@ -705,13 +717,13 @@ theorem heads_tails_elems : ∀ (t : Ty) (vs : List (ValBA t)) (acc : Nat),
         omega
 termination_by t vs _ => (sizeOf t, 1 + vs.length)
 
-theorem size_parts_tuple : ∀ (ts : List Ty) (vs : TupleValBA ts),
+private theorem size_parts_tuple : ∀ (ts : List Ty) (vs : TupleValBA ts),
     (putParts (partsOfTupleBA ts vs)).size = sizeTuple ts vs
   | ts, vs => by
       rw [putParts, size_append, heads_tails_tuple ts vs (headSizes (partsOfTupleBA ts vs))]
 termination_by ts _ => (sizeOf ts, 2)
 
-theorem heads_tails_tuple : ∀ (ts : List Ty) (vs : TupleValBA ts) (acc : Nat),
+private theorem heads_tails_tuple : ∀ (ts : List Ty) (vs : TupleValBA ts) (acc : Nat),
     (putHeads acc (partsOfTupleBA ts vs)).size + (putTails (partsOfTupleBA ts vs)).size
       = sizeTuple ts vs
   | [], _, acc => by rw [partsOfTupleBA, sizeTuple]; simp [putHeads, putTails]
@@ -755,7 +767,7 @@ termination_by ts => sizeOf ts
 end
 
 mutual
-theorem sizeBA_static : ∀ {t : Ty}, t.isStatic = true → ∀ v : ValBA t,
+private theorem sizeBA_static : ∀ {t : Ty}, t.isStatic = true → ∀ v : ValBA t,
     sizeBA t v = staticSize t
   | .uint _, _, ⟨_, _⟩ => by rw [sizeBA, staticSize]
   | .int _, _, ⟨_, _⟩ => by rw [sizeBA, staticSize]
@@ -770,7 +782,7 @@ theorem sizeBA_static : ∀ {t : Ty}, t.isStatic = true → ∀ v : ValBA t,
   | .array _, ht, _ => Bool.noConfusion ht
 termination_by t _ _ => (sizeOf t, 0)
 
-theorem sizeElems_static : ∀ {t : Ty}, t.isStatic = true → ∀ vs : List (ValBA t),
+private theorem sizeElems_static : ∀ {t : Ty}, t.isStatic = true → ∀ vs : List (ValBA t),
     sizeElems t vs = vs.length * staticSize t
   | t, ht, [] => by rw [sizeElems]; simp
   | t, ht, v :: vs => by
@@ -778,7 +790,7 @@ theorem sizeElems_static : ∀ {t : Ty}, t.isStatic = true → ∀ vs : List (Va
       simp [Nat.succ_mul, Nat.add_comm]
 termination_by t _ vs => (sizeOf t, 1 + vs.length)
 
-theorem sizeTuple_static : ∀ {ts : List Ty}, Ty.allStatic ts = true →
+private theorem sizeTuple_static : ∀ {ts : List Ty}, Ty.allStatic ts = true →
     ∀ vs : TupleValBA ts, sizeTuple ts vs = staticSizeSum ts
   | [], _, _ => by rw [sizeTuple, staticSizeSum]
   | t :: ts, ht, (v, vs) => by
@@ -1033,9 +1045,7 @@ theorem data_toList_emitAny : ∀ {t : Ty} (acc : ByteArray) (v : ValBA t),
       rw [emitAny]
       by_cases hst : t.isStatic
       · rw [if_pos hst, data_toList_emitVals hst, data_toList_emitUintWord]
-        have hput : putBA (.array t) ⟨vs, h⟩
-            = putUint vs.length ++ putParts (vs.map (partOfBA t)) := by rw [putBA]
-        rw [hput, Builder.toList_append, toList_putUint, toList_putParts_static hst,
+        rw [putBA_array vs h, Builder.toList_append, toList_putUint, toList_putParts_static hst,
           List.append_assoc]
       · have hst' : t.isStatic = false := by simpa using hst
         rw [if_neg hst]
@@ -1043,26 +1053,20 @@ theorem data_toList_emitAny : ∀ {t : Ty} (acc : ByteArray) (v : ValBA t),
           rw [sizesOf, if_neg hst]
         rw [hch, data_toList_emitAnyTails t hst', data_toList_emitOffsets t hst',
           data_toList_emitUintWord]
-        have hput : putBA (.array t) ⟨vs, h⟩
-            = putUint vs.length ++ putParts (vs.map (partOfBA t)) := by rw [putBA]
-        rw [hput, Builder.toList_append, toList_putUint, putParts, Builder.toList_append,
+        rw [putBA_array vs h, Builder.toList_append, toList_putUint, putParts, Builder.toList_append,
           headSizes_dynamic hst']
         simp only [List.append_assoc]
   | .fixedArray t n, acc, ⟨vs, h⟩ => by
       rw [emitAny]
       by_cases hst : t.isStatic
       · rw [if_pos hst, data_toList_emitVals hst]
-        have hput : putBA (.fixedArray t n) ⟨vs, h⟩
-            = putParts (vs.map (partOfBA t)) := by rw [putBA]
-        rw [hput, toList_putParts_static hst]
+        rw [putBA_fixedArray vs h, toList_putParts_static hst]
       · have hst' : t.isStatic = false := by simpa using hst
         rw [if_neg hst]
         have hch : (sizesOf (.fixedArray t n) ⟨vs, h⟩).children = sizesOfList t vs := by
           rw [sizesOf, if_neg hst]
         rw [hch, data_toList_emitAnyTails t hst', data_toList_emitOffsets t hst']
-        have hput : putBA (.fixedArray t n) ⟨vs, h⟩
-            = putParts (vs.map (partOfBA t)) := by rw [putBA]
-        rw [hput, putParts, Builder.toList_append, headSizes_dynamic hst']
+        rw [putBA_fixedArray vs h, putParts, Builder.toList_append, headSizes_dynamic hst']
         simp only [List.append_assoc]
   | .tuple ts, acc, vs => by
       rw [emitAny]
@@ -1070,8 +1074,7 @@ theorem data_toList_emitAny : ∀ {t : Ty} (acc : ByteArray) (v : ValBA t),
         rw [sizesOf]
       rw [hch, data_toList_emitAnyTupleTails, data_toList_emitTupleHeads,
         tupleBase_eq]
-      have hput : putBA (.tuple ts) vs = putParts (partsOfTupleBA ts vs) := by rw [putBA]
-      rw [hput, putParts, Builder.toList_append]
+      rw [putBA_tuple vs, putParts, Builder.toList_append]
       simp only [List.append_assoc]
 termination_by t _ _ => (sizeOf t, 0)
 
@@ -1180,14 +1183,40 @@ private theorem encode_array_static_arm (te : Ty) (vs : List (ValBA te))
     apply ByteArray.data_inj
     rw [← Array.toList_inj]
     rw [encode, Builder.data_toList_run]
-    have hput : putBA (.array te) ⟨vs, h⟩
-        = putUint vs.length ++ putParts (vs.map (partOfBA te)) := by
-      rw [putBA]
-    rw [hput, Builder.toList_append, toList_putUint, toList_putParts_static ht]
+    rw [putBA_array vs h, Builder.toList_append, toList_putUint, toList_putParts_static ht]
     rw [data_toList_emitVals ht, data_toList_emitUintWord, toList_emptyWithCapacity,
       List.nil_append]
   · rw [if_neg ht]
     exact encode_emitAny _ _
+
+/-- The single-payload arm, at either payload type.  The capacity is free:
+`emptyWithCapacity` starts empty, so it cannot reach the bytes. -/
+private theorem encode_payload_arm {t : Ty} {payloadF : ValBA t → ByteArray}
+    (hput : ∀ v : ValBA t, (putBA t v).toList = encodeBytes (payloadF v).data.toList)
+    (v : ValBA t) (cap : Nat) :
+    encode t v = emitPayload (ByteArray.emptyWithCapacity cap) (payloadF v) := by
+  apply ByteArray.data_inj
+  rw [← Array.toList_inj, encode, Builder.data_toList_run, data_toList_emitPayload,
+    toList_emptyWithCapacity, List.nil_append]
+  exact hput v
+
+/-- The streaming array arm, at either payload type. -/
+private theorem encode_dyn_array_arm {t : Ty} (hd : t.isStatic = false)
+    {sizeF : ValBA t → Nat} {payloadF : ValBA t → ByteArray}
+    (hsize : ∀ v : ValBA t, (putBA t v).size = dynTailSize (sizeF v))
+    (hput : ∀ v : ValBA t, (putBA t v).toList = encodeBytes (payloadF v).data.toList)
+    (vs : List (ValBA t)) (h : vs.length < 2 ^ 64) (cap : Nat) :
+    encode (.array t) ⟨vs, h⟩
+      = emitDynTails payloadF
+          (emitDynHeads sizeF (emitUintWord (ByteArray.emptyWithCapacity cap) vs.length)
+            (32 * vs.length) vs) vs := by
+  apply ByteArray.data_inj
+  rw [← Array.toList_inj, encode, Builder.data_toList_run]
+  rw [putBA_array vs h, Builder.toList_append, toList_putUint, putParts, Builder.toList_append,
+    headSizes_dynamic hd, data_toList_emitDynTails hd hput,
+    data_toList_emitDynHeads hd hsize, data_toList_emitUintWord,
+    toList_emptyWithCapacity, List.nil_append]
+  simp only [List.append_assoc]
 
 @[csimp] theorem encode_eq_fast : @encode = @encodeFast := by
   funext t v
@@ -1195,71 +1224,17 @@ private theorem encode_array_static_arm (te : Ty) (vs : List (ValBA te))
   | .uint _, v | .int _, v | .bool, v | .address, v | .bytesN _, v
   | .fixedArray _ _, v | .tuple _, v =>
       exact encode_nonarray_arm _ v
-  | .bytes, ⟨bs, h⟩ =>
-      apply ByteArray.data_inj
-      rw [← Array.toList_inj]
-      show (encode .bytes ⟨bs, h⟩).data.toList
-        = (emitPayload (ByteArray.emptyWithCapacity (dynTailSize bs.size)) bs).data.toList
-      rw [encode, Builder.data_toList_run, data_toList_emitPayload, toList_emptyWithCapacity,
-        List.nil_append]
-      exact toList_putBA_bytes ⟨bs, h⟩
-  | .string, ⟨s, h⟩ =>
-      apply ByteArray.data_inj
-      rw [← Array.toList_inj]
-      show (encode .string ⟨s, h⟩).data.toList
-        = (emitPayload (ByteArray.emptyWithCapacity (dynTailSize s.utf8ByteSize))
-            s.toUTF8).data.toList
-      rw [encode, Builder.data_toList_run, data_toList_emitPayload, toList_emptyWithCapacity,
-        List.nil_append]
-      exact toList_putBA_string ⟨s, h⟩
+  | .bytes, v => exact encode_payload_arm toList_putBA_bytes v _
+  | .string, v => exact encode_payload_arm toList_putBA_string v _
   | .array (.uint _), ⟨vs, h⟩ | .array (.int _), ⟨vs, h⟩ | .array .bool, ⟨vs, h⟩
   | .array .address, ⟨vs, h⟩ | .array (.bytesN _), ⟨vs, h⟩
   | .array (.array _), ⟨vs, h⟩ | .array (.fixedArray _ _), ⟨vs, h⟩
   | .array (.tuple _), ⟨vs, h⟩ =>
       exact encode_array_static_arm _ vs h
   | .array .bytes, ⟨vs, h⟩ =>
-      apply ByteArray.data_inj
-      rw [← Array.toList_inj]
-      show (encode (.array .bytes) ⟨vs, h⟩).data.toList
-        = (emitDynTails (fun u : ValBA .bytes => u.val)
-            (emitDynHeads (fun u : ValBA .bytes => u.val.size)
-              (emitUintWord
-                (ByteArray.emptyWithCapacity
-                  (vs.foldl (fun s u => s + 32 + dynTailSize u.val.size) 32)) vs.length)
-              (32 * vs.length) vs)
-            vs).data.toList
-      rw [encode, Builder.data_toList_run]
-      have hput : putBA (.array .bytes) ⟨vs, h⟩
-          = putUint vs.length ++ putParts (vs.map (partOfBA .bytes)) := by
-        rw [putBA]
-      rw [hput, Builder.toList_append, toList_putUint, putParts, Builder.toList_append,
-        headSizes_dynamic rfl]
-      rw [data_toList_emitDynTails rfl toList_putBA_bytes,
-        data_toList_emitDynHeads rfl size_putBA_bytes, data_toList_emitUintWord,
-        toList_emptyWithCapacity, List.nil_append]
-      simp only [List.append_assoc]
+      exact encode_dyn_array_arm rfl size_putBA_bytes toList_putBA_bytes vs h _
   | .array .string, ⟨vs, h⟩ =>
-      apply ByteArray.data_inj
-      rw [← Array.toList_inj]
-      show (encode (.array .string) ⟨vs, h⟩).data.toList
-        = (emitDynTails (fun u : ValBA .string => u.val.toUTF8)
-            (emitDynHeads (fun u : ValBA .string => u.val.utf8ByteSize)
-              (emitUintWord
-                (ByteArray.emptyWithCapacity
-                  (vs.foldl (fun s u => s + 32 + dynTailSize u.val.utf8ByteSize) 32))
-                vs.length)
-              (32 * vs.length) vs)
-            vs).data.toList
-      rw [encode, Builder.data_toList_run]
-      have hput : putBA (.array .string) ⟨vs, h⟩
-          = putUint vs.length ++ putParts (vs.map (partOfBA .string)) := by
-        rw [putBA]
-      rw [hput, Builder.toList_append, toList_putUint, putParts, Builder.toList_append,
-        headSizes_dynamic rfl]
-      rw [data_toList_emitDynTails rfl toList_putBA_string,
-        data_toList_emitDynHeads rfl size_putBA_string, data_toList_emitUintWord,
-        toList_emptyWithCapacity, List.nil_append]
-      simp only [List.append_assoc]
+      exact encode_dyn_array_arm rfl size_putBA_string toList_putBA_string vs h _
 
 /-! ## the runtime decoder -/
 
