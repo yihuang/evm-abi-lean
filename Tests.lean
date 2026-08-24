@@ -1184,4 +1184,52 @@ theorem erc20Transfer_decodes :
     (erc20Transfer.decodeStrict (erc20Transfer.encode erc20TransferVal)).isSome := by
   decide +kernel
 
+/-! ## the streaming encoder against the builder
+
+`encode_eq_fast` proves the two equal for every value, and a wrong size
+formula fails to typecheck — the definitions are covered.  What is not is the
+compile step: `@[csimp]` swapping in what was proved.  So run both, on the
+shapes whose arms differ. -/
+
+/-- The streamed `encode` and `Spec.encodeByteArray`, which runs the builder,
+produce the same bytes. -/
+private def streamsLikeBuilder (t : Ty) (v : ValBA t) : Bool :=
+  encode t v == Spec.encodeByteArray t (ValBA.toList t v)
+
+/-- `bool[]` and `address[]` no longer build a `UInt256`; a negative `int[]`
+has a two's complement just under `2 ^ 256`, so it takes `emitUintWord`'s
+fallback. -/
+example : streamsLikeBuilder (.array .bool) ⟨[true, false, true, true], by decide⟩ := by
+  native_decide
+
+example : streamsLikeBuilder (.array .address)
+    ⟨[⟨0xbeef, by decide⟩, ⟨0x0102030405060708090a0b0c0d0e0f1011121314, by decide⟩],
+     by decide⟩ := by native_decide
+
+example : streamsLikeBuilder (.array (.int 64))
+    ⟨[⟨-1, by decide⟩, ⟨-1000, by decide⟩, ⟨5, by decide⟩], by decide⟩ := by native_decide
+
+/-- A static array nested in a dynamic value is sized through the size tree,
+by `vs.length * staticSize t` — which a one-element array cannot tell from a
+constant, so this one has three. -/
+example : streamsLikeBuilder (.tuple [.bytes, .array (.uint 256)])
+    (⟨⟨#[1, 2, 3]⟩, by decide⟩,
+     ⟨[⟨7, by decide⟩, ⟨8, by decide⟩, ⟨9, by decide⟩], by decide⟩, ()) := by native_decide
+
+/-- `string[]` measures by `utf8ByteSize` and materialises `toUTF8` only in
+the tail. -/
+example : streamsLikeBuilder (.array .string)
+    ⟨[⟨"", by native_decide⟩, ⟨"hi", by native_decide⟩,
+      ⟨"héllo wörld", by native_decide⟩], by decide⟩ := by native_decide
+
+/-- A payload that fills its word skips the padding run; one that does not
+takes it; and the empty containers are every walker's base case. -/
+example : streamsLikeBuilder (.array .bytes)
+    ⟨[⟨⟨Array.replicate 32 7⟩, by decide⟩, ⟨⟨#[1, 2, 3]⟩, by decide⟩,
+      ⟨⟨#[]⟩, by decide⟩], by decide⟩ := by native_decide
+
+example : streamsLikeBuilder (.array .bytes) ⟨[], by decide⟩ := by native_decide
+
+example : streamsLikeBuilder (.array (.uint 256)) ⟨[], by decide⟩ := by native_decide
+
 end EvmAbi

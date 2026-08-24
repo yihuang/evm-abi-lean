@@ -838,12 +838,12 @@ def sizesOf : (t : Ty) → ValBA t → SizeT
   | .bytes, ⟨bs, _⟩ => .mk (dynTailSize bs.size) []
   | .string, ⟨s, _⟩ => .mk (dynTailSize s.utf8ByteSize) []
   | .array t, ⟨vs, _⟩ =>
-      if t.isStatic then .mk (32 + sizeElems t vs) []
+      if t.isStatic then .mk (32 + vs.length * staticSize t) []
       else
         let cs := sizesOfList t vs
         .mk (32 + sumDyn cs) cs
   | .fixedArray t _, ⟨vs, _⟩ =>
-      if t.isStatic then .mk (sizeElems t vs) []
+      if t.isStatic then .mk (vs.length * staticSize t) []
       else
         let cs := sizesOfList t vs
         .mk (sumDyn cs) cs
@@ -875,7 +875,7 @@ theorem total_sizesOf : ∀ (t : Ty) (v : ValBA t), (sizesOf t v).total = sizeBA
   | .array t, ⟨vs, h⟩ => by
       rw [sizesOf, sizeBA]
       by_cases hst : t.isStatic
-      · rw [if_pos hst]
+      · rw [if_pos hst, sizeElems_static hst]
       · rw [if_neg hst]
         have hst' : t.isStatic = false := by simpa using hst
         show 32 + sumDyn (sizesOfList t vs) = 32 + sizeElems t vs
@@ -883,7 +883,7 @@ theorem total_sizesOf : ∀ (t : Ty) (v : ValBA t), (sizesOf t v).total = sizeBA
   | .fixedArray t _, ⟨vs, h⟩ => by
       rw [sizesOf, sizeBA]
       by_cases hst : t.isStatic
-      · rw [if_pos hst]
+      · rw [if_pos hst, sizeElems_static hst]
       · rw [if_neg hst]
         have hst' : t.isStatic = false := by simpa using hst
         show sumDyn (sizesOfList t vs) = sizeElems t vs
