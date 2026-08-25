@@ -745,10 +745,11 @@ end
 
 /-! ### static sizes
 
-A static value's size is fixed by its type, so the arms that write one size
-their buffer from `staticSize` and skip the size pass entirely.  It is
-`Ty.headSize` except at `bytesN m` with `m > 32`, where the payload is `m`
-bytes rather than one word — using `headSize` there would under-allocate. -/
+A static value's size is fixed by its type, so the static arm sizes its
+buffer from `staticSize` and skips the size pass, and the size tree sizes a
+static array from its length alone.  It is `Ty.headSize` except at `bytesN m`
+with `m > 32`, where the payload is `m` bytes rather than one word — using
+`headSize` there would under-allocate. -/
 
 mutual
 /-- Encoded bytes of a static type, from the type alone. -/
@@ -1107,9 +1108,9 @@ theorem data_toList_emitAnyTupleTails :
 termination_by ts _ _ => (sizeOf ts, 1)
 end
 
-/-- `encode` with the static-element, `bytes[]` and `string[]` array arms
-fused (the swap the compiler acts on; every theorem stays stated over
-`encode`). -/
+/-- `encode` with the static, `bytes[]` and `string[]` arms fused and
+everything else through the size tree (the swap the compiler acts on; every
+theorem stays stated over `encode`). -/
 def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
   match t, v with
   | .array .bytes, v =>
@@ -1129,20 +1130,12 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
             v.val.length)
           (32 * v.val.length) v.val)
         v.val
-  | .array t, v =>
-      if t.isStatic then
-        emitVals (emitUintWord
-          (ByteArray.emptyWithCapacity (32 + staticSize t * v.val.length)) v.val.length) t v.val
-      else emitAnyRun (.array t) v
-  | .bytes, v => emitPayload (ByteArray.emptyWithCapacity (dynTailSize v.val.size)) v.val
-  | .string, v =>
-      emitPayload (ByteArray.emptyWithCapacity (dynTailSize v.val.utf8ByteSize)) v.val.toUTF8
   | t, v =>
       if t.isStatic then emitVal (ByteArray.emptyWithCapacity (staticSize t)) t v
       else emitAnyRun t v
 
 /-- A static value's whole encoding is its head, so it streams through
-`emitVal` — a struct of words costs no `Part` per component. -/
+`emitVal` — a struct of words costs no `SizeT` per component. -/
 private theorem encode_static_arm {t : Ty} (v : ValBA t) (ht : t.isStatic = true) :
     encode t v = emitVal (ByteArray.emptyWithCapacity (staticSize t)) t v := by
   apply ByteArray.data_inj
@@ -1159,7 +1152,7 @@ private theorem encode_emitAny (t : Ty) (v : ValBA t) :
     (sizesOf t v)).data.toList
   rw [data_toList_emitAny, toList_emptyWithCapacity, List.nil_append]
 
-/-- The catch-all arm agrees with `encode`, at any type. -/
+/-- The catch-all arm, at any type. -/
 private theorem encode_nonarray_arm (t : Ty) (v : ValBA t) :
     encode t v
       = if t.isStatic then emitVal (ByteArray.emptyWithCapacity (staticSize t)) t v
@@ -1169,36 +1162,6 @@ private theorem encode_nonarray_arm (t : Ty) (v : ValBA t) :
     exact encode_static_arm v ht
   · rw [if_neg ht]
     exact encode_emitAny t v
-
-/-- The static-element arm agrees with `encode`, at any element type. -/
-private theorem encode_array_static_arm (te : Ty) (vs : List (ValBA te))
-    (h : vs.length < 2 ^ 64) :
-    encode (.array te) ⟨vs, h⟩
-      = if te.isStatic then
-          emitVals (emitUintWord
-            (ByteArray.emptyWithCapacity (32 + staticSize te * vs.length)) vs.length) te vs
-        else emitAnyRun (.array te) ⟨vs, h⟩ := by
-  by_cases ht : te.isStatic
-  · rw [if_pos ht]
-    apply ByteArray.data_inj
-    rw [← Array.toList_inj]
-    rw [encode, Builder.data_toList_run]
-    rw [putBA_array vs h, Builder.toList_append, toList_putUint, toList_putParts_static ht]
-    rw [data_toList_emitVals ht, data_toList_emitUintWord, toList_emptyWithCapacity,
-      List.nil_append]
-  · rw [if_neg ht]
-    exact encode_emitAny _ _
-
-/-- The single-payload arm, at either payload type.  The capacity is free:
-`emptyWithCapacity` starts empty, so it cannot reach the bytes. -/
-private theorem encode_payload_arm {t : Ty} {payloadF : ValBA t → ByteArray}
-    (hput : ∀ v : ValBA t, (putBA t v).toList = encodeBytes (payloadF v).data.toList)
-    (v : ValBA t) (cap : Nat) :
-    encode t v = emitPayload (ByteArray.emptyWithCapacity cap) (payloadF v) := by
-  apply ByteArray.data_inj
-  rw [← Array.toList_inj, encode, Builder.data_toList_run, data_toList_emitPayload,
-    toList_emptyWithCapacity, List.nil_append]
-  exact hput v
 
 /-- The streaming array arm, at either payload type. -/
 private theorem encode_dyn_array_arm {t : Ty} (hd : t.isStatic = false)
@@ -1221,20 +1184,16 @@ private theorem encode_dyn_array_arm {t : Ty} (hd : t.isStatic = false)
 @[csimp] theorem encode_eq_fast : @encode = @encodeFast := by
   funext t v
   match t, v with
-  | .uint _, v | .int _, v | .bool, v | .address, v | .bytesN _, v
-  | .fixedArray _ _, v | .tuple _, v =>
-      exact encode_nonarray_arm _ v
-  | .bytes, v => exact encode_payload_arm toList_putBA_bytes v _
-  | .string, v => exact encode_payload_arm toList_putBA_string v _
-  | .array (.uint _), ⟨vs, h⟩ | .array (.int _), ⟨vs, h⟩ | .array .bool, ⟨vs, h⟩
-  | .array .address, ⟨vs, h⟩ | .array (.bytesN _), ⟨vs, h⟩
-  | .array (.array _), ⟨vs, h⟩ | .array (.fixedArray _ _), ⟨vs, h⟩
-  | .array (.tuple _), ⟨vs, h⟩ =>
-      exact encode_array_static_arm _ vs h
   | .array .bytes, ⟨vs, h⟩ =>
       exact encode_dyn_array_arm rfl size_putBA_bytes toList_putBA_bytes vs h _
   | .array .string, ⟨vs, h⟩ =>
       exact encode_dyn_array_arm rfl size_putBA_string toList_putBA_string vs h _
+  | .uint _, v | .int _, v | .bool, v | .address, v | .bytesN _, v | .bytes, v | .string, v
+  | .fixedArray _ _, v | .tuple _, v
+  | .array (.uint _), v | .array (.int _), v | .array .bool, v | .array .address, v
+  | .array (.bytesN _), v | .array (.array _), v | .array (.fixedArray _ _), v
+  | .array (.tuple _), v =>
+      exact encode_nonarray_arm _ v
 
 /-! ## the runtime decoder -/
 
