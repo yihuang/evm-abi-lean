@@ -628,9 +628,7 @@ private theorem putBA_tuple {ts : List Ty} (vs : TupleValBA ts) :
 
 /-! ### sizes
 
-`sizeBA t v` is the byte count `putBA t v` runs to, exact whether or not the
-type is `Valid`.  It is what the size tree below is proved against — nothing
-runs it, so the whole section is private. -/
+Three sizes of the builder's leaves, for the size tree's proof. -/
 
 private theorem size_append (a b : Builder) : (a ++ b).size = a.size + b.size := rfl
 
@@ -641,107 +639,6 @@ private theorem size_putBytesNBA (bs : ByteArray) :
     (putBytesNBA bs).size = bs.size + (32 - bs.size) := by
   rw [Builder.size_eq_length_toList, toList_putBytesNBA]
   simp [encodeBytesN]
-
-mutual
-/-- The byte count `putBA t v` runs to. -/
-private def sizeBA : (t : Ty) → ValBA t → Nat
-  | .uint _, _ => 32
-  | .int _, _ => 32
-  | .bool, _ => 32
-  | .address, _ => 32
-  | .bytesN _, ⟨bs, _⟩ => bs.size + (32 - bs.size)
-  | .bytes, ⟨bs, _⟩ => dynTailSize bs.size
-  | .string, ⟨s, _⟩ => dynTailSize s.utf8ByteSize
-  | .array t, ⟨vs, _⟩ => 32 + sizeElems t vs
-  | .fixedArray t _, ⟨vs, _⟩ => sizeElems t vs
-  | .tuple ts, vs => sizeTuple ts vs
-termination_by t _ => (sizeOf t, 0)
-
-/-- Head plus tail bytes of an element run. -/
-private def sizeElems (t : Ty) : List (ValBA t) → Nat
-  | [] => 0
-  | v :: vs => (if t.isStatic then sizeBA t v else 32 + sizeBA t v) + sizeElems t vs
-termination_by vs => (sizeOf t, 1 + vs.length)
-
-/-- Head plus tail bytes of a component run. -/
-private def sizeTuple : (ts : List Ty) → TupleValBA ts → Nat
-  | [], _ => 0
-  | t :: ts, (v, vs) =>
-      (if t.isStatic then sizeBA t v else 32 + sizeBA t v) + sizeTuple ts vs
-termination_by ts _ => (sizeOf ts, 0)
-end
-
-mutual
-private theorem sizeBA_eq : ∀ (t : Ty) (v : ValBA t), sizeBA t v = (putBA t v).size
-  | .uint _, ⟨w, _⟩ => by rw [sizeBA, putBA]; exact rfl
-  | .int _, ⟨i, _⟩ => by rw [sizeBA, putBA]; exact (size_putUint _).symm
-  | .bool, b => by rw [sizeBA, putBA]; exact (size_putUint _).symm
-  | .address, ⟨n, _⟩ => by rw [sizeBA, putBA]; exact (size_putUint _).symm
-  | .bytesN _, ⟨bs, _⟩ => by rw [sizeBA, putBA]; exact (size_putBytesNBA bs).symm
-  | .bytes, ⟨bs, _⟩ => by rw [sizeBA, putBA]; exact (size_putBytesBA bs).symm
-  | .string, ⟨s, _⟩ => by
-      rw [sizeBA, putBA]
-      show _ = (putBytesBA s.toUTF8).size
-      rw [size_putBytesBA, toUTF8_size]
-  | .array t, ⟨vs, _⟩ => by
-      rw [sizeBA, putBA, size_append, size_putUint, size_parts_elems t vs]
-  | .fixedArray t _, ⟨vs, _⟩ => by
-      rw [sizeBA, putBA, size_parts_elems t vs]
-  | .tuple ts, vs => by
-      rw [sizeBA, putBA, size_parts_tuple ts vs]
-termination_by t _ => (sizeOf t, 0)
-
-private theorem size_parts_elems : ∀ (t : Ty) (vs : List (ValBA t)),
-    (putParts (vs.map (partOfBA t))).size = sizeElems t vs
-  | t, vs => by
-      rw [putParts, size_append, heads_tails_elems t vs (headSizes (vs.map (partOfBA t)))]
-termination_by t vs => (sizeOf t, 2 + vs.length)
-
-private theorem heads_tails_elems : ∀ (t : Ty) (vs : List (ValBA t)) (acc : Nat),
-    (putHeads acc (vs.map (partOfBA t))).size + (putTails (vs.map (partOfBA t))).size
-      = sizeElems t vs
-  | t, [], acc => by simp [putHeads, putTails, sizeElems]
-  | t, v :: vs, acc => by
-      rw [sizeElems]
-      by_cases hst : t.isStatic
-      · rw [if_pos hst]
-        simp only [List.map_cons, partOfBA, hst, putHeads, putTails, size_append]
-        rw [← sizeBA_eq t v, ← heads_tails_elems t vs acc]
-        omega
-      · rw [if_neg hst]
-        have hst' : t.isStatic = false := by simpa using hst
-        simp only [List.map_cons, partOfBA, hst', putHeads, putTails, size_append,
-          size_putUint]
-        rw [← sizeBA_eq t v, ← heads_tails_elems t vs (acc + (putBA t v).size)]
-        rw [sizeBA_eq t v]
-        omega
-termination_by t vs _ => (sizeOf t, 1 + vs.length)
-
-private theorem size_parts_tuple : ∀ (ts : List Ty) (vs : TupleValBA ts),
-    (putParts (partsOfTupleBA ts vs)).size = sizeTuple ts vs
-  | ts, vs => by
-      rw [putParts, size_append, heads_tails_tuple ts vs (headSizes (partsOfTupleBA ts vs))]
-termination_by ts _ => (sizeOf ts, 2)
-
-private theorem heads_tails_tuple : ∀ (ts : List Ty) (vs : TupleValBA ts) (acc : Nat),
-    (putHeads acc (partsOfTupleBA ts vs)).size + (putTails (partsOfTupleBA ts vs)).size
-      = sizeTuple ts vs
-  | [], _, acc => by rw [partsOfTupleBA, sizeTuple]; simp [putHeads, putTails]
-  | t :: ts, (v, vs), acc => by
-      rw [partsOfTupleBA, sizeTuple]
-      by_cases hst : t.isStatic
-      · rw [if_pos hst]
-        simp only [partOfBA, hst, putHeads, putTails, size_append]
-        rw [← sizeBA_eq t v, ← heads_tails_tuple ts vs acc]
-        omega
-      · rw [if_neg hst]
-        have hst' : t.isStatic = false := by simpa using hst
-        simp only [partOfBA, hst', putHeads, putTails, size_append, size_putUint]
-        rw [← sizeBA_eq t v, ← heads_tails_tuple ts vs (acc + (putBA t v).size)]
-        rw [sizeBA_eq t v]
-        omega
-termination_by ts _ _ => (sizeOf ts, 1)
-end
 
 /-! ### static sizes
 
@@ -767,44 +664,10 @@ def staticSizeSum : List Ty → Nat
 termination_by ts => sizeOf ts
 end
 
-mutual
-private theorem sizeBA_static : ∀ {t : Ty}, t.isStatic = true → ∀ v : ValBA t,
-    sizeBA t v = staticSize t
-  | .uint _, _, ⟨_, _⟩ => by rw [sizeBA, staticSize]
-  | .int _, _, ⟨_, _⟩ => by rw [sizeBA, staticSize]
-  | .bool, _, _ => by rw [sizeBA, staticSize]
-  | .address, _, ⟨_, _⟩ => by rw [sizeBA, staticSize]
-  | .bytesN m, _, ⟨bs, hbs⟩ => by rw [sizeBA, staticSize, hbs]
-  | .fixedArray t n, ht, ⟨vs, hvs⟩ => by
-      rw [sizeBA, staticSize, sizeElems_static (t := t) ht vs, hvs]
-  | .tuple ts, ht, vs => by rw [sizeBA, staticSize, sizeTuple_static (ts := ts) ht vs]
-  | .bytes, ht, _ => Bool.noConfusion ht
-  | .string, ht, _ => Bool.noConfusion ht
-  | .array _, ht, _ => Bool.noConfusion ht
-termination_by t _ _ => (sizeOf t, 0)
-
-private theorem sizeElems_static : ∀ {t : Ty}, t.isStatic = true → ∀ vs : List (ValBA t),
-    sizeElems t vs = vs.length * staticSize t
-  | t, ht, [] => by rw [sizeElems]; simp
-  | t, ht, v :: vs => by
-      rw [sizeElems, if_pos ht, sizeBA_static ht v, sizeElems_static ht vs]
-      simp [Nat.succ_mul, Nat.add_comm]
-termination_by t _ vs => (sizeOf t, 1 + vs.length)
-
-private theorem sizeTuple_static : ∀ {ts : List Ty}, Ty.allStatic ts = true →
-    ∀ vs : TupleValBA ts, sizeTuple ts vs = staticSizeSum ts
-  | [], _, _ => by rw [sizeTuple, staticSizeSum]
-  | t :: ts, ht, (v, vs) => by
-      obtain ⟨h1, h2⟩ : Ty.isStatic t = true ∧ Ty.allStatic ts = true := by
-        simpa [Ty.allStatic] using ht
-      rw [sizeTuple, if_pos h1, sizeBA_static h1 v, sizeTuple_static h2 vs, staticSizeSum]
-termination_by ts _ _ => (sizeOf ts, 1)
-end
-
 /-! ### the size tree
 
-Calling `sizeBA` per head slot would re-walk each subtree once per ancestor
-— measured 51 → 372 µs/op on `nest 200`.  `sizesOf` instead computes every
+Sizing a subtree per head slot would re-walk it once per ancestor —
+measured 51 → 372 µs/op on `nest 200`.  `sizesOf` instead computes every
 dynamic subvalue's size bottom-up in one pass, one node per subvalue, so the
 writer reads each offset off the tree in `O(1)`. -/
 
@@ -865,51 +728,139 @@ termination_by ts _ => (sizeOf ts, 0)
 end
 
 mutual
-theorem total_sizesOf : ∀ (t : Ty) (v : ValBA t), (sizesOf t v).total = sizeBA t v
-  | .uint _, ⟨_, _⟩ => by rw [sizesOf, sizeBA]
-  | .int _, ⟨_, _⟩ => by rw [sizesOf, sizeBA]
-  | .bool, _ => by rw [sizesOf, sizeBA]
-  | .address, ⟨_, _⟩ => by rw [sizesOf, sizeBA]
-  | .bytesN _, ⟨_, _⟩ => by rw [sizesOf, sizeBA]
-  | .bytes, ⟨_, _⟩ => by rw [sizesOf, sizeBA]
-  | .string, ⟨_, _⟩ => by rw [sizesOf, sizeBA]
+/-- The tree's total is the byte count `putBA` runs to. -/
+theorem total_sizesOf : ∀ (t : Ty) (v : ValBA t), (sizesOf t v).total = (putBA t v).size
+  | .uint _, ⟨_, _⟩ => by rw [sizesOf, putBA]; exact rfl
+  | .int _, ⟨_, _⟩ => by rw [sizesOf, putBA]; exact (size_putUint _).symm
+  | .bool, _ => by rw [sizesOf, putBA]; exact (size_putUint _).symm
+  | .address, ⟨_, _⟩ => by rw [sizesOf, putBA]; exact (size_putUint _).symm
+  | .bytesN _, ⟨bs, _⟩ => by rw [sizesOf, putBA]; exact (size_putBytesNBA bs).symm
+  | .bytes, ⟨bs, _⟩ => by rw [sizesOf, putBA]; exact (size_putBytesBA bs).symm
+  | .string, ⟨s, _⟩ => by
+      rw [sizesOf, putBA]
+      show _ = (putBytesBA s.toUTF8).size
+      rw [size_putBytesBA, toUTF8_size]
   | .array t, ⟨vs, h⟩ => by
-      rw [sizesOf, sizeBA]
+      rw [sizesOf, putBA_array vs h, size_append, size_putUint]
       by_cases hst : t.isStatic
-      · rw [if_pos hst, sizeElems_static hst]
+      · rw [if_pos hst, size_parts_static hst vs]
       · rw [if_neg hst]
         have hst' : t.isStatic = false := by simpa using hst
-        show 32 + sumDyn (sizesOfList t vs) = 32 + sizeElems t vs
-        rw [sumDyn_sizesOfList t hst' vs]
+        show 32 + sumDyn (sizesOfList t vs) = 32 + _
+        rw [size_parts_dyn t hst' vs]
   | .fixedArray t _, ⟨vs, h⟩ => by
-      rw [sizesOf, sizeBA]
+      rw [sizesOf, putBA_fixedArray vs h]
       by_cases hst : t.isStatic
-      · rw [if_pos hst, sizeElems_static hst]
+      · rw [if_pos hst, size_parts_static hst vs]
       · rw [if_neg hst]
         have hst' : t.isStatic = false := by simpa using hst
-        show sumDyn (sizesOfList t vs) = sizeElems t vs
-        rw [sumDyn_sizesOfList t hst' vs]
+        show sumDyn (sizesOfList t vs) = _
+        rw [size_parts_dyn t hst' vs]
   | .tuple ts, vs => by
-      rw [sizesOf, sizeBA]
-      show sumTuple ts (sizesOfTuple ts vs) = sizeTuple ts vs
-      rw [sumTuple_sizesOfTuple ts vs]
+      rw [sizesOf, putBA_tuple vs]
+      show sumTuple ts (sizesOfTuple ts vs) = _
+      rw [size_parts_tuple ts vs]
 termination_by t _ => (sizeOf t, 0)
 
-theorem sumDyn_sizesOfList : ∀ (t : Ty), t.isStatic = false → ∀ (vs : List (ValBA t)),
-    sumDyn (sizesOfList t vs) = sizeElems t vs
-  | t, hst, [] => by rw [sizesOfList, sizeElems]; rfl
-  | t, hst, v :: vs => by
-      rw [sizesOfList, sizeElems, if_neg (by simp [hst] : ¬t.isStatic = true), sumDyn,
-        total_sizesOf t v, sumDyn_sizesOfList t hst vs]
-termination_by t _ vs => (sizeOf t, 1 + vs.length)
+private theorem size_parts_dyn : ∀ (t : Ty), t.isStatic = false → ∀ (vs : List (ValBA t)),
+    (putParts (vs.map (partOfBA t))).size = sumDyn (sizesOfList t vs)
+  | t, hst, vs => by
+      rw [putParts, size_append, heads_tails_dyn t hst vs (headSizes (vs.map (partOfBA t)))]
+termination_by t _ vs => (sizeOf t, 2 + vs.length)
 
-theorem sumTuple_sizesOfTuple : ∀ (ts : List Ty) (vs : TupleValBA ts),
-    sumTuple ts (sizesOfTuple ts vs) = sizeTuple ts vs
-  | [], _ => by rw [sizesOfTuple, sizeTuple]; rfl
-  | t :: ts, (v, vs) => by
-      rw [sizesOfTuple, sizeTuple, sumTuple, total_sizesOf t v,
-        sumTuple_sizesOfTuple ts vs]
-termination_by ts _ => (sizeOf ts, 1)
+private theorem heads_tails_dyn : ∀ (t : Ty), t.isStatic = false →
+    ∀ (vs : List (ValBA t)) (acc : Nat),
+    (putHeads acc (vs.map (partOfBA t))).size + (putTails (vs.map (partOfBA t))).size
+      = sumDyn (sizesOfList t vs)
+  | t, hst, [], acc => by simp [putHeads, putTails, sizesOfList, sumDyn]
+  | t, hst, v :: vs, acc => by
+      rw [sizesOfList, sumDyn, total_sizesOf t v]
+      simp only [List.map_cons, partOfBA, hst, putHeads, putTails, size_append, size_putUint]
+      have ih := heads_tails_dyn t hst vs (acc + (putBA t v).size)
+      omega
+termination_by t _ vs _ => (sizeOf t, 1 + vs.length)
+
+private theorem size_parts_static : ∀ {t : Ty}, t.isStatic = true → ∀ (vs : List (ValBA t)),
+    (putParts (vs.map (partOfBA t))).size = vs.length * staticSize t
+  | t, hst, vs => by
+      rw [putParts, size_append, heads_tails_static hst vs (headSizes (vs.map (partOfBA t)))]
+termination_by t _ vs => (sizeOf t, 2 + vs.length)
+
+private theorem heads_tails_static : ∀ {t : Ty}, t.isStatic = true →
+    ∀ (vs : List (ValBA t)) (acc : Nat),
+    (putHeads acc (vs.map (partOfBA t))).size + (putTails (vs.map (partOfBA t))).size
+      = vs.length * staticSize t
+  | t, hst, [], acc => by simp [putHeads, putTails]
+  | t, hst, v :: vs, acc => by
+      simp only [List.map_cons, partOfBA, hst, putHeads, putTails, size_append,
+        List.length_cons, Nat.add_mul, Nat.one_mul]
+      rw [size_static hst v]
+      have ih := heads_tails_static hst vs acc
+      omega
+termination_by t _ vs _ => (sizeOf t, 1 + vs.length)
+
+/-- A static value's size is its type's. -/
+private theorem size_static : ∀ {t : Ty}, t.isStatic = true → ∀ v : ValBA t,
+    (putBA t v).size = staticSize t
+  | .uint _, _, ⟨_, _⟩ => by rw [putBA, staticSize]; exact rfl
+  | .int _, _, ⟨_, _⟩ => by rw [putBA, staticSize]; exact size_putUint _
+  | .bool, _, _ => by rw [putBA, staticSize]; exact size_putUint _
+  | .address, _, ⟨_, _⟩ => by rw [putBA, staticSize]; exact size_putUint _
+  | .bytesN _, _, ⟨bs, hbs⟩ => by rw [putBA, staticSize, size_putBytesNBA, hbs]
+  | .fixedArray t _, ht, ⟨vs, hvs⟩ => by
+      rw [putBA_fixedArray vs hvs, staticSize, size_parts_static (t := t) ht vs, hvs]
+  | .tuple ts, ht, vs => by
+      rw [putBA_tuple vs, staticSize, size_parts_tupleStatic (ts := ts) ht vs]
+  | .bytes, ht, _ => Bool.noConfusion ht
+  | .string, ht, _ => Bool.noConfusion ht
+  | .array _, ht, _ => Bool.noConfusion ht
+termination_by t _ _ => (sizeOf t, 0)
+
+private theorem size_parts_tuple : ∀ (ts : List Ty) (vs : TupleValBA ts),
+    (putParts (partsOfTupleBA ts vs)).size = sumTuple ts (sizesOfTuple ts vs)
+  | ts, vs => by
+      rw [putParts, size_append, heads_tails_tuple ts vs (headSizes (partsOfTupleBA ts vs))]
+termination_by ts _ => (sizeOf ts, 2)
+
+private theorem heads_tails_tuple : ∀ (ts : List Ty) (vs : TupleValBA ts) (acc : Nat),
+    (putHeads acc (partsOfTupleBA ts vs)).size + (putTails (partsOfTupleBA ts vs)).size
+      = sumTuple ts (sizesOfTuple ts vs)
+  | [], _, acc => by rw [partsOfTupleBA, sizesOfTuple, sumTuple]; simp [putHeads, putTails]
+  | t :: ts, (v, vs), acc => by
+      rw [partsOfTupleBA, sizesOfTuple, sumTuple, total_sizesOf t v]
+      by_cases hst : t.isStatic
+      · rw [if_pos hst]
+        simp only [partOfBA, hst, putHeads, putTails, size_append]
+        have ih := heads_tails_tuple ts vs acc
+        omega
+      · rw [if_neg hst]
+        have hst' : t.isStatic = false := by simpa using hst
+        simp only [partOfBA, hst', putHeads, putTails, size_append, size_putUint]
+        have ih := heads_tails_tuple ts vs (acc + (putBA t v).size)
+        omega
+termination_by ts _ _ => (sizeOf ts, 1)
+
+private theorem size_parts_tupleStatic : ∀ {ts : List Ty}, Ty.allStatic ts = true →
+    ∀ vs : TupleValBA ts, (putParts (partsOfTupleBA ts vs)).size = staticSizeSum ts
+  | ts, ht, vs => by
+      rw [putParts, size_append,
+        heads_tails_tupleStatic ht vs (headSizes (partsOfTupleBA ts vs))]
+termination_by ts _ _ => (sizeOf ts, 2)
+
+private theorem heads_tails_tupleStatic : ∀ {ts : List Ty}, Ty.allStatic ts = true →
+    ∀ (vs : TupleValBA ts) (acc : Nat),
+    (putHeads acc (partsOfTupleBA ts vs)).size + (putTails (partsOfTupleBA ts vs)).size
+      = staticSizeSum ts
+  | [], _, _, acc => by rw [partsOfTupleBA, staticSizeSum]; simp [putHeads, putTails]
+  | t :: ts, ht, (v, vs), acc => by
+      obtain ⟨h1, h2⟩ : Ty.isStatic t = true ∧ Ty.allStatic ts = true := by
+        simpa [Ty.allStatic] using ht
+      rw [partsOfTupleBA, staticSizeSum]
+      simp only [partOfBA, h1, putHeads, putTails, size_append]
+      rw [size_static h1 v]
+      have ih := heads_tails_tupleStatic h2 vs acc
+      omega
+termination_by ts _ _ _ => (sizeOf ts, 1)
 end
 
 /-! ### the general writer
@@ -996,8 +947,7 @@ private theorem data_toList_emitOffsets (t : Ty) (hst : t.isStatic = false) :
   | nil => intro acc off; rw [sizesOfList]; simp [emitOffsets, putHeads]
   | cons v vs ih =>
       intro acc off
-      rw [sizesOfList, emitOffsets, ih, data_toList_emitUintWord, total_sizesOf t v,
-        sizeBA_eq t v]
+      rw [sizesOfList, emitOffsets, ih, data_toList_emitUintWord, total_sizesOf t v]
       simp only [List.map_cons, partOfBA, hst, putHeads, Builder.toList_append,
         toList_putUint, List.append_assoc]
 
@@ -1014,7 +964,7 @@ private theorem data_toList_emitTupleHeads :
           List.append_assoc]
       · have hst' : t.isStatic = false := by simpa using hst
         rw [if_neg hst, data_toList_emitTupleHeads vs, data_toList_emitUintWord,
-          total_sizesOf t v, sizeBA_eq t v]
+          total_sizesOf t v]
         simp only [partsOfTupleBA, partOfBA, hst', putHeads, Builder.toList_append,
           toList_putUint, List.append_assoc]
 
@@ -1024,7 +974,7 @@ private theorem tupleBase_eq : ∀ (ts : List Ty) (vs : TupleValBA ts),
   | t :: ts, (v, vs) => by
       rw [sizesOfTuple, tupleBase, partsOfTupleBA]
       by_cases hst : t.isStatic
-      · rw [if_pos hst, total_sizesOf t v, sizeBA_eq t v, tupleBase_eq ts vs]
+      · rw [if_pos hst, total_sizesOf t v, tupleBase_eq ts vs]
         simp only [partOfBA, hst, headSizes, Part.headSize]
       · rw [if_neg hst, tupleBase_eq ts vs]
         have hst' : t.isStatic = false := by simpa using hst
