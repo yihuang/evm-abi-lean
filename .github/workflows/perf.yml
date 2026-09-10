@@ -26,7 +26,7 @@ env:
   # Pinned to a commit, not a branch: the harness decides what the numbers mean,
   # so it should move only when someone bumps this deliberately.
   HARNESS_REPO: mmsqe/evm-abi-benchmarks
-  HARNESS_REF: 8103cec6622ec10e1882c6306fd17b1a3b5dd28c
+  HARNESS_REF: 4e143ba3dab1521d637829646bbdb9ff63b4c239
 
 jobs:
   refcount:
@@ -78,7 +78,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Installs the toolchain both bench builds reuse.
+      # Installs the toolchain, and builds the head the bench then reuses.
       - uses: leanprover/lean-action@v1
         with:
           build-args: EvmAbi
@@ -102,10 +102,12 @@ jobs:
           fi
           base=$(git merge-base "origin/${{ github.base_ref || 'main' }}" HEAD)
           echo "merge base: $base"
-          cd harness
-          ./scripts/bench_ab.py --build "$base" /tmp/bench_base
-          ./scripts/bench_ab.py --build "$(git -C .. rev-parse HEAD)" /tmp/bench_head
-          ./scripts/bench_ab.py /tmp/bench_base /tmp/bench_head --runs 30 \
+          # Checkouts, not revisions: a pull request's head is a merge commit
+          # Lake cannot fetch from the URL in the harness lakefile.
+          git worktree add /tmp/base "$base"
+          harness/scripts/bench_ab.py --build /tmp/base /tmp/bench_base
+          harness/scripts/bench_ab.py --build "$PWD" /tmp/bench_head
+          harness/scripts/bench_ab.py /tmp/bench_base /tmp/bench_head --runs 30 \
             2>/dev/null | tee /tmp/ab.txt
 
       - name: Summary
