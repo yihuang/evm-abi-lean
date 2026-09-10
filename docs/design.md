@@ -488,8 +488,8 @@ visible.  For `transfer(address to, uint256 amount)` the encoder is:
 ```lean
 def callArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple EvmAbi.Ty.address [EvmAbi.Ty.uint 32]) → EvmAbi.Builder :=
   fun v =>
-  (((EvmAbi.Compile.Acc.start 64).static (EvmAbi.putAddress (v.1).val)).static
-      (EvmAbi.putUint (v.2.1).val)).finish
+  (((EvmAbi.Compile.Acc.start 64).static (EvmAbi.Codec.putAddressBA (v.1).val)).static
+      (EvmAbi.Builder.putWord (v.2.1).val)).finish
 
 theorem callArgs.put_denotes :
     EvmAbi.Compile.Denotes (EvmAbi.Ty.tuple EvmAbi.Ty.address [EvmAbi.Ty.uint 32]) callArgs.put :=
