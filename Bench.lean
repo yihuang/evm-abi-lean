@@ -70,7 +70,7 @@ def mkBytes (n : Nat) (h : n < 2 ^ 64) : Ty.Val .bytes :=
 /-- A `uint256[]` of full-width values — token amounts, hashes and addresses
 are all above `2 ^ 63`, so every word goes through `Nat`'s bignum path.  This
 is the case `Binary.Fast`'s chunked encoder exists for. -/
-def wideTy : Ty := .array (.uint 256)
+def wideTy : Ty := .array (.uint 32)
 
 def wideVal (n : Nat) (h : n < 2 ^ 64) : wideTy.Val :=
   ⟨List.replicate n ⟨0x123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0,
@@ -78,8 +78,8 @@ def wideVal (n : Nat) (h : n < 2 ^ 64) : wideTy.Val :=
 
 /-- `nest k = (bytes, (bytes, … ))`, `k` tuples deep. -/
 def nest : Nat → Ty
-  | 0 => .tuple [.bytes]
-  | k + 1 => .tuple [.bytes, nest k]
+  | 0 => .tuple .bytes []
+  | k + 1 => .tuple .bytes [nest k]
 
 def nestVal : (k : Nat) → (nest k).Val
   | 0 => (mkBytes 256 (by decide), ())
@@ -143,11 +143,10 @@ payload as a ≤32-cell cons list (`windowList`) and repacks it;
 checked by index (`allZerosBA`), so this row isolates the list round-trip. -/
 def benchBytesN (n : Nat) (h : n < 2 ^ 64) : IO Unit := do
   let t : Ty := .array (.bytesN 32)
-  let el : Ty.Val (.bytesN 32) := ⟨List.replicate 32 7, by simp⟩
+  let el : Ty.Val (.bytesN 32) := ⟨List.replicate 32 7, by decide⟩
   let v : t.Val := ⟨List.replicate n el, by simpa using h⟩
   let ba := Spec.encodeByteArray t v
-  let elba : ValBA (.bytesN 32) := ⟨(List.replicate 32 7).toByteArray, by
-    simp [Binary.ByteArray.size_eq_toList_length]⟩
+  let elba : ValBA (.bytesN 32) := ⟨(List.replicate 32 7).toByteArray, by decide⟩
   let vba : ValBA t := ⟨List.replicate n elba, by simpa using h⟩
   IO.println s!"-- bytes32[] × {n} ({ba.size} bytes)"
   timeIt "decodeStrictBA (List)  " (fun _ =>
@@ -175,13 +174,14 @@ abi_codec pairArray "(uint256,bool)[]"
 abi_codec flags "(bool,bool,bool,bool,bool,bool,bool,bool)"
 abi_codec flagArray "bool[]"
 
-def wideWord : ValBA (.uint 256) :=
+def wideWord : ValBA (.uint 32) :=
   ⟨0x123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0, by decide⟩
 
-def callVal : ValBA callArgs.ty := (⟨0xdead, by decide⟩, wideWord, ())
+def callVal : ValBA callArgs.ty :=
+  (⟨((List.replicate 18 (0 : UInt8) ++ [0xde, 0xad] : List UInt8)).toByteArray, by decide⟩, wideWord, ())
 
 def callDynVal : ValBA callArgsDyn.ty :=
-  (⟨0xdead, by decide⟩, wideWord, mkBytesBAOf 100 (by decide), ())
+  (⟨((List.replicate 18 (0 : UInt8) ++ [0xde, 0xad] : List UInt8)).toByteArray, by decide⟩, wideWord, mkBytesBAOf 100 (by decide), ())
 
 def flagsVal : ValBA flags.ty := (true, false, true, false, true, false, true, false, ())
 

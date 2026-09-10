@@ -22,18 +22,19 @@ def mkListStx (elemTy : Term) (f : α → TermElabM Term) (xs : List α) : TermE
       `($hd :: $tl)
 
 partial def mkTyStx : Ty → TermElabM Term
-  | .uint m => `(EvmAbi.Ty.uint $(quote m))
-  | .int m => `(EvmAbi.Ty.int $(quote m))
+  | .uint m => `(EvmAbi.Ty.uint $(quote m.bytes))
+  | .int m => `(EvmAbi.Ty.int $(quote m.bytes))
   | .bool => `(EvmAbi.Ty.bool)
   | .address => `(EvmAbi.Ty.address)
-  | .bytesN m => `(EvmAbi.Ty.bytesN $(quote m))
+  | .bytesN m => `(EvmAbi.Ty.bytesN $(quote (m.idx.val + 1)))
   | .bytes => `(EvmAbi.Ty.bytes)
   | .string => `(EvmAbi.Ty.string)
   | .array t => do let t' ← mkTyStx t; `(EvmAbi.Ty.array $t')
-  | .fixedArray t n => do let t' ← mkTyStx t; `(EvmAbi.Ty.fixedArray $t' $(quote n))
-  | .tuple ts => do
-      let ts' ← mkListStx (← `(EvmAbi.Ty)) mkTyStx ts
-      `(EvmAbi.Ty.tuple $ts')
+  | .fixedArray t n _ => do let t' ← mkTyStx t; `(EvmAbi.Ty.fixedArray $t' $(quote n) (by decide))
+  | .tuple head tail => do
+      let head' ← mkTyStx head
+      let tail' ← mkListStx (← `(EvmAbi.Ty)) mkTyStx tail
+      `(EvmAbi.Ty.tuple $head' $tail')
 
 def mkOptStrStx : Option String → TermElabM Term
   | none => `(Option.none)

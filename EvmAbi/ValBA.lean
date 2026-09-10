@@ -35,16 +35,16 @@ mutual
 /-- The type of values of ABI type `t`, with packed payloads. -/
 @[reducible]
 def ValBA : Ty → Type
-  | uint m => { w : Binary.UInt256 // w.toNat < 2 ^ m }
-  | int m => { i : Int // -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int) }
+  | uint m => { w : Binary.UInt256 // w.toNat < 2 ^ m.bits }
+  | int m => { i : Int // -((2 ^ (m.bits - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m.bits - 1) : Nat) : Int) }
   | .bool => Bool
-  | address => { n : Nat // n < 2 ^ 160 }
-  | bytesN m => { bs : ByteArray // bs.size = m }
+  | address => { bs : ByteArray // bs.size = 20 }
+  | bytesN m => { bs : ByteArray // bs.size = m.bytes }
   | bytes => { bs : ByteArray // bs.size < 2 ^ 64 }
   | string => { s : String // s.toUTF8.size < 2 ^ 64 }
   | array t => { vs : List (ValBA t) // vs.length < 2 ^ 64 }
-  | fixedArray t n => { vs : List (ValBA t) // vs.length = n }
-  | tuple ts => TupleValBA ts
+  | fixedArray t n _ => { vs : List (ValBA t) // vs.length = n }
+  | tuple head tail => ValBA head × TupleValBA tail
 
 /-- Tuple values: right-nested products. -/
 @[reducible]
@@ -60,7 +60,9 @@ def ValBA.toList : (t : Ty) → ValBA t → t.Val
   | uint _, ⟨w, h⟩ => ⟨w.toNat, h⟩
   | int _, ⟨i, h⟩ => ⟨i, h⟩
   | .bool, b => b
-  | address, ⟨n, h⟩ => ⟨n, h⟩
+  | address, ⟨bs, h⟩ => ⟨bs.data.toList, by
+      rw [← Binary.ByteArray.size_eq_toList_length]
+      exact h⟩
   | bytesN _, ⟨bs, h⟩ => ⟨bs.data.toList, by
       rw [← Binary.ByteArray.size_eq_toList_length]
       exact h⟩
@@ -69,8 +71,8 @@ def ValBA.toList : (t : Ty) → ValBA t → t.Val
       exact h⟩
   | string, s => s
   | array t, ⟨vs, h⟩ => ⟨vs.map (ValBA.toList t), by simpa using h⟩
-  | fixedArray t n, ⟨vs, h⟩ => ⟨vs.map (ValBA.toList t), by simpa using h⟩
-  | tuple ts, vs => TupleValBA.toList ts vs
+  | fixedArray t n _, ⟨vs, h⟩ => ⟨vs.map (ValBA.toList t), by simpa using h⟩
+  | tuple head tail, (v, vs) => (ValBA.toList head v, TupleValBA.toList tail vs)
 termination_by t => (sizeOf t, 0)
 
 /-- Tuple values denote componentwise. -/
@@ -126,9 +128,9 @@ theorem ValBA.toList_injective (t : Ty) {v w : ValBA t}
       exact Subtype.ext h
   | bool => simpa only [ValBA.toList] using h
   | address =>
-      obtain ⟨n, hn⟩ := v; obtain ⟨n', hn'⟩ := w
+      obtain ⟨a, ha⟩ := v; obtain ⟨b, hb⟩ := w
       simp only [ValBA.toList, Subtype.mk.injEq] at h
-      exact Subtype.ext h
+      exact Subtype.ext (ba_inj h)
   | bytesN m =>
       obtain ⟨a, ha⟩ := v; obtain ⟨b, hb⟩ := w
       simp only [ValBA.toList, Subtype.mk.injEq] at h
@@ -142,11 +144,14 @@ theorem ValBA.toList_injective (t : Ty) {v w : ValBA t}
       obtain ⟨vs, hv⟩ := v; obtain ⟨ws, hw⟩ := w
       simp only [ValBA.toList, Subtype.mk.injEq] at h
       exact Subtype.ext (map_inj (fun {_ _} hab => ValBA.toList_injective t hab) h)
-  | fixedArray t n =>
+  | fixedArray t n _ =>
       obtain ⟨vs, hv⟩ := v; obtain ⟨ws, hw⟩ := w
       simp only [ValBA.toList, Subtype.mk.injEq] at h
       exact Subtype.ext (map_inj (fun {_ _} hab => ValBA.toList_injective t hab) h)
-  | tuple ts => exact TupleValBA.toList_injective ts (by simpa only [ValBA.toList] using h)
+  | tuple head tail =>
+      obtain ⟨v, vs⟩ := v; obtain ⟨w, ws⟩ := w
+      simp only [ValBA.toList, Prod.mk.injEq] at h
+      rw [ValBA.toList_injective head h.1, TupleValBA.toList_injective tail h.2]
 termination_by (sizeOf t, 0)
 
 /-- **`TupleValBA.toList` is injective**, componentwise. -/

@@ -175,39 +175,39 @@ the head section.  These are the `ValBA` counterparts of the `Spec` lemmas in
 `EvmAbi.Codec`, transported by `toList_putBA`. -/
 
 /-- A static component's builder occupies exactly its type's head size. -/
-theorem size_putBA_static (t : Ty) (hs : t.isStatic = true) (hv : t.Valid) (v : ValBA t) :
+theorem size_putBA_static (t : Ty) (hs : t.isStatic = true) (v : ValBA t) :
     (putBA t v).size = t.headSize := by
   rw [Builder.size_eq_length_toList, toList_putBA]
-  exact Spec.encode_length_static t hs hv _
+  exact Spec.encode_length_static t hs _
 
 /-- A component's part occupies exactly its type's head size: its own
 encoding when static, one offset word when dynamic. -/
-theorem headSize_partOfBA (t : Ty) (hv : t.Valid) (v : ValBA t) :
+theorem headSize_partOfBA (t : Ty) (v : ValBA t) :
     (partOfBA t v).headSize = t.headSize := by
   cases hs : t.isStatic
   · rw [partOfBA_dynamic v hs]
     exact (Spec.headSize_of_dynamic t hs).symm
   · rw [partOfBA_static v hs]
-    exact size_putBA_static t hs hv v
+    exact size_putBA_static t hs v
 
 /-- The head section of a tuple is the sum of its components' head sizes —
 a compile-time constant. -/
-theorem headSizes_partsOfTupleBA : (ts : List Ty) → AllValid ts → (v : TupleValBA ts) →
+theorem headSizes_partsOfTupleBA : (ts : List Ty) → (v : TupleValBA ts) →
     headSizes (partsOfTupleBA ts v) = headSizeSum ts
-  | [], _, v => by rw [partsOfTupleBA.eq_1]; rfl
-  | t :: ts, hv, (v, vs) => by
+  | [], v => by rw [partsOfTupleBA.eq_1]; rfl
+  | t :: ts, (v, vs) => by
       rw [partsOfTupleBA.eq_2]
-      simp only [headSizes, headSize_partOfBA t hv.1 v, headSizeSum]
-      rw [headSizes_partsOfTupleBA ts hv.2 vs]
+      simp only [headSizes, headSize_partOfBA t v, headSizeSum]
+      rw [headSizes_partsOfTupleBA ts vs]
 
 /-- The head section of an array is one slot per element. -/
-theorem headSizes_map_partOfBA (t : Ty) (hv : t.Valid) :
+theorem headSizes_map_partOfBA (t : Ty) :
     (vs : List (ValBA t)) → headSizes (vs.map (partOfBA t)) = vs.length * t.headSize
   | [] => by simp [headSizes]
   | v :: vs => by
       rw [List.map_cons]
-      simp only [headSizes, headSize_partOfBA t hv v, List.length_cons]
-      rw [headSizes_map_partOfBA t hv vs, Nat.succ_mul]
+      simp only [headSizes, headSize_partOfBA t v, List.length_cons]
+      rw [headSizes_map_partOfBA t vs, Nat.succ_mul]
       omega
 
 /-! ## the element loop
@@ -245,31 +245,31 @@ theorem Inv.loop {t : Ty} {step : Acc → Builder → Acc} {f : ValBA t → Buil
       exact Inv.loop hstep vs (hstep v h)
 
 /-- **Compiled array section**: the loop denotes the generic element layout. -/
-theorem toList_elems {t : Ty} (hv : t.Valid) {step : Acc → Builder → Acc}
+theorem toList_elems {t : Ty} {step : Acc → Builder → Acc}
     {f : ValBA t → Builder} (hstep : Step t step f) (vs : List (ValBA t)) :
     ((start (vs.length * t.headSize)).elems step f vs).finish.toList =
       (putParts (vs.map (partOfBA t))).toList := by
   refine Inv.finish_toList (H := vs.length * t.headSize) ?_ ?_
   · simpa using Inv.loop hstep vs (start_inv _)
-  · rw [headSizes_map_partOfBA t hv vs]
+  · rw [headSizes_map_partOfBA t vs]
 
 end Acc
 
 /-! ## the leaves -/
 
-theorem denotes_uint (m : Nat) : Denotes (.uint m) (fun v => putWord v.val) := by
+theorem denotes_uint (m : Width) : Denotes (.uint m) (fun v => putWord v.val) := by
   rintro ⟨w, h⟩; rw [putBA.eq_1]
 
-theorem denotes_int (m : Nat) : Denotes (.int m) (fun v => putInt v.val) := by
+theorem denotes_int (m : Width) : Denotes (.int m) (fun v => putInt v.val) := by
   rintro ⟨i, h⟩; rw [putBA.eq_2]
 
 theorem denotes_bool : Denotes .bool (fun v => putBool v) := by
   intro v; rw [putBA.eq_3]
 
-theorem denotes_address : Denotes .address (fun v => putAddress v.val) := by
-  rintro ⟨n, h⟩; rw [putBA.eq_4]
+theorem denotes_address : Denotes .address (fun v => putAddressBA v.val) := by
+  rintro ⟨bs, h⟩; rw [putBA.eq_4]
 
-theorem denotes_bytesN (m : Nat) : Denotes (.bytesN m) (fun v => putBytesNBA v.val) := by
+theorem denotes_bytesN (m : Width) : Denotes (.bytesN m) (fun v => putBytesNBA v.val) := by
   rintro ⟨bs, h⟩; rw [putBA.eq_5]
 
 theorem denotes_bytes : Denotes .bytes (fun v => putBytesBA v.val) := by
@@ -284,31 +284,33 @@ The emitted code is the function in the conclusion; the emitted proof is the
 lemma applied to the element/component contracts. -/
 
 /-- **Compiled `T[]`**: the length word, then the compiled element section. -/
-theorem denotes_array {t : Ty} (hv : t.Valid) {step : Acc → Builder → Acc}
+theorem denotes_array {t : Ty} {step : Acc → Builder → Acc}
     {f : ValBA t → Builder} (hstep : Acc.Step t step f) :
     Denotes (.array t) (fun v => putUint v.val.length ++
       ((Acc.start (v.val.length * t.headSize)).elems step f v.val).finish) := by
   rintro ⟨vs, hb⟩
   rw [putBA.eq_8, Builder.toList_append, Builder.toList_append,
-    Acc.toList_elems hv hstep vs]
+    Acc.toList_elems hstep vs]
 
 /-- **Compiled `T[k]`**: the element section alone — no length word. -/
-theorem denotes_fixedArray {t : Ty} {n : Nat} (hv : t.Valid) {step : Acc → Builder → Acc}
-    {f : ValBA t → Builder} (hstep : Acc.Step t step f) :
-    Denotes (.fixedArray t n) (fun v =>
+theorem denotes_fixedArray {t : Ty} {n : Nat} (hn : 0 < n) {step : Acc → Builder → Acc} {f : ValBA t → Builder} (hstep : Acc.Step t step f) :
+    Denotes (.fixedArray t n hn) (fun v =>
       ((Acc.start (v.val.length * t.headSize)).elems step f v.val).finish) := by
   rintro ⟨vs, hb⟩
-  rw [putBA.eq_9, Acc.toList_elems hv hstep vs]
+  rw [putBA.eq_9, Acc.toList_elems hstep vs]
 
 /-- **Compiled `(T₁, …, Tₙ)`**: whatever the machine built from the tuple's
 parts, closed with `finish`.  The emitter supplies the run of instructions —
 one `static`/`dyn` per component — and this lemma turns the state they end in
 into an encoding. -/
-theorem toList_tuple {ts : List Ty} (hv : AllValid ts) {s : Acc} (v : TupleValBA ts)
-    (h : Acc.Inv (headSizeSum ts) s (partsOfTupleBA ts v)) :
-    s.finish.toList = (putBA (.tuple ts) v).toList := by
+theorem toList_tuple {head : Ty} {tail : List Ty} {s : Acc} (v : ValBA head × TupleValBA tail)
+    (h : Acc.Inv (head.headSize + headSizeSum tail) s
+      (partOfBA head v.1 :: partsOfTupleBA tail v.2)) :
+    s.finish.toList = (putBA (.tuple head tail) v).toList := by
   rw [putBA.eq_10]
-  exact h.finish_toList (headSizes_partsOfTupleBA ts hv v).symm
+  exact h.finish_toList (by
+    simp only [headSizes, headSize_partOfBA head v.1]
+    rw [headSizes_partsOfTupleBA tail v.2])
 
 /-- The tuple's part list, one rewrite per component. -/
 theorem partsOfTupleBA_nil (v : TupleValBA []) : partsOfTupleBA [] v = [] :=
@@ -339,10 +341,10 @@ theorem run_eq_encode {t : Ty} {f : ValBA t → Builder} (hf : Denotes t f) (v :
 /-- The compiled encoder inherits the verified roundtrip: what it writes,
 `decodeStrict` reads back as the very same value. -/
 theorem decodeStrict_run {t : Ty} {f : ValBA t → Builder} (hf : Denotes t f)
-    (hv : t.Valid) (v : ValBA t) (hb : (f v).run.size < 2 ^ 256) :
+    (v : ValBA t) (hb : (f v).run.size < 2 ^ 256) :
     decodeStrict t ((f v).run) = some v := by
   rw [run_eq_encode hf v] at hb ⊢
-  exact decodeStrict_encode t hv v hb
+  exact decodeStrict_encode t v hb
 
 end Compile
 end EvmAbi

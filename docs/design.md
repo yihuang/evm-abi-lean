@@ -49,8 +49,8 @@ complete type grammar.
    is unrestricted (e.g., `string[][]`, `(uint256, (bool, bytes))[]`).
 
 2. **Type-indexed value family.**  `Val : Ty → Type` is an indexed family of
-   refined types: `Val (.uint 256) = {n : Nat // n < 2^256}`,
-   `Val (.bytes) = List UInt8`, and compound types are structurally
+   refined types: `Val (.uint 32) = {n : Nat // n < 2^256}`,
+   `Val (.bytes) = {bs : List UInt8 // bs.length < 2^64}`, and compound types are structurally
    composed from their components.  The roundtrip statement
    `Spec.decode t (Spec.encode t v) = some v` needs no separate well-formedness
    predicate on values — the refinement is built into the type.
@@ -125,16 +125,8 @@ encoder of the denotation, so the `Spec` theorems transport by rewrite.
 
 ### 3.1 Type Universe (`Ty.lean`)
 
-The type grammar is an inductive `Ty` with ten constructors.  Four
+The type grammar is an inductive `Ty` with ten constructors.  Three
 auxiliary predicates/functions are defined alongside it:
-
-- **`Valid`** — size-parameter constraints (e.g., `uintM` requires `8∣M`,
-  `8≤M≤256`).  Defined as a `Prop` with a `Decidable` instance.  A dynamic
-  array additionally requires `0 < t.headSize` of its element type: an
-  element occupying no head (`()`, `T[0]`) would let a 32-byte length word
-  name arbitrarily many elements, leaving the decoder's element walk
-  bounded by nothing.  The specification has no such types, and `Spec.decode`
-  and the human-readable parser both reject them.
 
 - **`isStatic`** — whether the encoding size is fixed by the type (a `Bool`
   predicate, lowercase per Lean convention).  Used by the head/tail layout:
@@ -144,14 +136,16 @@ auxiliary predicates/functions are defined alongside it:
 - **`headSize`** — bytes occupied in the head section.  Static types take
   their full encoding size; dynamic types take 32 (the offset word).
 
-- **`packedSize`** — bytes occupied in packed encoding.  Scalars take
-  their tight width (`uint8` → 1, `address` → 20); fixed arrays take `n`
-  *padded* element slots (`uint8[3]` → 96), since Solidity pads packed
-  array elements; for dynamic types it is 0 (packed size is not
-  statically known, and `decodePacked` rejects them).
+- **`packedSize`** — bytes occupied in packed encoding for a static type.
+  Scalars take their tight width (`uint8` → 1, `address` → 20); static
+  fixed arrays take `n` *padded* element slots (`uint8[3]` → 96), since
+  Solidity pads packed array elements; static tuples sum their components.
+  Dynamic types and compounds containing dynamic components return 0 —
+  their packed size is not statically known, and `decodePacked` rejects
+  them.
 
 All are defined via **mutual recursion** with their `List`-indexed
-siblings (`AllValid`, `allStatic`, `headSizeSum`, `packedSizeSum`).  This
+siblings (`allStatic`, `headSizeSum`, `packedSizeSum`).  This
 avoids well-founded recursion (`Acc.rec`), which would make the predicates
 opaque to the elaborator and break `@[reducible]` on `Val`.
 
@@ -161,11 +155,11 @@ opaque to the elaborator and break `@[reducible]` on `Val`.
 type:
 
 ```
-Val (.uint m)     = {n : Nat // n < 2^m}
-Val (.bytes)      = List UInt8
-Val (.tuple ts)   = TupleVal ts          -- right-nested product
-Val (.array t)    = List (Val t)
-Val (.fixedArray t n) = {vs : List (Val t) // vs.length = n}
+Val (.uint m)     = {n : Nat // n < 2 ^ m.bits}
+Val (.bytes)      = {bs : List UInt8 // bs.length < 2 ^ 64}
+Val (.tuple head tail) = Val head × TupleVal tail
+Val (.array t)    = {vs : List (Val t) // vs.length < 2 ^ 64}
+Val (.fixedArray t n _) = {vs : List (Val t) // vs.length = n}
 ```
 
 `TupleVal` is also `@[reducible]` and defined mutually with `Val`:
@@ -175,7 +169,7 @@ TupleVal []        = Unit
 TupleVal (t :: ts) = Val t × TupleVal ts
 ```
 
-This design gives definitional reduction — `Val (.uint 8)` *is*
+This design gives definitional reduction — `Val (.uint 1)` *is*
 `Subtype (fun n => n < 2^8)` — so dependent pattern matching in
 `Spec.encode`/`Spec.decode` sees through the index.
 
@@ -469,8 +463,8 @@ such theorem to state.  What is proved is every output, individually, by
 construction — a certificate per compilation, which for a code generator whose
 outputs are all checked is the same guarantee where it matters.  Second, the
 head-size constant the compiler folds into `Acc.start` is justified, not
-assumed: `headSizes_partsOfTupleBA` (which needs `AllValid ts`, discharged by
-`decide` at compile time) proves the numeral is the head section's real size.
+assumed: `headSizes_partsOfTupleBA` proves the numeral is the head section's
+real size.
 
 Measured (`Bench.lean`, compiled): encoding 2.2× on `(bool × 8)` and 1.8× on
 `bool[100]`, decoding 1.8× and 1.4× on the same, where the words are cheap and
@@ -492,20 +486,20 @@ before elaboration.  The transcript *is* the compiler's behaviour made
 visible.  For `transfer(address to, uint256 amount)` the encoder is:
 
 ```lean
-def callArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple [EvmAbi.Ty.address, EvmAbi.Ty.uint 256]) → EvmAbi.Builder :=
+def callArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple EvmAbi.Ty.address [EvmAbi.Ty.uint 32]) → EvmAbi.Builder :=
   fun v =>
-  (((EvmAbi.Compile.Acc.start 64).static (EvmAbi.putAddress (v.1).val)).static
-      (EvmAbi.putUint (v.2.1).val)).finish
+  (((EvmAbi.Compile.Acc.start 64).static (EvmAbi.Codec.putAddressBA (v.1).val)).static
+      (EvmAbi.Builder.putWord (v.2.1).val)).finish
 
 theorem callArgs.put_denotes :
-    EvmAbi.Compile.Denotes (EvmAbi.Ty.tuple [EvmAbi.Ty.address, EvmAbi.Ty.uint 256]) callArgs.put :=
+    EvmAbi.Compile.Denotes (EvmAbi.Ty.tuple EvmAbi.Ty.address [EvmAbi.Ty.uint 32]) callArgs.put :=
   by
   intro v
-  refine EvmAbi.Compile.toList_tuple (by decide) _ ?_
+  refine EvmAbi.Compile.toList_tuple _ ?_
   simp only [EvmAbi.Compile.partsOfTupleBA_cons, EvmAbi.Compile.partsOfTupleBA_nil]
   exact
     ((EvmAbi.Compile.Acc.start_inv 64).static (by decide) (EvmAbi.Compile.denotes_address (v).1)).static (by decide)
-      (EvmAbi.Compile.denotes_uint 256 (v).2.1)
+      (EvmAbi.Compile.denotes_uint 32 (v).2.1)
 ```
 
 Every decision the type made available is already taken.  The head section
@@ -527,7 +521,7 @@ The decoder is the mirror image:
 def callArgs.read : ByteArray → Nat → Option (EvmAbi.ValBA … × Nat) :=
   EvmAbi.Compile.Decode.readTuple 64
     (EvmAbi.Compile.Decode.cons EvmAbi.Compile.Decode.elemStatic EvmAbi.Compile.Decode.readAddress
-      (EvmAbi.Compile.Decode.cons EvmAbi.Compile.Decode.elemStatic (EvmAbi.Compile.Decode.readUint 256)
+      (EvmAbi.Compile.Decode.cons EvmAbi.Compile.Decode.elemStatic (EvmAbi.Compile.Decode.readUint 32)
         EvmAbi.Compile.Decode.consNil))
 ```
 
@@ -542,13 +536,13 @@ emits two definitions, the array sub-type first because the emitter works
 bottom-up:
 
 ```lean
-def samArgs.node0 : EvmAbi.ValBA (EvmAbi.Ty.array (EvmAbi.Ty.uint 256)) → EvmAbi.Builder :=
+def samArgs.node0 : EvmAbi.ValBA (EvmAbi.Ty.array (EvmAbi.Ty.uint 32)) → EvmAbi.Builder :=
   fun v =>
   EvmAbi.putUint v.val.length ++
     ((EvmAbi.Compile.Acc.start (v.val.length * 32)).elems EvmAbi.Compile.Acc.static
         (fun v => EvmAbi.putUint v.val) v.val).finish
 
-def samArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple [EvmAbi.Ty.bytes, EvmAbi.Ty.bool, …]) → EvmAbi.Builder :=
+def samArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple EvmAbi.Ty.bytes [EvmAbi.Ty.bool, …]) → EvmAbi.Builder :=
   fun v =>
   ((((EvmAbi.Compile.Acc.start 96).dyn (EvmAbi.Codec.putBytesBA (v.1).val)).static (EvmAbi.putBool (v.2.1))).dyn
       (samArgs.node0 (v.2.2.1))).finish
@@ -577,8 +571,8 @@ pattern like `⟨bs, h⟩` cannot match it.
 **Solution.**  `Val` is marked `@[reducible]` and defined in a `mutual`
 block with `TupleVal`.  The mutual block ensures the recursion is
 structurally visible, while `@[reducible]` forces definitional reduction
-during elaboration.  This gives `Val (.bytesN m) = Subtype (λ bs => bs.length = m)`
-and `Val (.tuple [t₁, t₂]) = Val t₁ × Val t₂ × Unit`, both definitionally.
+during elaboration.  This gives `Val (.bytesN m) = Subtype (λ bs => bs.length = m.bytes)`
+and `Val (.tuple t₁ [t₂]) = Val t₁ × Val t₂ × Unit`, both definitionally.
 
 ### 4.2 Prefix-Tolerant Decoding
 
