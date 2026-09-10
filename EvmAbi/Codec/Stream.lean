@@ -189,6 +189,18 @@ def emitBytesNElems {m : Width} (acc : ByteArray) : List (ValBA (.bytesN m)) →
         (if v.val.size == 32 then acc ++ v.val
          else Chunks.pushZeros32 (acc ++ v.val) (32 - v.val.size)) vs
 
+/-- `emitVals` at `intM`, with the per-element match hoisted out. -/
+def emitIntElems {m : Width} (acc : ByteArray) : List (ValBA (.int m)) → ByteArray
+  | [] => acc
+  | v :: vs =>
+      emitIntElems
+        (emitUintWord acc (if 0 ≤ v.val then v.val.toNat else 2 ^ 256 - (-v.val).toNat)) vs
+
+/-- `emitVals` at `bool`, with the per-element match hoisted out. -/
+def emitBoolElems (acc : ByteArray) : List (ValBA .bool) → ByteArray
+  | [] => acc
+  | v :: vs => emitBoolElems (emitUintWord acc (if v then 1 else 0)) vs
+
 /-- An `n`-element static-element array's length word, in a buffer sized for the
 whole encoding: that word plus `n` element slots. -/
 def staticElemsHead (n : Nat) : ByteArray :=
@@ -199,6 +211,18 @@ theorem emitVals_uint {m : Width} :
       emitVals acc (.uint m) vs = emitUintElems acc vs
   | _, [] => by rw [emitVals, emitUintElems]
   | _, ⟨_, _⟩ :: _ => by rw [emitVals, emitUintElems, emitVal, emitVals_uint]
+
+theorem emitVals_int {m : Width} :
+    ∀ (acc : ByteArray) (vs : List (ValBA (.int m))),
+      emitVals acc (.int m) vs = emitIntElems acc vs
+  | _, [] => by rw [emitVals, emitIntElems]
+  | _, ⟨_, _⟩ :: _ => by rw [emitVals, emitIntElems, emitVal, emitVals_int]
+
+theorem emitVals_bool :
+    ∀ (acc : ByteArray) (vs : List (ValBA .bool)),
+      emitVals acc .bool vs = emitBoolElems acc vs
+  | _, [] => by rw [emitVals, emitBoolElems]
+  | _, _ :: _ => by rw [emitVals, emitBoolElems, emitVal, emitVals_bool]
 
 theorem emitVals_bytesN {m : Width} :
     ∀ (acc : ByteArray) (vs : List (ValBA (.bytesN m))),
@@ -862,6 +886,8 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
   -- static elements: the total is known without a size tree, and the element
   -- loop is fused so the per-element `Ty` match disappears
   | .array (.uint _), v => emitUintElems (staticElemsHead v.val.length) v.val
+  | .array (.int _), v => emitIntElems (staticElemsHead v.val.length) v.val
+  | .array .bool, v => emitBoolElems (staticElemsHead v.val.length) v.val
   | .array (.bytesN _), v => emitBytesNElems (staticElemsHead v.val.length) v.val
   | t, v =>
       if t.isStatic then emitVal (ByteArray.emptyWithCapacity (staticSize t)) t v
@@ -926,6 +952,14 @@ private theorem encode_static_elem_array {t : Ty} (hst : t.isStatic = true)
   rw [encode_nonarray_arm, if_neg (by simp [Ty.isStatic]), emitAnyRun, sizesOf, if_pos hst,
     emitAny, if_pos hst]
 
+/-- Each fused arm, given that the element type is static, occupies one word,
+and has a loop equal to `emitVals` there. -/
+private theorem encode_fused_arm {t : Ty} {loop : ByteArray → List (ValBA t) → ByteArray}
+    (hst : t.isStatic = true) (hsz : staticSize t = 32)
+    (hloop : ∀ acc vs, emitVals acc t vs = loop acc vs) (v : ValBA (.array t)) :
+    encode (.array t) v = loop (staticElemsHead v.val.length) v.val := by
+  rw [encode_static_elem_array hst v, hloop, hsz, staticElemsHead, Nat.mul_comm]
+
 @[csimp] theorem encode_eq_fast : @encode = @encodeFast := by
   funext t v
   match t, v with
@@ -933,15 +967,12 @@ private theorem encode_static_elem_array {t : Ty} (hst : t.isStatic = true)
       exact encode_dyn_array_arm rfl size_putBA_bytes toList_putBA_bytes vs h _
   | .array .string, ⟨vs, h⟩ =>
       exact encode_dyn_array_arm rfl size_putBA_string toList_putBA_string vs h _
-  | .array (.uint _), v =>
-      rw [encode_static_elem_array rfl v, emitVals_uint]
-      simp [encodeFast, staticElemsHead, staticSize, Nat.mul_comm]
-  | .array (.bytesN _), v =>
-      rw [encode_static_elem_array rfl v, emitVals_bytesN]
-      simp [encodeFast, staticElemsHead, staticSize, Nat.mul_comm]
+  | .array (.uint _), v => exact encode_fused_arm rfl (by simp [staticSize]) emitVals_uint v
+  | .array (.int _), v => exact encode_fused_arm rfl (by simp [staticSize]) emitVals_int v
+  | .array .bool, v => exact encode_fused_arm rfl (by simp [staticSize]) emitVals_bool v
+  | .array (.bytesN _), v => exact encode_fused_arm rfl (by simp [staticSize]) emitVals_bytesN v
   | .uint _, v | .int _, v | .bool, v | .address, v | .bytesN _, v | .bytes, v | .string, v
   | .fixedArray _ _ _, v | .tuple _ _, v
-  | .array (.int _), v | .array .bool, v | .array .address, v
-  | .array (.array _), v | .array (.fixedArray _ _ _), v
+  | .array .address, v | .array (.array _), v | .array (.fixedArray _ _ _), v
   | .array (.tuple _ _), v =>
       exact encode_nonarray_arm _ v
