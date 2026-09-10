@@ -127,8 +127,7 @@ in `namespace EvmAbi.Spec`).
 * **Compile-time constants must be justified, not assumed.**  The head-size
   numeral the emitter folds into `Acc.start` is `headSizeSum ts`; the machine
   is only allowed to close (`Inv.finish_toList`) against the real
-  `headSizes ps`, and `headSizes_partsOfTupleBA` (needs `AllValid ts`,
-  emitted as `by decide`) is what connects them.  The decoder's clauses take
+  `headSizes ps`, and `headSizes_partsOfTupleBA` is what connects them.  The decoder's clauses take
   their head size as a *parameter* for the same reason, with `rfl` against
   `Ty.headSize`/`headSizeSum` as the emitted justification.
 * **The decoder's equalities are between `GetBA` programs**, so they go
