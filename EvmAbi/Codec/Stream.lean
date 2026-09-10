@@ -133,14 +133,13 @@ end
     tyListMeasure (t :: ts) = tyMeasure t + tyListMeasure ts + 1 := by
   rw [tyListMeasure]
 
-mutual
-/-- Write one static value straight into the accumulator: words by their
-limbs, `bytesN` payloads by one append and one padding copy (skipped when
-the payload fills its word, which is every element of a `bytes32[]`), and
-static compounds by concatenation.  Dynamic types return `acc` untouched —
-`data_toList_emitVal` is guarded by `isStatic`, and the fused arm never
-reaches them. -/
-def emitVal (acc : ByteArray) : (t : Ty) → ValBA t → ByteArray
+/-- Write one primitive static value straight into the accumulator: words by
+their limbs, `bytesN` payloads by one append and one padding copy (skipped
+when the payload fills its word).  `@[specialize t]` lets the fused element
+loop compile a copy with the `Ty` match already resolved. -/
+@[inline, specialize t]
+def emitPrim (t : Ty) (acc : ByteArray) (v : ValBA t) : ByteArray :=
+  match t, v with
   | .uint _, ⟨w, _⟩ => Chunks.emitWord acc w
   | .int _, ⟨i, _⟩ =>
       emitUintWord acc (if 0 ≤ i then i.toNat else 2 ^ 256 - (-i).toNat)
@@ -148,6 +147,19 @@ def emitVal (acc : ByteArray) : (t : Ty) → ValBA t → ByteArray
   | .address, ⟨bs, _⟩ => emitUintWord acc (decodeBEU bs.data.toList)
   | .bytesN _, ⟨bs, _⟩ =>
       if bs.size == 32 then acc ++ bs else Chunks.pushZeros32 (acc ++ bs) (32 - bs.size)
+  | _, _ => acc
+
+mutual
+/-- Write one static value straight into the accumulator: primitives through
+`emitPrim`, static compounds by concatenation.  Dynamic types return `acc`
+untouched — `data_toList_emitVal` is guarded by `isStatic`, and the fused arm
+never reaches them. -/
+def emitVal (acc : ByteArray) : (t : Ty) → ValBA t → ByteArray
+  | .uint m, v => emitPrim (.uint m) acc v
+  | .int m, v => emitPrim (.int m) acc v
+  | .bool, v => emitPrim .bool acc v
+  | .address, v => emitPrim .address acc v
+  | .bytesN m, v => emitPrim (.bytesN m) acc v
   | .fixedArray t _ _, ⟨vs, _⟩ => emitVals acc t vs
   | .tuple head tail, (v, vs) => emitTupleVals acc (head :: tail) (v, vs)
   | .bytes, _ => acc
@@ -168,85 +180,53 @@ def emitTupleVals (acc : ByteArray) : (ts : List Ty) → TupleValBA ts → ByteA
 termination_by ts _ => (tyListMeasure ts, 1)
 end
 
+/-- One structural loop over elements, with the per-element step supplied as a
+function parameter.  `@[specialize]` inlines a concrete step at each call site,
+so this is the shared body of every fused element loop. -/
+@[specialize] def emitValsWith {t : Ty} (write : ByteArray → ValBA t → ByteArray)
+    (acc : ByteArray) : List (ValBA t) → ByteArray
+  | [] => acc
+  | v :: vs => emitValsWith write (write acc v) vs
+
 /-! ### fused element loops
 
 `emitVals` matches on the element `Ty` once per element, and that match compiles
 to fourteen `lean_dec` inside `emitVal`.  An array of static elements pays it per
-element.  These loops fix the element type in the signature instead, so each body
-is a structural recursion over the list with no `Ty` scrutinee, and compiles to no
-reference-count traffic at all. -/
+element.  `emitValsWith` fixes the per-element step at the call site instead, so
+the loop's body has no `Ty` scrutinee and compiles to no reference-count traffic
+at all. -/
 
-/-- `emitVals` at `uintM`, with the per-element match hoisted out. -/
-def emitUintElems {m : Width} (acc : ByteArray) : List (ValBA (.uint m)) → ByteArray
-  | [] => acc
-  | v :: vs => emitUintElems (Chunks.emitWord acc v.val) vs
-
-/-- `emitVals` at `bytesM`, with the per-element match hoisted out. -/
-def emitBytesNElems {m : Width} (acc : ByteArray) : List (ValBA (.bytesN m)) → ByteArray
-  | [] => acc
-  | v :: vs =>
-      emitBytesNElems
-        (if v.val.size == 32 then acc ++ v.val
-         else Chunks.pushZeros32 (acc ++ v.val) (32 - v.val.size)) vs
-
-/-- `emitVals` at `intM`, with the per-element match hoisted out. -/
-def emitIntElems {m : Width} (acc : ByteArray) : List (ValBA (.int m)) → ByteArray
-  | [] => acc
-  | v :: vs =>
-      emitIntElems
-        (emitUintWord acc (if 0 ≤ v.val then v.val.toNat else 2 ^ 256 - (-v.val).toNat)) vs
-
-/-- `emitVals` at `bool`, with the per-element match hoisted out. -/
-def emitBoolElems (acc : ByteArray) : List (ValBA .bool) → ByteArray
-  | [] => acc
-  | v :: vs => emitBoolElems (emitUintWord acc (if v then 1 else 0)) vs
+/-- `emitVals` is the generic specialized loop at any per-element step that is
+`emitVal` at the fixed type. -/
+theorem emitVals_eq_with {t : Ty} {write : ByteArray → ValBA t → ByteArray}
+    (hwrite : ∀ acc v, write acc v = emitVal acc t v) :
+    ∀ (acc : ByteArray) (vs : List (ValBA t)),
+      emitVals acc t vs = emitValsWith write acc vs
+  | _, [] => by rw [emitVals, emitValsWith]
+  | _, v :: _ => by rw [emitVals, emitValsWith, hwrite, emitVals_eq_with hwrite]
 
 /-- An `n`-element static-element array's length word, in a buffer sized for the
 whole encoding: that word plus `n` element slots. -/
 def staticElemsHead (n : Nat) : ByteArray :=
   emitUintWord (ByteArray.emptyWithCapacity (32 + 32 * n)) n
 
-theorem emitVals_uint {m : Width} :
-    ∀ (acc : ByteArray) (vs : List (ValBA (.uint m))),
-      emitVals acc (.uint m) vs = emitUintElems acc vs
-  | _, [] => by rw [emitVals, emitUintElems]
-  | _, ⟨_, _⟩ :: _ => by rw [emitVals, emitUintElems, emitVal, emitVals_uint]
-
-theorem emitVals_int {m : Width} :
-    ∀ (acc : ByteArray) (vs : List (ValBA (.int m))),
-      emitVals acc (.int m) vs = emitIntElems acc vs
-  | _, [] => by rw [emitVals, emitIntElems]
-  | _, ⟨_, _⟩ :: _ => by rw [emitVals, emitIntElems, emitVal, emitVals_int]
-
-theorem emitVals_bool :
-    ∀ (acc : ByteArray) (vs : List (ValBA .bool)),
-      emitVals acc .bool vs = emitBoolElems acc vs
-  | _, [] => by rw [emitVals, emitBoolElems]
-  | _, _ :: _ => by rw [emitVals, emitBoolElems, emitVal, emitVals_bool]
-
-theorem emitVals_bytesN {m : Width} :
-    ∀ (acc : ByteArray) (vs : List (ValBA (.bytesN m))),
-      emitVals acc (.bytesN m) vs = emitBytesNElems acc vs
-  | _, [] => by rw [emitVals, emitBytesNElems]
-  | _, ⟨_, _⟩ :: _ => by rw [emitVals, emitBytesNElems, emitVal, emitVals_bytesN]
-
 mutual
 theorem data_toList_emitVal :
     ∀ {t : Ty}, t.isStatic = true → ∀ (acc : ByteArray) (v : ValBA t),
       (emitVal acc t v).data.toList = acc.data.toList ++ (putBA t v).toList
   | .uint _, ht, acc, ⟨w, hw⟩ => by
-      rw [emitVal, Chunks.data_toList_emitWord, putBA, toList_putWord]
+      rw [emitVal, emitPrim, Chunks.data_toList_emitWord, putBA, toList_putWord]
   | .int _, ht, acc, ⟨i, hi⟩ => by
-      rw [emitVal, data_toList_emitUintWord, putBA]
+      rw [emitVal, emitPrim, data_toList_emitUintWord, putBA]
       simp only [toList_putInt, encodeInt]
   | .bool, ht, acc, b => by
-      rw [emitVal, data_toList_emitUintWord, putBA]
+      rw [emitVal, emitPrim, data_toList_emitUintWord, putBA]
       simp only [toList_putBool, encodeBool]
   | .address, ht, acc, ⟨bs, hbs⟩ => by
-      rw [emitVal, data_toList_emitUintWord, putBA, toList_putAddressBA]
+      rw [emitVal, emitPrim, data_toList_emitUintWord, putBA, toList_putAddressBA]
       simp [encodeAddress]
   | .bytesN _, ht, acc, ⟨bs, hbs⟩ => by
-      rw [emitVal, putBA, toList_putBytesNBA]
+      rw [emitVal, emitPrim, putBA, toList_putBytesNBA]
       split
       · next hbeq =>
           have h32 : bs.size = 32 := by simpa using hbeq
@@ -885,10 +865,14 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
         v.val
   -- static elements: the total is known without a size tree, and the element
   -- loop is fused so the per-element `Ty` match disappears
-  | .array (.uint _), v => emitUintElems (staticElemsHead v.val.length) v.val
-  | .array (.int _), v => emitIntElems (staticElemsHead v.val.length) v.val
-  | .array .bool, v => emitBoolElems (staticElemsHead v.val.length) v.val
-  | .array (.bytesN _), v => emitBytesNElems (staticElemsHead v.val.length) v.val
+  | .array (.uint m), v =>
+      emitValsWith (emitPrim (.uint m)) (staticElemsHead v.val.length) v.val
+  | .array (.int m), v =>
+      emitValsWith (emitPrim (.int m)) (staticElemsHead v.val.length) v.val
+  | .array .bool, v =>
+      emitValsWith (emitPrim .bool) (staticElemsHead v.val.length) v.val
+  | .array (.bytesN m), v =>
+      emitValsWith (emitPrim (.bytesN m)) (staticElemsHead v.val.length) v.val
   | t, v =>
       if t.isStatic then emitVal (ByteArray.emptyWithCapacity (staticSize t)) t v
       else emitAnyRun t v
@@ -952,13 +936,16 @@ private theorem encode_static_elem_array {t : Ty} (hst : t.isStatic = true)
   rw [encode_nonarray_arm, if_neg (by simp [Ty.isStatic]), emitAnyRun, sizesOf, if_pos hst,
     emitAny, if_pos hst]
 
-/-- Each fused arm, given that the element type is static, occupies one word,
-and has a loop equal to `emitVals` there. -/
-private theorem encode_fused_arm {t : Ty} {loop : ByteArray → List (ValBA t) → ByteArray}
+/-- Each fused arm, given that the element type is static and occupies one
+word, and that its specialized step is `emitVal` there. -/
+private theorem encode_fused_arm {t : Ty} (write : ByteArray → ValBA t → ByteArray)
     (hst : t.isStatic = true) (hsz : staticSize t = 32)
-    (hloop : ∀ acc vs, emitVals acc t vs = loop acc vs) (v : ValBA (.array t)) :
-    encode (.array t) v = loop (staticElemsHead v.val.length) v.val := by
-  rw [encode_static_elem_array hst v, hloop, hsz, staticElemsHead, Nat.mul_comm]
+    (hwrite : ∀ acc v, write acc v = emitVal acc t v) (v : ValBA (.array t)) :
+    encode (.array t) v
+      = emitValsWith write (staticElemsHead v.val.length) v.val := by
+  rw [encode_static_elem_array hst v]
+  exact (emitVals_eq_with hwrite _ _).trans
+    (by rw [hsz, staticElemsHead, Nat.mul_comm])
 
 @[csimp] theorem encode_eq_fast : @encode = @encodeFast := by
   funext t v
@@ -967,10 +954,14 @@ private theorem encode_fused_arm {t : Ty} {loop : ByteArray → List (ValBA t) �
       exact encode_dyn_array_arm rfl size_putBA_bytes toList_putBA_bytes vs h _
   | .array .string, ⟨vs, h⟩ =>
       exact encode_dyn_array_arm rfl size_putBA_string toList_putBA_string vs h _
-  | .array (.uint _), v => exact encode_fused_arm rfl (by simp [staticSize]) emitVals_uint v
-  | .array (.int _), v => exact encode_fused_arm rfl (by simp [staticSize]) emitVals_int v
-  | .array .bool, v => exact encode_fused_arm rfl (by simp [staticSize]) emitVals_bool v
-  | .array (.bytesN _), v => exact encode_fused_arm rfl (by simp [staticSize]) emitVals_bytesN v
+  | .array (.uint m), v =>
+      exact encode_fused_arm (emitPrim (.uint m)) rfl (by simp [staticSize]) (by simp [emitVal]) v
+  | .array (.int m), v =>
+      exact encode_fused_arm (emitPrim (.int m)) rfl (by simp [staticSize]) (by simp [emitVal]) v
+  | .array .bool, v =>
+      exact encode_fused_arm (emitPrim .bool) rfl (by simp [staticSize]) (by simp [emitVal]) v
+  | .array (.bytesN m), v =>
+      exact encode_fused_arm (emitPrim (.bytesN m)) rfl (by simp [staticSize]) (by simp [emitVal]) v
   | .uint _, v | .int _, v | .bool, v | .address, v | .bytesN _, v | .bytes, v | .string, v
   | .fixedArray _ _ _, v | .tuple _ _, v
   | .array .address, v | .array (.array _), v | .array (.fixedArray _ _ _), v
