@@ -163,10 +163,11 @@ end
 /-! ## Packed sizes -/
 
 /- The packed encoding size of a static type (the number of bytes its
-encoding occupies in `abi.encodePacked`).  For dynamic types the size is
-not statically known and the function returns 0.  `packedSizeSum` is the
-structural list sibling.  Note the fixed-array case: Solidity pads packed
-array *elements* to their standard (32-byte-word) width, so a fixed array
+encoding occupies in `abi.encodePacked`).  For dynamic types, and for
+compound types containing a dynamic component, the size is not statically
+known and the function returns 0.  `packedSizeSum` is the structural list
+sibling.  Note the static fixed-array case: Solidity pads packed array
+*elements* to their standard (32-byte-word) width, so a static fixed array
 occupies `n` standard element slots, not `n` tight ones. -/
 mutual
 /-- Packed size of a type. -/
@@ -176,8 +177,10 @@ def packedSize : Ty → Nat
   | address => 20
   | bytesN m => m.bytes
   | bytes | string | array _ => 0
-  | fixedArray t n _ => n * t.headSize
-  | tuple head tail => head.packedSize + packedSizeSum tail
+  | fixedArray t n _ => if t.isStatic then n * t.headSize else 0
+  | tuple head tail => if head.isStatic && allStatic tail then
+      head.packedSize + packedSizeSum tail
+    else 0
 
 /-- Sum of the packed sizes of a list of types. -/
 def packedSizeSum : List Ty → Nat
@@ -186,9 +189,10 @@ def packedSizeSum : List Ty → Nat
 end
 
 /- For an all-static type, the packed size is the total bytes the encoding
-occupies.  Dynamic types (`bytes`, `string`, `T[]`) have no statically
-known packed size — their encodings are data-dependent and `decodePacked`
-rejects them — so `packedSize` returns 0 for them. -/
+occupies.  Dynamic types (`bytes`, `string`, `T[]`) and compounds
+containing a dynamic component have no statically known packed size —
+their encodings are data-dependent and `decodePacked` rejects them — so
+`packedSize` returns 0 for them. -/
 /-! ## The value family -/
 
 /- Values indexed by their ABI type, refined so that every inhabitant is

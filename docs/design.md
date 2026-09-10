@@ -50,7 +50,7 @@ complete type grammar.
 
 2. **Type-indexed value family.**  `Val : Ty → Type` is an indexed family of
    refined types: `Val (.uint 32) = {n : Nat // n < 2^256}`,
-   `Val (.bytes) = List UInt8`, and compound types are structurally
+   `Val (.bytes) = {bs : List UInt8 // bs.length < 2^64}`, and compound types are structurally
    composed from their components.  The roundtrip statement
    `Spec.decode t (Spec.encode t v) = some v` needs no separate well-formedness
    predicate on values — the refinement is built into the type.
@@ -136,11 +136,13 @@ auxiliary predicates/functions are defined alongside it:
 - **`headSize`** — bytes occupied in the head section.  Static types take
   their full encoding size; dynamic types take 32 (the offset word).
 
-- **`packedSize`** — bytes occupied in packed encoding.  Scalars take
-  their tight width (`uint8` → 1, `address` → 20); fixed arrays take `n`
-  *padded* element slots (`uint8[3]` → 96), since Solidity pads packed
-  array elements; for dynamic types it is 0 (packed size is not
-  statically known, and `decodePacked` rejects them).
+- **`packedSize`** — bytes occupied in packed encoding for a static type.
+  Scalars take their tight width (`uint8` → 1, `address` → 20); static
+  fixed arrays take `n` *padded* element slots (`uint8[3]` → 96), since
+  Solidity pads packed array elements; static tuples sum their components.
+  Dynamic types and compounds containing dynamic components return 0 —
+  their packed size is not statically known, and `decodePacked` rejects
+  them.
 
 All are defined via **mutual recursion** with their `List`-indexed
 siblings (`allStatic`, `headSizeSum`, `packedSizeSum`).  This
@@ -153,11 +155,11 @@ opaque to the elaborator and break `@[reducible]` on `Val`.
 type:
 
 ```
-Val (.uint m)     = {n : Nat // n < 2^m}
-Val (.bytes)      = List UInt8
-Val (.tuple ts)   = TupleVal ts          -- right-nested product
-Val (.array t)    = List (Val t)
-Val (.fixedArray t n) = {vs : List (Val t) // vs.length = n}
+Val (.uint m)     = {n : Nat // n < 2 ^ m.bits}
+Val (.bytes)      = {bs : List UInt8 // bs.length < 2 ^ 64}
+Val (.tuple head tail) = Val head × TupleVal tail
+Val (.array t)    = {vs : List (Val t) // vs.length < 2 ^ 64}
+Val (.fixedArray t n _) = {vs : List (Val t) // vs.length = n}
 ```
 
 `TupleVal` is also `@[reducible]` and defined mutually with `Val`:
@@ -484,16 +486,16 @@ before elaboration.  The transcript *is* the compiler's behaviour made
 visible.  For `transfer(address to, uint256 amount)` the encoder is:
 
 ```lean
-def callArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple [EvmAbi.Ty.address, EvmAbi.Ty.uint 32]) → EvmAbi.Builder :=
+def callArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple EvmAbi.Ty.address [EvmAbi.Ty.uint 32]) → EvmAbi.Builder :=
   fun v =>
   (((EvmAbi.Compile.Acc.start 64).static (EvmAbi.putAddress (v.1).val)).static
       (EvmAbi.putUint (v.2.1).val)).finish
 
 theorem callArgs.put_denotes :
-    EvmAbi.Compile.Denotes (EvmAbi.Ty.tuple [EvmAbi.Ty.address, EvmAbi.Ty.uint 32]) callArgs.put :=
+    EvmAbi.Compile.Denotes (EvmAbi.Ty.tuple EvmAbi.Ty.address [EvmAbi.Ty.uint 32]) callArgs.put :=
   by
   intro v
-  refine EvmAbi.Compile.toList_tuple (by decide) _ ?_
+  refine EvmAbi.Compile.toList_tuple _ ?_
   simp only [EvmAbi.Compile.partsOfTupleBA_cons, EvmAbi.Compile.partsOfTupleBA_nil]
   exact
     ((EvmAbi.Compile.Acc.start_inv 64).static (by decide) (EvmAbi.Compile.denotes_address (v).1)).static (by decide)
@@ -540,7 +542,7 @@ def samArgs.node0 : EvmAbi.ValBA (EvmAbi.Ty.array (EvmAbi.Ty.uint 32)) → EvmAb
     ((EvmAbi.Compile.Acc.start (v.val.length * 32)).elems EvmAbi.Compile.Acc.static
         (fun v => EvmAbi.putUint v.val) v.val).finish
 
-def samArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple [EvmAbi.Ty.bytes, EvmAbi.Ty.bool, …]) → EvmAbi.Builder :=
+def samArgs.put : EvmAbi.ValBA (EvmAbi.Ty.tuple EvmAbi.Ty.bytes [EvmAbi.Ty.bool, …]) → EvmAbi.Builder :=
   fun v =>
   ((((EvmAbi.Compile.Acc.start 96).dyn (EvmAbi.Codec.putBytesBA (v.1).val)).static (EvmAbi.putBool (v.2.1))).dyn
       (samArgs.node0 (v.2.2.1))).finish
@@ -570,7 +572,7 @@ pattern like `⟨bs, h⟩` cannot match it.
 block with `TupleVal`.  The mutual block ensures the recursion is
 structurally visible, while `@[reducible]` forces definitional reduction
 during elaboration.  This gives `Val (.bytesN m) = Subtype (λ bs => bs.length = m.bytes)`
-and `Val (.tuple [t₁, t₂]) = Val t₁ × Val t₂ × Unit`, both definitionally.
+and `Val (.tuple t₁ [t₂]) = Val t₁ × Val t₂ × Unit`, both definitionally.
 
 ### 4.2 Prefix-Tolerant Decoding
 

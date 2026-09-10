@@ -43,8 +43,8 @@ whereas `'uint256a'` is a single (invalid) identifier.
 
 | Human-readable    | Ty                |
 |-------------------|-------------------|
-| `uint<N>`         | `.uint N`         |
-| `int<N>`          | `.int N`          |
+| `uint<N>`         | `.uint (N / 8)`   |
+| `int<N>`          | `.int (N / 8)`    |
 | `uint` / `int`    | `.uint 32` / `.int 32` |
 | `address`         | `.address`        |
 | `address payable` | `.address`        |
@@ -55,6 +55,10 @@ whereas `'uint256a'` is a single (invalid) identifier.
 | `T[]`             | `.array T`        |
 | `T[N]`            | `.fixedArray T N` (with `N > 0`) |
 | `(T₁, ..., Tₙ)`   | `.tuple T₁ [T₂,…,Tₙ]` (non-empty) |
+
+`uintM` / `intM` names express bit widths, while `Ty.uint` / `Ty.int`
+store byte widths; for example `uint256` maps to `.uint 32` and
+`int128` maps to `.int 16`.  `bytesN` is already a byte width.
 -/
 
 namespace EvmAbi

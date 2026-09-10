@@ -100,12 +100,15 @@ and decoding is a single linear pass with `Get2` walkers
 (`decodePackedElem` / `decodePackedTuple`), reading array elements at
 their padded widths via the standard `decodeElems`.
 
-Packed sizes are computed by `packedSize : Ty → Nat` (`uint8` → 1 byte,
-`address` → 20 bytes, `uint8[3]` → 96 bytes — array elements are padded).
+Packed sizes are computed by `packedSize : Ty → Nat` for static types
+(`uint8` → 1 byte, `address` → 20 bytes, `uint8[3]` → 96 bytes — array
+elements are padded).  Dynamic types and compounds containing dynamic
+components return 0 because their packed size is not statically known.
 The `.tuple` arm is the flat argument list of a multi-argument
-`abi.encodePacked(a, b, …)` call (`(uint8, bool)` → 2 bytes); applied to
-*nested* tuples or arrays it is a total-function extension with no
-Solidity counterpart, documented and tested as such.
+`abi.encodePacked(a, b, …)` call when all components are static
+(`(uint8, bool)` → 2 bytes); applied to *nested* tuples or arrays it is a
+total-function extension with no Solidity counterpart, documented and
+tested as such.
 
 ### Runtime codec
 
@@ -207,7 +210,7 @@ open EvmAbi
 -- some (Ty.uint 32)
 
 #eval Ty.parse "(address, uint256)[]"
--- some (Ty.array (Ty.tuple [Ty.address, Ty.uint 32]))
+-- some (Ty.array (Ty.tuple Ty.address [Ty.uint 32]))
 
 -- Parse a full ABI item
 #eval AbiItem.parse "function approve(address spender, uint256 amount) returns (bool)"
@@ -276,7 +279,7 @@ human-readable parser converts names like `uint256` to `Ty.uint 32`
 automatically.
 
 Array suffixes apply to tuples as well, so `(address,uint256)[]` — a Solidity
-`struct[]` — is a `.array (.tuple […])`.  Widths outside the range the
+`struct[]` — is a `.array (.tuple head tail)`.  Widths outside the range the
 specification allows (`uint7`, `bytes33`, …) are rejected, and the non-empty
 tuple / positive fixed-array guarantees are embedded in `Ty`, so every type a
 parse produces is well-formed and the codec theorems apply to it.

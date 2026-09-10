@@ -559,6 +559,12 @@ example : (encodePacked (.fixedArray (.uint 1) 3 (by decide))
 
 example : packedSize (.fixedArray (.uint 1) 3 (by decide)) = 96 := by native_decide
 
+-- Dynamic compounds have no static packed size.
+example : packedSize (.fixedArray .bytes 2 (by decide)) = 0 := by native_decide
+example : packedSize (.tuple .bytes [.bool]) = 0 := by native_decide
+example : packedSize (.tuple .bool [.bytes]) = 0 := by native_decide
+example : packedSize (.tuple .bool [.bool]) = 2 := by native_decide
+
 -- Rule 2 — dynamic types are encoded in place, without the length word.
 -- Solidity: abi.encodePacked(string("Hello, world!")) = 0x48656c6c6f2c20776f726c6421
 example : encodePacked .string ⟨"Hello, world!", by native_decide⟩ = solidityPackedHello := by native_decide

@@ -287,12 +287,17 @@ theorem length_encodePacked : (t : Ty) → t.isStatic = true → (v : t.Val) →
       have hst : t.isStatic = true := by simp only [isStatic] at hs; exact hs
       simp only [encodePacked, putPacked, toList_putPackedElems, List.length_flatten]
       rw [length_map_encode_static t hst vs, hvs, packedSize]
+      simp [hst]
   | .tuple head tail, hs, (v, vs) => by
       have hst : head.isStatic = true ∧ allStatic tail = true := by
         simp only [isStatic] at hs
         rw [Bool.and_eq_true] at hs
         exact hs
+      have hss : (head.isStatic && allStatic tail) = true := by
+        rw [Bool.and_eq_true]
+        exact hst
       simp only [encodePacked, putPacked, packedSize, Builder.toList_append, List.length_append]
+      rw [if_pos hss]
       change (encodePacked head v).length + (encodePackedTuple tail vs).length =
         head.packedSize + packedSizeSum tail
       rw [length_encodePacked head hst.1 v, length_encodePackedTuple tail hst.2 vs]
