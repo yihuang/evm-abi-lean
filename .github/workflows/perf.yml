@@ -1,0 +1,127 @@
+name: Perf
+
+# Two views of the same question, "did this commit move the encoder", because
+# neither answers it alone.
+#
+# `refcount` is exact: Lean's ownership inference reacts to the shape of the
+# types a function scrutinises, not only to its own source, so a `Ty` change can
+# add a `lean_dec` to a per-element walker with the body untouched.  The count
+# is machine-independent, so it is worth reading on a shared runner.
+#
+# `bench` is what a caller actually pays, and is advisory only.  Row medians
+# drift 10-30% between runs on an idle machine and more on a shared runner, so a
+# threshold on a single pair of runs would invent regressions.  What survives
+# that is building both revisions up front and interleaving them, which is what
+# the harness does.
+#
+# A verdict never blocks the merge; a check that cannot run does.  Swallowing
+# both looks the same from the outside -- green -- and a perf check nobody can
+# distinguish from a broken one is worth nothing.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Pinned to a commit, not a branch: the harness decides what the numbers mean,
+  # so it should move only when someone bumps this deliberately.
+  HARNESS_REPO: mmsqe/evm-abi-benchmarks
+  HARNESS_REF: 4e143ba3dab1521d637829646bbdb9ff63b4c239
+
+jobs:
+  refcount:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Builds this revision and installs the toolchain the base build reuses.
+      - uses: leanprover/lean-action@v1
+        with:
+          build-args: EvmAbi
+
+      - name: Compare against the merge base
+        run: |
+          base=$(git merge-base "origin/${{ github.base_ref || 'main' }}" HEAD)
+          echo "merge base: $base"
+          ./scripts/rc_counts.py .lake/build/ir > /tmp/after.json
+          git worktree add /tmp/base "$base"
+          (cd /tmp/base && lake build EvmAbi)
+          ./scripts/rc_counts.py /tmp/base/.lake/build/ir > /tmp/before.json
+          # `--diff` exits non-zero when it finds increases.  That is a
+          # verdict, not a breakage, so it must not fail the job -- but the
+          # snapshots and builds above still can.
+          ./scripts/rc_counts.py --diff /tmp/before.json /tmp/after.json \
+            | tee /tmp/rc.txt || true
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Reference-count traffic vs the merge base'
+            echo
+            echo 'Counted per occurrence, not per call: an increase inside a'
+            echo 'per-element walker (`emitVal`, `emitVals`, `emitAny`) is paid'
+            echo 'per element and is worth chasing, where the same increase in'
+            echo 'something run once per encode is usually the price of a win.'
+            echo
+            echo '```'
+            cat /tmp/rc.txt 2>/dev/null || echo '(did not run)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Installs the toolchain, and builds the head the bench then reuses.
+      - uses: leanprover/lean-action@v1
+        with:
+          build-args: EvmAbi
+
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.HARNESS_REPO }}
+          ref: ${{ env.HARNESS_REF }}
+          path: harness
+
+      # The Lean bench lives in the harness because it is already keyed
+      # (`BENCH <key> <µs/op> <bytes>`); this repo's Bench.lean prints prose
+      # whose labels repeat across sections and cannot be joined on.  Only the
+      # Lean side is built: for a Lean-vs-Lean comparison the go-ethereum column
+      # cancels, and building it would pull in cgo and secp256k1 for nothing.
+      - name: Compare against the merge base
+        run: |
+          if [ ! -x harness/scripts/bench_ab.py ]; then
+            echo "harness ${HARNESS_REF} has no scripts/bench_ab.py" | tee /tmp/ab.txt
+            exit 0
+          fi
+          base=$(git merge-base "origin/${{ github.base_ref || 'main' }}" HEAD)
+          echo "merge base: $base"
+          # Checkouts, not revisions: a pull request's head is a merge commit
+          # Lake cannot fetch from the URL in the harness lakefile.
+          git worktree add /tmp/base "$base"
+          harness/scripts/bench_ab.py --build /tmp/base /tmp/bench_base
+          harness/scripts/bench_ab.py --build "$PWD" /tmp/bench_head
+          harness/scripts/bench_ab.py /tmp/bench_base /tmp/bench_head --runs 30 \
+            2>/dev/null | tee /tmp/ab.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Lean encode/decode vs the merge base'
+            echo
+            echo 'Both binaries are built first, then run alternately, so drift'
+            echo 'lands on both columns equally.  Read the verdict column, not'
+            echo 'the percentage: overlapping distributions mean the two builds'
+            echo 'produced runs of equal cost and the median gap is sampling.'
+            echo
+            echo '```'
+            cat /tmp/ab.txt 2>/dev/null || echo '(did not run)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
