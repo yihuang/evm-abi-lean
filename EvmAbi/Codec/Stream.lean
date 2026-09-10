@@ -168,6 +168,44 @@ def emitTupleVals (acc : ByteArray) : (ts : List Ty) → TupleValBA ts → ByteA
 termination_by ts _ => (tyListMeasure ts, 1)
 end
 
+/-! ### fused element loops
+
+`emitVals` matches on the element `Ty` once per element, and that match compiles
+to fourteen `lean_dec` inside `emitVal`.  An array of static elements pays it per
+element.  These loops fix the element type in the signature instead, so each body
+is a structural recursion over the list with no `Ty` scrutinee, and compiles to no
+reference-count traffic at all. -/
+
+/-- `emitVals` at `uintM`, with the per-element match hoisted out. -/
+def emitUintElems {m : Width} (acc : ByteArray) : List (ValBA (.uint m)) → ByteArray
+  | [] => acc
+  | v :: vs => emitUintElems (Chunks.emitWord acc v.val) vs
+
+/-- `emitVals` at `bytesM`, with the per-element match hoisted out. -/
+def emitBytesNElems {m : Width} (acc : ByteArray) : List (ValBA (.bytesN m)) → ByteArray
+  | [] => acc
+  | v :: vs =>
+      emitBytesNElems
+        (if v.val.size == 32 then acc ++ v.val
+         else Chunks.pushZeros32 (acc ++ v.val) (32 - v.val.size)) vs
+
+/-- An `n`-element static-element array's length word, in a buffer sized for the
+whole encoding: that word plus `n` element slots. -/
+def staticElemsHead (n : Nat) : ByteArray :=
+  emitUintWord (ByteArray.emptyWithCapacity (32 + 32 * n)) n
+
+theorem emitVals_uint {m : Width} :
+    ∀ (acc : ByteArray) (vs : List (ValBA (.uint m))),
+      emitVals acc (.uint m) vs = emitUintElems acc vs
+  | _, [] => by rw [emitVals, emitUintElems]
+  | _, ⟨_, _⟩ :: _ => by rw [emitVals, emitUintElems, emitVal, emitVals_uint]
+
+theorem emitVals_bytesN {m : Width} :
+    ∀ (acc : ByteArray) (vs : List (ValBA (.bytesN m))),
+      emitVals acc (.bytesN m) vs = emitBytesNElems acc vs
+  | _, [] => by rw [emitVals, emitBytesNElems]
+  | _, ⟨_, _⟩ :: _ => by rw [emitVals, emitBytesNElems, emitVal, emitVals_bytesN]
+
 mutual
 theorem data_toList_emitVal :
     ∀ {t : Ty}, t.isStatic = true → ∀ (acc : ByteArray) (v : ValBA t),
@@ -382,10 +420,12 @@ with `m > 32`, where the payload is `m` bytes rather than one word — using
 mutual
 /-- Encoded bytes of a static type, from the type alone. -/
 def staticSize : Ty → Nat
-  | .bytesN m => m.bytes + (32 - m.bytes)
   | .fixedArray t n _ => n * staticSize t
   | .tuple head tail => staticSize head + staticSizeSum tail
-  | .uint _ | .int _ | .bool | .address | .bytes | .string | .array _ => 32
+  -- `bytesN` is its payload plus right padding to the word, i.e. 32 for every
+  -- legal width; saying so keeps the fused array arms' proof arithmetic-free
+  | .uint _ | .int _ | .bool | .address | .bytesN _
+  | .bytes | .string | .array _ => 32
 termination_by t => sizeOf t
 
 /-- Encoded bytes of a static component list. -/
@@ -582,7 +622,10 @@ private theorem size_static : ∀ {t : Ty}, t.isStatic = true → ∀ v : ValBA 
   | .int _, _, ⟨_, _⟩ => by rw [putBA, staticSize]; exact size_putUint _
   | .bool, _, _ => by rw [putBA, staticSize]; exact size_putUint _
   | .address, _, ⟨_, _⟩ => by rw [putBA, staticSize]; exact size_putUint _
-  | .bytesN _, _, ⟨bs, hbs⟩ => by rw [putBA, staticSize, size_putBytesNBA, hbs]
+  | .bytesN m, _, ⟨bs, hbs⟩ => by
+      rw [putBA, staticSize, size_putBytesNBA, hbs]
+      have : m.bytes ≤ 32 := by unfold Width.bytes; omega
+      omega
   | .fixedArray t n hn, ht, ⟨vs, hvs⟩ => by
       rw [putBA_fixedArray hn vs hvs, staticSize, size_parts_static (t := t) ht vs, hvs]
   | .tuple head tail, ht, (v, vs) => by
@@ -816,6 +859,10 @@ def encodeFast (t : Ty) (v : ValBA t) : ByteArray :=
             v.val.length)
           (32 * v.val.length) v.val)
         v.val
+  -- static elements: the total is known without a size tree, and the element
+  -- loop is fused so the per-element `Ty` match disappears
+  | .array (.uint _), v => emitUintElems (staticElemsHead v.val.length) v.val
+  | .array (.bytesN _), v => emitBytesNElems (staticElemsHead v.val.length) v.val
   | t, v =>
       if t.isStatic then emitVal (ByteArray.emptyWithCapacity (staticSize t)) t v
       else emitAnyRun t v
@@ -867,6 +914,18 @@ private theorem encode_dyn_array_arm {t : Ty} (hd : t.isStatic = false)
     toList_emptyWithCapacity, List.nil_append]
   simp only [List.append_assoc]
 
+/-- A static-element array needs no size tree: its total is the length word plus
+`n` element slots, and the element run is `emitVals` at the element type. -/
+private theorem encode_static_elem_array {t : Ty} (hst : t.isStatic = true)
+    (v : ValBA (.array t)) :
+    encode (.array t) v
+      = emitVals (emitUintWord
+          (ByteArray.emptyWithCapacity (32 + v.val.length * staticSize t)) v.val.length)
+          t v.val := by
+  obtain ⟨vs, hvs⟩ := v
+  rw [encode_nonarray_arm, if_neg (by simp [Ty.isStatic]), emitAnyRun, sizesOf, if_pos hst,
+    emitAny, if_pos hst]
+
 @[csimp] theorem encode_eq_fast : @encode = @encodeFast := by
   funext t v
   match t, v with
@@ -874,9 +933,15 @@ private theorem encode_dyn_array_arm {t : Ty} (hd : t.isStatic = false)
       exact encode_dyn_array_arm rfl size_putBA_bytes toList_putBA_bytes vs h _
   | .array .string, ⟨vs, h⟩ =>
       exact encode_dyn_array_arm rfl size_putBA_string toList_putBA_string vs h _
+  | .array (.uint _), v =>
+      rw [encode_static_elem_array rfl v, emitVals_uint]
+      simp [encodeFast, staticElemsHead, staticSize, Nat.mul_comm]
+  | .array (.bytesN _), v =>
+      rw [encode_static_elem_array rfl v, emitVals_bytesN]
+      simp [encodeFast, staticElemsHead, staticSize, Nat.mul_comm]
   | .uint _, v | .int _, v | .bool, v | .address, v | .bytesN _, v | .bytes, v | .string, v
   | .fixedArray _ _ _, v | .tuple _ _, v
-  | .array (.uint _), v | .array (.int _), v | .array .bool, v | .array .address, v
-  | .array (.bytesN _), v | .array (.array _), v | .array (.fixedArray _ _ _), v
+  | .array (.int _), v | .array .bool, v | .array .address, v
+  | .array (.array _), v | .array (.fixedArray _ _ _), v
   | .array (.tuple _ _), v =>
       exact encode_nonarray_arm _ v
