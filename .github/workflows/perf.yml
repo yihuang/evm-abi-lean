@@ -14,7 +14,9 @@ name: Perf
 # that is building both revisions up front and interleaving them, which is what
 # the harness does.
 #
-# Neither job blocks the merge.
+# A verdict never blocks the merge; a check that cannot run does.  Swallowing
+# both looks the same from the outside -- green -- and a perf check nobody can
+# distinguish from a broken one is worth nothing.
 
 on:
   pull_request:
@@ -40,7 +42,6 @@ jobs:
           build-args: EvmAbi
 
       - name: Compare against the merge base
-        continue-on-error: true
         run: |
           base=$(git merge-base "origin/${{ github.base_ref || 'main' }}" HEAD)
           echo "merge base: $base"
@@ -48,7 +49,11 @@ jobs:
           git worktree add /tmp/base "$base"
           (cd /tmp/base && lake build EvmAbi)
           ./scripts/rc_counts.py /tmp/base/.lake/build/ir > /tmp/before.json
-          ./scripts/rc_counts.py --diff /tmp/before.json /tmp/after.json | tee /tmp/rc.txt
+          # `--diff` exits non-zero when it finds increases.  That is a
+          # verdict, not a breakage, so it must not fail the job -- but the
+          # snapshots and builds above still can.
+          ./scripts/rc_counts.py --diff /tmp/before.json /tmp/after.json \
+            | tee /tmp/rc.txt || true
 
       - name: Summary
         if: always()
@@ -90,7 +95,6 @@ jobs:
       # Lean side is built: for a Lean-vs-Lean comparison the go-ethereum column
       # cancels, and building it would pull in cgo and secp256k1 for nothing.
       - name: Compare against the merge base
-        continue-on-error: true
         run: |
           if [ ! -x harness/scripts/bench_ab.py ]; then
             echo "harness ${HARNESS_REF} has no scripts/bench_ab.py" | tee /tmp/ab.txt
