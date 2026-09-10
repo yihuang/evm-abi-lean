@@ -1,0 +1,120 @@
+name: Perf
+
+# Two views of the same question, "did this commit move the encoder", because
+# neither answers it alone.
+#
+# `refcount` is exact: Lean's ownership inference reacts to the shape of the
+# types a function scrutinises, not only to its own source, so a `Ty` change can
+# add a `lean_dec` to a per-element walker with the body untouched.  The count
+# is machine-independent, so it is worth reading on a shared runner.
+#
+# `bench` is what a caller actually pays, and is advisory only.  Row medians
+# drift 10-30% between runs on an idle machine and more on a shared runner, so a
+# threshold on a single pair of runs would invent regressions.  What survives
+# that is building both revisions up front and interleaving them, which is what
+# the harness does.
+#
+# Neither job blocks the merge.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Pin the harness so a change there cannot silently reinterpret the numbers.
+  HARNESS_REPO: yihuang/evm-abi-benchmarks
+  HARNESS_REF: main
+
+jobs:
+  refcount:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Builds this revision and installs the toolchain the base build reuses.
+      - uses: leanprover/lean-action@v1
+        with:
+          build-args: EvmAbi
+
+      - name: Compare against the merge base
+        continue-on-error: true
+        run: |
+          base=$(git merge-base "origin/${{ github.base_ref || 'main' }}" HEAD)
+          echo "merge base: $base"
+          ./scripts/rc_counts.py .lake/build/ir > /tmp/after.json
+          git worktree add /tmp/base "$base"
+          (cd /tmp/base && lake build EvmAbi)
+          ./scripts/rc_counts.py /tmp/base/.lake/build/ir > /tmp/before.json
+          ./scripts/rc_counts.py --diff /tmp/before.json /tmp/after.json | tee /tmp/rc.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Reference-count traffic vs the merge base'
+            echo
+            echo 'Counted per occurrence, not per call: an increase inside a'
+            echo 'per-element walker (`emitVal`, `emitVals`, `emitAny`) is paid'
+            echo 'per element and is worth chasing, where the same increase in'
+            echo 'something run once per encode is usually the price of a win.'
+            echo
+            echo '```'
+            cat /tmp/rc.txt 2>/dev/null || echo '(did not run)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Installs the toolchain both bench builds reuse.
+      - uses: leanprover/lean-action@v1
+        with:
+          build-args: EvmAbi
+
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.HARNESS_REPO }}
+          ref: ${{ env.HARNESS_REF }}
+          path: harness
+
+      # The Lean bench lives in the harness because it is already keyed
+      # (`BENCH <key> <µs/op> <bytes>`); this repo's Bench.lean prints prose
+      # whose labels repeat across sections and cannot be joined on.  Only the
+      # Lean side is built: for a Lean-vs-Lean comparison the go-ethereum column
+      # cancels, and building it would pull in cgo and secp256k1 for nothing.
+      - name: Compare against the merge base
+        continue-on-error: true
+        run: |
+          if [ ! -x harness/scripts/bench_ab.py ]; then
+            echo "harness ${HARNESS_REF} has no scripts/bench_ab.py" | tee /tmp/ab.txt
+            exit 0
+          fi
+          base=$(git merge-base "origin/${{ github.base_ref || 'main' }}" HEAD)
+          echo "merge base: $base"
+          cd harness
+          ./scripts/bench_ab.py --build "$base" /tmp/bench_base
+          ./scripts/bench_ab.py --build "$(git -C .. rev-parse HEAD)" /tmp/bench_head
+          ./scripts/bench_ab.py /tmp/bench_base /tmp/bench_head --runs 30 \
+            2>/dev/null | tee /tmp/ab.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Lean encode/decode vs the merge base'
+            echo
+            echo 'Both binaries are built first, then run alternately, so drift'
+            echo 'lands on both columns equally.  Read the verdict column, not'
+            echo 'the percentage: overlapping distributions mean the two builds'
+            echo 'produced runs of equal cost and the median gap is sampling.'
+            echo
+            echo '```'
+            cat /tmp/ab.txt 2>/dev/null || echo '(did not run)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
