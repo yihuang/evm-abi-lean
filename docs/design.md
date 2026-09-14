@@ -135,7 +135,8 @@ auxiliary predicates/functions are defined alongside it:
 - **`isStatic`** — whether the encoding size is fixed by the type (a `Bool`
   predicate, lowercase per Lean convention).  Used by the head/tail layout:
   static elements sit inline in the head; dynamic elements contribute an
-  offset word.
+  offset word.  The alternative — staticness as a *type index* — was spiked
+  and deferred; see §4.5.
 
 - **`headSize`** — bytes occupied in the head section.  Static types take
   their full encoding size; dynamic types take 32 (the offset word).
@@ -623,6 +624,99 @@ levels — the decoder's walkers sit at offsets `+1`/`+2`/`+3` above the
 prefix `Spec.decode`, so a component step can call it on the same type).  The
 measures are chosen so that recursive calls occur at strictly smaller
 values, and the `decreasing_tactic` discharges every goal.
+
+### 4.5 Staticness as an index (spiked, deferred)
+
+**Problem.**  `isStatic` is a `Bool` computed structurally, so a theorem that
+mentions it cases on it and rewrites the `if` it guards:
+`by_cases hs : t.isStatic` plus `have hsf : t.isStatic = false := by simpa
+using hs`, and `simpa [isStatic, Bool.and_eq_true]` to take a tuple's or a
+list's staticness apart.  Since `Ty` is defined here, staticness could instead
+be an *index*, after which those `if`s would disappear and `headSize` /
+`partOf` / `packedSize` would be total on the index.  That is the most
+invasive of the outstanding refactors, so it was spiked on a leaf (a
+`headSize`/`partOf`-shaped definition plus one recursion) before committing.
+
+**The single-constructor index does not elaborate.**  A `tuple` constructor
+has to compute its index from its components:
+
+```lean
+inductive Ty : Bool → Type where
+  | uint : Ty true
+  | tuple (b c : Bool) (head : Ty b) (tail : Ty c) : Ty (b && c)
+
+def f : (t : Ty true) → Nat
+  | .uint => 0
+  | .tuple b c head tail => 1   -- error: `Ty (b && c)` is not `Ty true`
+```
+
+`b && c` is not invertible: eliminating a `t : Ty true` does not solve the
+index equation for `b` and `c`, so every static-side proof would have to
+derive `b = true ∧ c = true` itself — the case split the index was meant to
+remove.  (`fixedArray` is fine: its index is the *variable* `b`.)
+
+**Enumerating the combinations works.**  The index has to be constructor
+headed, which means one constructor per static/dynamic combination: three
+tuple constructors (static head + static tail, dynamic head, static head +
+dynamic tail) and three cons constructors for the tail list, since
+`TyList false` has to mean "some component is dynamic".  With those, the
+elimination refines and a recursion at index `true` needs no staticness
+hypothesis, no impossible case and no `if`:
+
+```lean
+def Ty.encodeLen : (t : Ty true) → Nat
+  | .uint => 32
+  | .fixedArray t n => n * Ty.encodeLen t
+  | .tupleS head tail => Ty.encodeLen head + TyList.encodeLen tail
+```
+
+One qualification: `Ty` and its tail list are mutually recursive, so Lean
+compiles the pair to its `_mutual` encoding and those equations are not
+definitional (`rfl` fails, `simp only [Ty.encodeLen]` succeeds).  The
+intended proof shape survives, but the reduction is `simp`-time rather than
+definitional.
+
+**Evidence instead of an index does not pay either.**  The rest of the
+alternative — keep `Ty`, and state staticness as an inductive family
+`Ty.Static : Ty → Prop` whose elimination refines `t` — removes the `&&`
+destructuring, and stops there for a Lean reason: a `Prop`-valued family can
+only be eliminated into `Prop`, so the evidence-recursive `Static.headSize` /
+`Static.partOf` mirrors (the total definitions that make the `if`s go away)
+are rejected by the kernel; as a `Type` family they are accepted, but then
+they are `def`s and `Static.ofBool` — the bridge from the `Bool` equation
+every existing caller already holds — is a non-structural mutual recursion,
+and the equations the change was meant to remove come back.
+
+**Measurement.**  The re-casing is what the change buys:
+
+```bash
+git grep -c -E 'by_cases h[a-z0-9]* : .*isStatic|cases h[a-z0-9]* : .*isStatic|Bool\.and_eq_true' -- '*.lean'
+```
+
+is 40 lines of case splits and `&&` destructuring; add 15 `have … := by
+simpa using hs` re-writes, the ~30 lines of the 78 `if_pos`/`if_neg` that
+discharge a *staticness* `if` (the rest are subtype bounds and the `int`
+sign), and the `partOf_static`/`partOf_dynamic` rewrites (72 sites), and the
+plumbing is on the order of 110 of the library's 1583 proof-body lines
+(`scripts/proof-body-lines.py`) — about 7%.  On the other side of the ledger:
+495 mentions of `Ty` in 14 files, `isStatic`/`allStatic` at 198 sites, and a
+tail list replacing `List Ty` at every `TupleVal`/`partsOfTuple`/
+`decodeTuple` site.  Beyond the library, `parseTypeFromString` returns
+`Option Ty` today and has no statically known index to return instead, so it
+must become `Option (Σ b, Ty b)`; every list of component types it builds
+(`parseTarget`'s `t.map (·.ty)`, the emitter's tuple walk) becomes an indexed
+tail list; and `mkTyStx`, which every emitted signature goes through, has to
+splice the index as well as the tree, so the pinned transcript in `Tests.lean`
+changes.
+
+**Decision.**  Do not index `Ty`.  Seven percent of the proof text is not
+nothing, but the purchase is a universe redesign: six extra constructors, a
+sigma through the parser and the compiler, and every proof that eliminates a
+`Ty` rewritten — while the reduction it buys is `simp`-time rather than
+definitional, and the equation *threading* that actually blocks a uniform
+`grind` is inherent to a `Bool` staticness either way.  The spike's
+reproducers are in this section; re-open #51 if the trade is ever worth
+making.
 
 ## 5. Architecture Diagram
 
