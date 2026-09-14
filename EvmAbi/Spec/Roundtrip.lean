@@ -31,13 +31,7 @@ theorem decode_bytes_pos {buf bs : List UInt8} {n : Nat}
     (hp : decodeBytesPrefix buf = some (bs, n)) :
     decode .bytes buf = some (⟨bs, length_lt_of_decodeBytesPrefix hp⟩, n, buf.drop n) := by
   simp only [decode]
-  split
-  · next bs' n' hp' =>
-      rw [hp] at hp'
-      simp only [Option.some.injEq, Prod.mk.injEq] at hp'
-      obtain ⟨rfl, rfl⟩ := hp'
-      rfl
-  · next hp' => rw [hp] at hp'; contradiction
+  split <;> grind
 
 /-- `decode` at `string` through known prefix-decode and UTF-8
 results. -/
@@ -49,15 +43,8 @@ theorem decode_string_pos {buf bs : List UInt8} {n : Nat} {s : String}
   split
   · next bs' n' hp' =>
       rw [hp] at hp'
-      simp only [Option.some.injEq, Prod.mk.injEq] at hp'
-      obtain ⟨rfl, rfl⟩ := hp'
-      split
-      · next s' hs' =>
-          rw [hs] at hs'
-          obtain rfl := Option.some.inj hs'
-          rfl
-      · next hs' => rw [hs] at hs'; contradiction
-  · next hp' => rw [hp] at hp'; contradiction
+      grind
+  · next hp' => grind
 
 mutual
 /-- **Roundtrip, per-component**: one canonical component reads back from
@@ -88,39 +75,29 @@ theorem decodeElem_roundtrip (t : Ty) (v : t.Val)
       rw [hoff, natAt_drop _ _ _ hoff32, hnat0, hE]
     have hdropTail := drop_tail_partOf_dynamic t v hsf xs zs rest
     have hb' : (encode t v ++ (encodeTails zs ++ rest)).length < 2 ^ 256 := by
-      rw [← hdropTail, ← hE]
-      rw [List.length_drop]
-      omega
+      grind [List.length_drop]
     have hr := decode_roundtrip t v (encodeTails zs ++ rest) hb'
-    unfold decodeElem
-    simp only [hs]
-    rw [hnat]
-    dsimp only []
-    simp only [if_true]
+    simp only [decodeElem, hs, hnat, if_true]
     rw [show (encodeParts (xs ++ partOf t v :: zs) ++ rest).drop E =
         encode t v ++ (encodeTails zs ++ rest) from by rw [hE, hdropTail]]
     rw [hr]
     dsimp only []
-    rw [htailLen]
-    rw [← List.drop_drop, ← hhead32]
-    rw [show (encodeParts (xs ++ partOf t v :: zs) ++ rest).drop (E + (encode t v).length) =
-        encodeTails zs ++ rest from by
-      rw [hE, ← List.drop_drop, hdropTail]
-      exact drop_append_of_length rfl]
+    rw [htailLen, ← List.drop_drop, ← hhead32,
+      show (encodeParts (xs ++ partOf t v :: zs) ++ rest).drop (E + (encode t v).length) =
+          encodeTails zs ++ rest from by
+        rw [hE, ← List.drop_drop, hdropTail]
+        exact drop_append_of_length rfl]
   · have hstatic := drop_head_partOf_static t hs v xs zs rest off hoff
     have hlen : (encode t v).length = t.headSize := encode_length_static t hs v
     have htail0 : (partOf t v).tailSize = 0 := tailSize_partOf_static t v hs
     have hb' : (encode t v ++ (encodeHeads (headSizes (xs ++ partOf t v :: zs) + tailSizes xs) zs ++
         (encodeTails (xs ++ partOf t v :: zs) ++ rest))).length < 2 ^ 256 := by
-      rw [← hstatic]
-      rw [List.length_drop]
-      omega
+      grind [List.length_drop]
     have hr := decode_roundtrip t v
       (encodeHeads (headSizes (xs ++ partOf t v :: zs) + tailSizes xs) zs ++
         (encodeTails (xs ++ partOf t v :: zs) ++ rest)) hb'
     simp only [decodeElem, hs]
     rw [hstatic, hr, htail0]
-    dsimp only []
     simp only [Nat.add_zero]
     congr 1
     rw [← List.drop_drop, hstatic, drop_append_of_length hlen]
@@ -157,11 +134,6 @@ theorem decodeElems_roundtrip (t : Ty) (vs : List t.Val) (k : Nat)
       have hre : xs ++ (partOf t w :: (ws.map (partOf t) ++ ys)) =
           ((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys := by
         simp [List.append_assoc]
-      have hwf' : WF (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) := by
-        rwa [← hre]
-      have hb' : (encodeParts (((xs ++ [partOf t w]) ++ ws.map (partOf t)) ++ ys) ++ rest).length <
-          2 ^ 256 := by
-        rwa [← hre]
       have hoff' : off + t.headSize = headSizes (xs ++ [partOf t w]) := by
         rw [headSizes_snoc_partOf t w xs off hoff]
       have hE' : E + (partOf t w).tailSize =
@@ -174,22 +146,8 @@ theorem decodeElems_roundtrip (t : Ty) (vs : List t.Val) (k : Nat)
       dsimp only []
       rw [hre,
         ih (ws.length) rfl (xs ++ [partOf t w]) (off + t.headSize) hoff'
-          (E + (partOf t w).tailSize) hE' hwf' hb']
-      dsimp only []
-      simp only [Option.some.injEq]
-      apply Get2.Result.ext
-      · apply Subtype.ext
-        rfl
-      · rw [show off + t.headSize + ws.length * t.headSize =
-            off + (ws.length + 1) * t.headSize from by
-          rw [Nat.add_mul, Nat.one_mul]
-          ac_rfl]
-      · rw [show E + (partOf t w).tailSize + tailSizes (List.map (partOf t) ws) =
-            E + tailSizes (partOf t w :: List.map (partOf t) ws) from by
-          simp [tailSizes, Nat.add_assoc]]
-      · rw [show E + (partOf t w).tailSize + tailSizes (List.map (partOf t) ws) =
-            E + tailSizes (partOf t w :: List.map (partOf t) ws) from by
-          simp [tailSizes, Nat.add_assoc]]
+          (E + (partOf t w).tailSize) hE' (hre ▸ hwf) (hre ▸ hb)]
+      grind [tailSizes, Nat.add_assoc]
 termination_by 8 * sizeOf t + 2
 
 /-- **Roundtrip, tuples**: a canonical tuple reads back from its own
@@ -216,11 +174,6 @@ theorem decodeTuple_roundtrip : (ts : List Ty) → (vs : TupleVal ts) →
       have hre : xs ++ (partOf t v :: (partsOfTuple ts vs ++ ys)) =
           ((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys := by
         simp [List.append_assoc]
-      have hwf' : WF (((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys) := by
-        rwa [← hre]
-      have hb' : (encodeParts (((xs ++ [partOf t v]) ++ partsOfTuple ts vs) ++ ys) ++ rest).length <
-          2 ^ 256 := by
-        rwa [← hre]
       have hoff' : off + t.headSize = headSizes (xs ++ [partOf t v]) := by
         rw [headSizes_snoc_partOf t v xs off hoff]
       have hE' : E + (partOf t v).tailSize =
@@ -233,7 +186,7 @@ theorem decodeTuple_roundtrip : (ts : List Ty) → (vs : TupleVal ts) →
       dsimp only []
       rw [hre,
         decodeTuple_roundtrip ts vs (xs ++ [partOf t v]) ys (off + t.headSize) hoff'
-          (E + (partOf t v).tailSize) hE' rest hwf' hb']
+          (E + (partOf t v).tailSize) hE' rest (hre ▸ hwf) (hre ▸ hb)]
       dsimp only []
       simp only [tailSizes, Nat.add_assoc]
       rfl
@@ -254,37 +207,26 @@ theorem decode_roundtrip (t : Ty) (v : t.Val)
       have hdec : decodeUint (encodeUint n ++ rest) = some n :=
         decodeUint_append n rest
           (Nat.lt_of_lt_of_le hn (Nat.pow_le_pow_right (n := 2) (by decide) hle))
-      simp only [encode, put, decode, toList_putUint]
-      rw [hdec]
-      dsimp only []
-      rw [dif_pos hn]
-      simp [length_encodeUint]
+      grind [encode, put, decode, toList_putUint, length_encodeUint]
   | int m =>
       obtain ⟨i, hi⟩ := v
       have h0 : 0 < m.bits := by unfold Width.bits; omega
       have hle : m.bits ≤ 256 := by unfold Width.bits; omega
       have hdec : decodeInt (encodeInt i ++ rest) = some i :=
         decodeInt_append h0 hle hi.1 hi.2 rest
-      simp only [encode, put, decode, toList_putInt]
-      rw [hdec]
-      dsimp only []
-      rw [dif_pos hi]
+      simp only [encode, put, decode, toList_putInt, hdec, dif_pos hi]
       simp [encodeInt, length_encodeUint]
   | bool =>
       simp only [encode, put, decode, toList_putBool]
-      rw [decodeBool_append v rest]
-      simp [encodeBool, length_encodeUint]
+      grind [decodeBool_append v rest, encodeBool, length_encodeUint]
   | address =>
       obtain ⟨bs, hbs⟩ := v
       have hdec : decodeAddress (encodeAddress bs ++ rest) = some bs :=
         decodeAddress_append bs rest hbs
       have hlen : (encodeAddress bs).length = 32 := by
         simp [encodeAddress, length_encodeUint]
-      simp only [encode, put, decode, toList_putAddress]
-      rw [hdec]
-      dsimp only []
-      rw [dif_pos hbs]
-      rw [show (encodeAddress bs ++ rest).drop 32 = rest from drop_append_of_length hlen, hlen]
+      simp only [encode, put, decode, toList_putAddress, hdec, dif_pos hbs, hlen,
+        drop_append_of_length]
   | bytesN m =>
       obtain ⟨bs, hbs⟩ := v
       have hle : m.bytes ≤ 32 := by unfold Width.bytes; omega
@@ -292,17 +234,12 @@ theorem decode_roundtrip (t : Ty) (v : t.Val)
         decodeBytesN_append hle hbs rest
       have hlen : (encodeBytesN bs).length = 32 :=
         length_encodeBytesN (by omega)
-      simp only [encode, put, decode, toList_putBytesN]
-      rw [hdec]
-      dsimp only []
-      rw [dif_pos hbs]
-      rw [show (encodeBytesN bs ++ rest).drop 32 = rest from drop_append_of_length hlen, hlen]
+      simp only [encode, put, decode, toList_putBytesN, hdec, dif_pos hbs, hlen,
+        drop_append_of_length]
   | bytes =>
       obtain ⟨bs, hlb⟩ := v
       have hr := decodeBytesPrefix_append (bs := bs) (rest := rest) hlb
-      simp only [encode, put, toList_putBytes]
-      rw [decode_bytes_pos hr]
-      rw [drop_append_of_length rfl]
+      simp only [encode, put, toList_putBytes, decode_bytes_pos hr, drop_append_of_length rfl]
   | string =>
       obtain ⟨s, hlb⟩ := v
       have hb2 : s.toUTF8.data.toList.length < 2 ^ 64 := by
@@ -312,16 +249,13 @@ theorem decode_roundtrip (t : Ty) (v : t.Val)
       have hus : String.fromUTF8? (s.toUTF8.data.toList).toByteArray = some s := by
         rw [dataToList_toByteArray]
         exact fromUTF8?_toUTF8 s
-      simp only [encode, put, toList_putString, encodeString]
-      rw [decode_string_pos hr hus]
-      rw [drop_append_of_length rfl]
+      simp only [encode, put, toList_putString, encodeString, decode_string_pos hr hus,
+        drop_append_of_length rfl]
   | array t =>
       obtain ⟨vs, hlk⟩ := v
       have hbT : (encodeParts (vs.map (partOf t)) ++ rest).length < 2 ^ 256 := by
-        have hb' := hb
         simp only [encode, put, toList_append, toList_putUint, List.length_append,
-          length_encodeUint] at hb'
-        simp only [encodeParts, List.length_append]
+          length_encodeUint, encodeParts] at hb ⊢
         omega
       have hlenH : headSizes (vs.map (partOf t)) = vs.length * t.headSize := by
         rw [headSizes_map_partOf_any t vs]
@@ -332,13 +266,11 @@ theorem decode_roundtrip (t : Ty) (v : t.Val)
       simp only [List.nil_append, List.append_nil, List.drop_zero] at hwalk
       have hheads : (encodeParts (vs.map (partOf t)) ++ rest).drop (vs.length * t.headSize) =
           encodeTails (vs.map (partOf t)) ++ rest := by
-        rw [encodeParts_unfold, List.append_assoc, ← hlenH,
-          drop_append_of_length (length_encodeHeads _ _)]
+        grind [encodeParts_unfold, List.append_assoc, length_encodeHeads, drop_append_of_length]
       have htails : (encodeParts (vs.map (partOf t)) ++ rest).drop
           (vs.length * t.headSize + tailSizes (vs.map (partOf t))) = rest := by
-        rw [encodeParts_unfold, ← List.drop_drop, List.append_assoc, ← hlenH]
-        rw [drop_append_of_length (length_encodeHeads _ _)]
-        rw [drop_append_of_length (length_encodeTails _)]
+        grind [encodeParts_unfold, List.append_assoc, length_encodeHeads, length_encodeTails,
+          drop_append_of_length, List.drop_drop]
       have hcnt : natAt (encodeUint vs.length ++ (encodeParts (vs.map (partOf t)) ++ rest)) 0 =
           some vs.length := by
         unfold encodeUint
@@ -355,18 +287,16 @@ theorem decode_roundtrip (t : Ty) (v : t.Val)
           rw [hcnt] at hk'
           obtain rfl := Option.some.inj hk'
           -- the length word is the value's own length, which its type bounds
-          rw [dif_pos hlk, ← List.drop_drop]
-          rw [show (encodeUint vs.length ++ (encodeParts (vs.map (partOf t)) ++ rest)).drop 32 =
-              encodeParts (vs.map (partOf t)) ++ rest from drop_append_of_length (length_encodeUint _)]
+          rw [dif_pos hlk, ← List.drop_drop,
+            show (encodeUint vs.length ++ (encodeParts (vs.map (partOf t)) ++ rest)).drop 32 =
+                encodeParts (vs.map (partOf t)) ++ rest from
+              drop_append_of_length (length_encodeUint _)]
           rw [hwalk]
-          dsimp only []
-          rw [htails, List.length_append, length_encodeUint, length_encodeParts, hlenH]
+          grind [List.length_append, length_encodeUint, length_encodeParts]
   | fixedArray t n _ =>
       obtain ⟨vs, hvs⟩ := v
       have hbT : (encodeParts (vs.map (partOf t)) ++ rest).length < 2 ^ 256 := by
-        have hb' := hb
-        simp only [encode, put, List.length_append] at hb'
-        simp only [encodeParts, List.length_append]
+        simp only [encode, put, List.length_append, encodeParts] at hb ⊢
         omega
       have hlenH : headSizes (vs.map (partOf t)) = n * t.headSize := by
         rw [headSizes_map_partOf_any t vs, hvs]
@@ -377,24 +307,18 @@ theorem decode_roundtrip (t : Ty) (v : t.Val)
       simp only [List.nil_append, List.append_nil, List.drop_zero] at hwalk
       have hheads : (encodeParts (vs.map (partOf t)) ++ rest).drop (n * t.headSize) =
           encodeTails (vs.map (partOf t)) ++ rest := by
-        rw [encodeParts_unfold, List.append_assoc, ← hlenH,
-          drop_append_of_length (length_encodeHeads _ _)]
+        grind [encodeParts_unfold, List.append_assoc, length_encodeHeads, drop_append_of_length]
       have htails : (encodeParts (vs.map (partOf t)) ++ rest).drop
           (n * t.headSize + tailSizes (vs.map (partOf t))) = rest := by
-        rw [encodeParts_unfold, ← List.drop_drop, List.append_assoc, ← hlenH]
-        rw [drop_append_of_length (length_encodeHeads _ _)]
-        rw [drop_append_of_length (length_encodeTails _)]
+        grind [encodeParts_unfold, List.append_assoc, length_encodeHeads, length_encodeTails,
+          drop_append_of_length, List.drop_drop]
       simp only [encode, put, decode]
-      rw [← encodeParts]
-      rw [hwalk]
-      dsimp only []
-      rw [htails, length_encodeParts, hlenH]
+      rw [← encodeParts, hwalk]
+      grind [length_encodeParts]
   | tuple head tail =>
       obtain ⟨vh, vtail⟩ := v
       have hbT : (encodeParts (partOf head vh :: partsOfTuple tail vtail) ++ rest).length < 2 ^ 256 := by
-        have hb' := hb
-        simp only [encode, put, List.length_append] at hb'
-        simp only [encodeParts, List.length_append]
+        simp only [encode, put, List.length_append, encodeParts] at hb ⊢
         omega
       have hlenH : headSizes (partOf head vh :: partsOfTuple tail vtail) =
           head.headSize + headSizeSum tail := by
@@ -410,9 +334,9 @@ theorem decode_roundtrip (t : Ty) (v : t.Val)
       simp only [List.nil_append, List.drop_zero] at hwalkHead
       have hE' : (head.headSize + headSizeSum tail) + (partOf head vh).tailSize =
           tailOffset ([partOf head vh] ++ partsOfTuple tail vtail ++ []) 1 := by
-        have h := tailOffset_snoc (partOf head vh) [] (partsOfTuple tail vtail)
-          (head.headSize + headSizeSum tail) hE
-        simpa [List.length_append, List.append_assoc] using h
+        simpa [List.length_append, List.append_assoc] using
+          tailOffset_snoc (partOf head vh) [] (partsOfTuple tail vtail)
+            (head.headSize + headSizeSum tail) hE
       have hwfTail : WF ([partOf head vh] ++ partsOfTuple tail vtail ++ []) := by
         simpa [List.append_assoc] using hwf
       have hbTail : (encodeParts ([partOf head vh] ++ partsOfTuple tail vtail ++ []) ++ rest).length < 2 ^ 256 := by
@@ -437,16 +361,13 @@ theorem decode_roundtrip (t : Ty) (v : t.Val)
       have hheads : (encodeParts (partOf head vh :: partsOfTuple tail vtail) ++ rest).drop
           (head.headSize + headSizeSum tail) =
           encodeTails (partOf head vh :: partsOfTuple tail vtail) ++ rest := by
-        rw [encodeParts_unfold, List.append_assoc, ← hlenH,
-          drop_append_of_length (length_encodeHeads _ _)]
+        grind [encodeParts_unfold, List.append_assoc, length_encodeHeads, drop_append_of_length]
       have htails : (encodeParts (partOf head vh :: partsOfTuple tail vtail) ++ rest).drop
           (head.headSize + headSizeSum tail + tailSizes (partOf head vh :: partsOfTuple tail vtail)) = rest := by
-        rw [encodeParts_unfold, ← List.drop_drop, List.append_assoc, ← hlenH]
-        rw [drop_append_of_length (length_encodeHeads _ _)]
-        rw [drop_append_of_length (length_encodeTails _)]
+        grind [encodeParts_unfold, List.append_assoc, length_encodeHeads, length_encodeTails,
+          drop_append_of_length, List.drop_drop]
       simp only [encode, put, decode]
-      rw [← encodeParts]
-      rw [hwalkHead]
+      rw [← encodeParts, hwalkHead]
       simp
       rw [hwalkTail']
       dsimp only []
@@ -456,8 +377,7 @@ theorem decode_roundtrip (t : Ty) (v : t.Val)
             tailSizes (partOf head vh :: partsOfTuple tail vtail) := by
         simp [tailSizes]
         omega
-      rw [hoffset]
-      rw [htails, length_encodeParts, hlenH]
+      grind [length_encodeParts]
 termination_by 8 * sizeOf t
 end
 

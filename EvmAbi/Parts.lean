@@ -66,40 +66,14 @@ def Equiv (p q : Part) : Prop :=
 /-- Equivalent parts have equal head sizes. -/
 theorem headSize_eq_of_equiv {p q : Part} (h : Equiv p q) : headSize p = headSize q := by
   rcases h with ⟨hdyn, hhead, htail, hs1, hs2⟩
-  cases p with
-  | mk ph pt pd =>
-    cases q with
-    | mk qh qt qd =>
-      cases pd with
-      | false =>
-        cases qd with
-        | false =>
-            change ph.size = qh.size
-            exact hs1
-        | true => exact False.elim (Bool.noConfusion hdyn)
-      | true =>
-        cases qd with
-        | false => exact False.elim (Bool.noConfusion hdyn)
-        | true => simp [headSize]
+  obtain ⟨ph, pt, pd⟩ := p; obtain ⟨qh, qt, qd⟩ := q
+  cases pd <;> cases qd <;> grind [Equiv, headSize]
 
 /-- Equivalent parts have equal tail sizes. -/
 theorem tailSize_eq_of_equiv {p q : Part} (h : Equiv p q) : tailSize p = tailSize q := by
   rcases h with ⟨hdyn, hhead, htail, hs1, hs2⟩
-  cases p with
-  | mk ph pt pd =>
-    cases q with
-    | mk qh qt qd =>
-      cases pd with
-      | false =>
-        cases qd with
-        | false => simp [tailSize]
-        | true => exact False.elim (Bool.noConfusion hdyn)
-      | true =>
-        cases qd with
-        | false => exact False.elim (Bool.noConfusion hdyn)
-        | true =>
-            change pt.size = qt.size
-            exact hs2
+  obtain ⟨ph, pt, pd⟩ := p; obtain ⟨qh, qt, qd⟩ := q
+  cases pd <;> cases qd <;> grind [Equiv, tailSize]
 
 end Part
 
@@ -175,11 +149,12 @@ theorem encodeTails_cons_dynamic (head tail : Builder) (ys : List Part) :
 @[simp] theorem length_putHeads (acc : Nat) (ps : List Part) :
     ((putHeads acc ps).toList).length = headSizes ps := by
   induction ps generalizing acc with
-  | nil => rfl
+  | nil => grind [putHeads, headSizes, Builder.toList_empty]
   | cons p ps ih =>
       obtain ⟨head, tail, isDyn⟩ := p
       cases isDyn <;>
-        simp [putHeads, headSizes, Part.headSize, ih]
+        grind [putHeads, headSizes, Part.headSize, Builder.toList_append,
+          Builder.size_eq_length_toList, length_encodeUint, toList_putUint]
 
 @[simp] theorem length_encodeHeads (acc : Nat) (ps : List Part) :
     (encodeHeads acc ps).length = headSizes ps := length_putHeads acc ps
@@ -187,10 +162,12 @@ theorem encodeTails_cons_dynamic (head tail : Builder) (ys : List Part) :
 @[simp] theorem length_putTails (ps : List Part) :
     ((putTails ps).toList).length = tailSizes ps := by
   induction ps with
-  | nil => rfl
+  | nil => grind [putTails, tailSizes, Builder.toList_empty]
   | cons p ps ih =>
       obtain ⟨head, tail, isDyn⟩ := p
-      cases isDyn <;> simp [putTails, tailSizes, Part.tailSize, ih]
+      cases isDyn <;>
+        grind [putTails, tailSizes, Part.tailSize, Builder.toList_append,
+          Builder.size_eq_length_toList]
 
 @[simp] theorem length_encodeTails (ps : List Part) :
     (encodeTails ps).length = tailSizes ps := length_putTails ps
@@ -202,14 +179,14 @@ theorem length_encodeParts (ps : List Part) :
 theorem headSizes_append (xs ys : List Part) :
     headSizes (xs ++ ys) = headSizes xs + headSizes ys := by
   induction xs with
-  | nil => simp [headSizes]
-  | cons x xs ih => simp [List.cons_append, headSizes, ih, Nat.add_assoc]
+  | nil => grind [headSizes]
+  | cons x xs ih => grind [headSizes]
 
 theorem tailSizes_append (xs ys : List Part) :
     tailSizes (xs ++ ys) = tailSizes xs + tailSizes ys := by
   induction xs with
-  | nil => simp [tailSizes]
-  | cons x xs ih => simp [List.cons_append, tailSizes, ih, Nat.add_assoc]
+  | nil => grind [tailSizes]
+  | cons x xs ih => grind [tailSizes]
 
 /-! ## append lemmas for the encoders -/
 
@@ -221,26 +198,21 @@ materialization, which is all the codec ever uses. -/
 theorem encodeHeads_append (acc : Nat) (xs ys : List Part) :
     encodeHeads acc (xs ++ ys) = encodeHeads acc xs ++ encodeHeads (acc + tailSizes xs) ys := by
   induction xs generalizing acc with
-  | nil => simp [encodeHeads, putHeads, tailSizes]
+  | nil => grind [encodeHeads, putHeads, tailSizes, Builder.toList_empty]
   | cons x xs ih =>
       obtain ⟨head, tail, isDyn⟩ := x
-      cases isDyn
-      · rw [List.cons_append, encodeHeads_cons_static, encodeHeads_cons_static, ih,
-          List.append_assoc]
-        simp [tailSizes, Part.tailSize]
-      · rw [List.cons_append, encodeHeads_cons_dynamic, encodeHeads_cons_dynamic, ih,
-          List.append_assoc]
-        simp [tailSizes, Part.tailSize, Nat.add_assoc]
+      cases isDyn <;>
+        grind [encodeHeads, encodeHeads_cons_static, encodeHeads_cons_dynamic,
+          tailSizes, Part.tailSize, List.append_assoc, Builder.size_eq_length_toList]
 
 theorem encodeTails_append (xs ys : List Part) :
     encodeTails (xs ++ ys) = encodeTails xs ++ encodeTails ys := by
   induction xs with
-  | nil => simp [encodeTails, putTails]
+  | nil => grind [encodeTails, putTails, Builder.toList_empty]
   | cons x xs ih =>
       obtain ⟨head, tail, isDyn⟩ := x
-      cases isDyn
-      · rw [List.cons_append, encodeTails_cons_static, encodeTails_cons_static, ih]
-      · rw [List.cons_append, encodeTails_cons_dynamic, encodeTails_cons_dynamic, ih,
+      cases isDyn <;>
+        grind [encodeTails, encodeTails_cons_static, encodeTails_cons_dynamic,
           List.append_assoc]
 
 /-! ## well-formedness -/
@@ -251,23 +223,24 @@ def WF (ps : List Part) : Prop :=
 
 theorem dvd_headSizes (hwf : WF ps) : 32 ∣ headSizes ps := by
   induction ps with
-  | nil => exact ⟨0, rfl⟩
+  | nil => grind [headSizes]
   | cons p ps ih =>
       have hp := hwf p List.mem_cons_self
       have hih := ih (fun q hq => hwf q (List.mem_cons_of_mem p hq))
       obtain ⟨head, tail, isDyn⟩ := p
-      have hp1 : 32 ∣ head.toList.length := hp.1
-      cases isDyn <;> simp [headSizes, Part.headSize] <;> omega
+      cases isDyn <;>
+        grind [headSizes, Part.headSize, WF, Builder.size_eq_length_toList,
+          Builder.toList_append]
 
 theorem dvd_tailSizes (hwf : WF ps) : 32 ∣ tailSizes ps := by
   induction ps with
-  | nil => exact ⟨0, rfl⟩
+  | nil => grind [tailSizes]
   | cons p ps ih =>
       have hp := hwf p List.mem_cons_self
       have hih := ih (fun q hq => hwf q (List.mem_cons_of_mem p hq))
       obtain ⟨head, tail, isDyn⟩ := p
-      have hp2 : 32 ∣ tail.toList.length := hp.2
-      cases isDyn <;> simp [tailSizes, Part.tailSize] <;> omega
+      cases isDyn <;>
+        grind [tailSizes, Part.tailSize, WF, Builder.size_eq_length_toList]
 
 theorem dvd_length_encodeParts (hwf : WF ps) : 32 ∣ (encodeParts ps).length := by
   rw [length_encodeParts]
@@ -294,9 +267,8 @@ theorem drop_tailOffset_append (xs : List Part) (head tail : Builder) (ys : List
     (encodeParts (xs ++ ⟨head, tail, true⟩ :: ys)).drop
       (tailOffset (xs ++ ⟨head, tail, true⟩ :: ys) xs.length) =
     tail.toList ++ encodeTails ys := by
-  rw [encodeParts_unfold, tailOffset, take_append_of_length rfl, ← List.drop_drop,
-    drop_append_of_length (length_encodeHeads _ _), encodeTails_append,
-    drop_append_of_length (length_encodeTails xs), encodeTails_cons_dynamic]
+  grind [encodeParts_unfold, tailOffset, take_append_of_length, drop_append_of_length,
+    encodeTails_append, length_encodeHeads, length_encodeTails, encodeTails_cons_dynamic]
 
 /-- **Fundamental theorem, static case**: a static part's head is found at
 its head offset. -/

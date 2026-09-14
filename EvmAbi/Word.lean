@@ -38,21 +38,14 @@ def natAt (buf : List UInt8) (i : Nat) : Option Nat := (wordAt buf i).map UInt25
 theorem wordAt_append (buf rest : List UInt8) (w : UInt256) (i : Nat)
     (h : buf.length = 32 * i) :
     wordAt (buf ++ (bytesOfWord w ++ rest)) i = some w := by
-  have hdr : (buf ++ (bytesOfWord w ++ rest)).drop (32 * i) = bytesOfWord w ++ rest := by
-    rw [← h]
-    exact drop_append_of_length rfl
-  have htake : (bytesOfWord w ++ rest).take 32 = bytesOfWord w :=
-    take_append_of_length (length_bytesOfWord w)
-  unfold wordAt
-  rw [hdr, htake, if_pos (length_bytesOfWord w)]
-  show some (UInt256.ofBEBytes (UInt256.toBEBytes w)) = some w
-  rw [UInt256.ofBEBytes_toBEBytes]
+  grind [wordAt, bytesOfWord, drop_append_of_length, take_append_of_length, length_bytesOfWord,
+    UInt256.ofBEBytes_toBEBytes]
 
 /-- `natAt` variant of the read-back theorem. -/
 theorem natAt_append (buf rest : List UInt8) (w : UInt256) (i : Nat)
     (h : buf.length = 32 * i) :
     natAt (buf ++ (bytesOfWord w ++ rest)) i = some w.toNat := by
-  simp [natAt, wordAt_append buf rest w i h]
+  grind [natAt, wordAt_append]
 
 /-- Anything `natAt` reads back is below `2 ^ 256`: it came out of a
 32-byte word. -/
@@ -60,11 +53,10 @@ theorem natAt_lt {buf : List UInt8} {i n : Nat} (h : natAt buf i = some n) :
     n < 2 ^ 256 := by
   simp only [natAt] at h
   cases hw : wordAt buf i with
-  | none => simp only [hw, Option.map_none] at h; contradiction
+  | none => grind
   | some w =>
-      simp only [hw, Option.map_some, Option.some.injEq] at h
-      rw [← h]
-      exact UInt256.toNat_lt w
+      rw [hw, Option.map_some, Option.some.injEq] at h
+      exact h ▸ UInt256.toNat_lt w
 
 /-- `Ty.Val` bounds its payload lengths at `2 ^ 64`; the word layer works at
 `2 ^ 256` (`natAt_lt`).  This is the step from the value bound to the word
@@ -130,25 +122,8 @@ and measures as no change. -/
 /-- **Bridge**: the indexed read is the list read at the same position. -/
 theorem natAtBA_eq (ba : ByteArray) (off : Nat) :
     natAtBA ba off = natAt (ba.data.toList.drop off) 0 := by
-  have hlen : ((ba.data.toList.drop off).take 32).length = min 32 (ba.size - off) := by
-    rw [List.length_take, List.length_drop, ← ByteArray.size_eq_toList_length]
-  simp only [natAtBA, natAt, wordAt, Nat.mul_zero, List.drop_zero, hlen]
-  by_cases h : off + 32 ≤ ba.size
-  · rw [if_pos h, if_pos (by omega : min 32 (ba.size - off) = 32)]
-    have h32 : ((ba.data.toList.drop off).take 32).length = UInt256.byteSize := by
-      rw [hlen]; show min 32 (ba.size - off) = 32; omega
-    -- exactly `byteSize` bytes fit, so nothing truncates on the way in
-    have hnt : (UInt256.ofBEBytes ((ba.data.toList.drop off).take 32)).toNat =
-        decodeBEU ((ba.data.toList.drop off).take 32) := by
-      show (UInt256.ofNat (decodeBEU _)).toNat = _
-      rw [UInt256.toNat_ofNat]
-      apply Nat.mod_eq_of_lt
-      have hb := decodeBEU_lt ((ba.data.toList.drop off).take 32)
-      rwa [h32] at hb
-    simp only [Option.map_some, Option.some.injEq, decodeBEBytesFrom]
-    exact hnt.symm
-  · rw [if_neg h, if_neg (by omega : ¬ min 32 (ba.size - off) = 32)]
-    rfl
+  grind [natAtBA, natAt, wordAt, decodeBEBytesFrom, UInt256.toNat_ofBEBytes_of_length,
+    ByteArray.size_eq_toList_length]
 
 /-- The word at `off`, kept as limbs.  Same guard as `natAtBA`; what differs
 is that no `Nat` is built — that is the whole point of the `UInt256`-valued
@@ -160,10 +135,7 @@ def wordAtBA (ba : ByteArray) (off : Nat) : Option UInt256 :=
 `natAtBA` transports. -/
 theorem map_toNat_wordAtBA (ba : ByteArray) (off : Nat) :
     (wordAtBA ba off).map UInt256.toNat = natAtBA ba off := by
-  unfold wordAtBA natAtBA
-  by_cases h : off + 32 ≤ ba.size
-  · rw [dif_pos h, if_pos h, Option.map_some, UInt256.toNat_ofBEByteArrayAt ba off h]
-  · rw [dif_neg h, if_neg h, Option.map_none]
+  grind [wordAtBA, natAtBA, UInt256.toNat_ofBEByteArrayAt]
 
 /-- At width 256 and above the bound on a `uintM` is vacuous — every word
 satisfies it.  Worth having as a lemma rather than a proof term at each

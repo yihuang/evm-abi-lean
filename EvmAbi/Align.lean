@@ -17,14 +17,11 @@ def Aligned (n : Nat) : Prop := 32 ∣ n
 theorem aligned_mul (k : Nat) : Aligned (32 * k) := ⟨k, rfl⟩
 
 theorem aligned_add {a b : Nat} (ha : Aligned a) (hb : Aligned b) : Aligned (a + b) := by
-  obtain ⟨ka, rfl⟩ := ha
-  obtain ⟨kb, rfl⟩ := hb
-  exact ⟨ka + kb, by omega⟩
+  grind [Aligned]
 
 /-- The length of an append of aligned buffers is aligned. -/
 theorem aligned_length_append {xs ys : List α} (hx : Aligned xs.length) (hy : Aligned ys.length) :
     Aligned (xs ++ ys).length := by
-  rw [List.length_append]
-  exact aligned_add hx hy
+  grind [Aligned, aligned_add, List.length_append]
 
 end EvmAbi

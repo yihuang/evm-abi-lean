@@ -71,15 +71,8 @@ theorem decodeInt_encodeInt {M : Nat} (hM0 : 0 < M) (hM : M ≤ 256)
     decodeInt (encodeInt i) = some i := by
   obtain ⟨hlb, hub⟩ := intM_bounds_lt_255 (M := M) hM0 hM hl hu
   by_cases hi : 0 ≤ i
-  · have hn : i.toNat < 2 ^ 256 := by omega
-    rw [encodeInt, if_pos hi, decodeInt, decodeUint_encodeUint hn, Option.map_some,
-      if_pos (show i.toNat < 2 ^ 255 by omega), Int.toNat_of_nonneg hi]
-  · have hn1 : 2 ^ 256 - (-i).toNat ≥ 2 ^ 255 ∧ 2 ^ 256 - (-i).toNat < 2 ^ 256 := by
-      omega
-    rw [encodeInt, if_neg hi, decodeInt, decodeUint_encodeUint hn1.2, Option.map_some,
-      if_neg (show ¬ 2 ^ 256 - (-i).toNat < 2 ^ 255 by omega)]
-    have heq : ((2 ^ 256 - (-i).toNat : Nat) : Int) - 2 ^ 256 = i := by omega
-    rw [heq]
+  · grind [encodeInt, decodeInt, decodeUint_encodeUint, Int.toNat_of_nonneg]
+  · grind [encodeInt, decodeInt, decodeUint_encodeUint]
 
 /-! ## bool -/
 
@@ -113,7 +106,7 @@ to 32 bytes. -/
 def encodeBytesN (bs : List UInt8) : List UInt8 := bs ++ List.replicate (32 - bs.length) 0
 
 theorem length_encodeBytesN (h : bs.length ≤ 32) : (encodeBytesN bs).length = 32 := by
-  simp [encodeBytesN]; omega
+  grind [encodeBytesN]
 
 /-- Prefix-tolerant `bytesN` decoder: reads the 32-byte word at the front of
 the buffer; the payload is its first `n` bytes and the rest of the *word*
@@ -128,12 +121,7 @@ def decodeBytesN (n : Nat) (buf : List UInt8) : Option (List UInt8) :=
 theorem decodeBytesN_length {n : Nat} {buf bs : List UInt8}
     (h : decodeBytesN n buf = some bs) : bs.length = n := by
   unfold decodeBytesN at h
-  split at h
-  · next hc =>
-      rw [Option.some.injEq] at h
-      subst h
-      exact hc.1
-  · contradiction
+  grind
 
 /-! ## Builder form (roadmap node 9)
 
@@ -172,11 +160,8 @@ def putUint (n : Nat) : Builder :=
   if n < 2 ^ 64 then Builder.chunk (word32Small n) else Builder.chunk (encodeBEBytes 32 n)
 
 @[simp] theorem toList_putUint (n : Nat) : (putUint n).toList = encodeUint n := by
-  rw [encodeUint_eq, putUint]
-  split
-  · rename_i h
-    rw [Builder.toList_chunk, data_toList_word32Small h]
-  · rw [toList_chunk_encodeBEBytes]
+  grind [encodeUint_eq, putUint, Builder.toList_chunk, data_toList_word32Small,
+    toList_chunk_encodeBEBytes]
 
 
 /-- Write an `intM` word (two's complement). -/

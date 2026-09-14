@@ -48,9 +48,7 @@ theorem decodeElem_static (t : Ty) (head tails : List UInt8) (E : Nat)
     (decodeElem t).run head tails E = (match decode t head with
       | some (v, _, rest) => some ⟨v, rest, tails, E⟩
       | none => none) := by
-  unfold decodeElem
-  rw [h]
-  rfl
+  grind [decodeElem]
 
 /-- `decodeElem` of a dynamic type checks the offset word against
 the frontier. -/
@@ -63,9 +61,7 @@ theorem decodeElem_dynamic (t : Ty) (head tails : List UInt8) (E : Nat)
           | some (v, n, rest) => some ⟨v, head.drop 32, rest, E + n⟩
           | none => none
         else none) := by
-  unfold decodeElem
-  rw [h]
-  rfl
+  grind [decodeElem]
 
 /- ### word atoms -/
 
@@ -81,10 +77,7 @@ theorem decode_uint_sound (m : Width) (v : Ty.Val (.uint m)) (buf rest : List UI
       simp only [hdu] at h
       by_cases hx : x < 2 ^ m.bits
       · rw [dif_pos hx] at h
-        have hpair := Option.some.inj h
-        have hxn : x = n := congrArg (fun p => p.1.val) hpair
-        have hk : 32 = k := congrArg (fun p => p.2.1) hpair
-        have hrest : buf.drop 32 = rest := congrArg (fun p => p.2.2) hpair
+        obtain ⟨hxn, hk, hrest⟩ : x = n ∧ 32 = k ∧ buf.drop 32 = rest := by grind
         subst hxn
         refine ⟨?_, ?_⟩
         · simp only [encode, put, toList_putUint]
@@ -105,10 +98,7 @@ theorem decode_int_sound (m : Width) (v : Ty.Val (.int m)) (buf rest : List UInt
       simp only [hdi] at h
       by_cases hx : -((2 ^ (m.bits - 1) : Nat) : Int) ≤ x ∧ x < ((2 ^ (m.bits - 1) : Nat) : Int)
       · rw [dif_pos hx] at h
-        have hpair := Option.some.inj h
-        have hxi : x = i := congrArg (fun p => p.1.val) hpair
-        have hk : 32 = k := congrArg (fun p => p.2.1) hpair
-        have hrest : buf.drop 32 = rest := congrArg (fun p => p.2.2) hpair
+        obtain ⟨hxi, hk, hrest⟩ : x = i ∧ 32 = k ∧ buf.drop 32 = rest := by grind
         subst hxi
         have hword : ∃ w, decodeUint buf = some w ∧ encodeInt x = encodeUint w := by
           cases hdw : decodeUint buf with
@@ -133,10 +123,7 @@ theorem decode_bool_sound (v : Ty.Val .bool) (buf rest : List UInt8) (k : Nat)
   | none => simp only [hdb] at h; contradiction
   | some b =>
       simp only [hdb] at h
-      have hpair := Option.some.inj h
-      have hvb : b = v := congrArg Prod.fst hpair
-      have hk : 32 = k := congrArg (fun p => p.2.1) hpair
-      have hrest : buf.drop 32 = rest := congrArg (fun p => p.2.2) hpair
+      obtain ⟨hvb, hk, hrest⟩ : b = v ∧ 32 = k ∧ buf.drop 32 = rest := by grind
       subst hvb
       have hdu : decodeUint buf = some (if b then 1 else 0) :=
         (decodeBool_eq_some_iff buf b).mp hdb
@@ -158,10 +145,7 @@ theorem decode_address_sound (v : Ty.Val .address) (buf rest : List UInt8) (k : 
       simp only [hda] at h
       by_cases hx : x.length = 20
       · rw [dif_pos hx] at h
-        have hpair := Option.some.inj h
-        have hxs : x = bs := congrArg (fun p => p.1.val) hpair
-        have hk : 32 = k := congrArg (fun p => p.2.1) hpair
-        have hrest : buf.drop 32 = rest := congrArg (fun p => p.2.2) hpair
+        obtain ⟨hxs, hk, hrest⟩ : x = bs ∧ 32 = k ∧ buf.drop 32 = rest := by grind
         subst hxs
         obtain ⟨n, hdu, hn, hx'⟩ := decodeAddress_spec hda
         have hdecode : decodeBEU x = n := by
@@ -174,8 +158,7 @@ theorem decode_address_sound (v : Ty.Val .address) (buf rest : List UInt8) (k : 
             List.take_append_drop 32 buf]
         · rw [← hk]
           simp only [encode, put, toList_putAddress, encodeAddress]
-          rw [hdecode]
-          simp [encodeUint, length_bytesOfWord]
+          rw [hdecode]; simp [encodeUint, length_bytesOfWord]
       · rw [dif_neg hx] at h; contradiction
 
 /-- `decode` at `bytesN` reads a canonical `bytesN` word. -/
@@ -192,10 +175,7 @@ theorem decode_bytesN_sound (m : Width) (v : Ty.Val (.bytesN m))
       simp only [hdb] at h
       by_cases hx : xs.length = m.bytes
       · rw [dif_pos hx] at h
-        have hpair := Option.some.inj h
-        have hxs : xs = bs := congrArg (fun p => p.1.val) hpair
-        have hk : 32 = k := congrArg (fun p => p.2.1) hpair
-        have hrest : buf.drop 32 = rest := congrArg (fun p => p.2.2) hpair
+        obtain ⟨hxs, hk, hrest⟩ : xs = bs ∧ 32 = k ∧ buf.drop 32 = rest := by grind
         subst hxs
         have htake := buf_take_32_eq_encodeBytesN_of_decodeBytesN hdb
         refine ⟨?_, ?_⟩
@@ -214,9 +194,7 @@ theorem decode_bytes_sound (v : Ty.Val .bytes) (buf rest : List UInt8) (k : Nat)
   simp only [decode] at h
   split at h
   · next xs n hp =>
-      injection (Option.some.inj h) with hxs' hrest'
-      injection hxs' with hxs
-      injection hrest' with hk hrest
+      obtain ⟨hxs, hk, hrest⟩ : xs = bs ∧ n = k ∧ buf.drop n = rest := by grind
       subst hxs
       obtain ⟨htake, hlen⟩ := take_eq_encodeBytes_of_decodeBytesPrefix buf xs n hp
       refine ⟨?_, ?_⟩
@@ -236,14 +214,11 @@ theorem decode_string_sound (v : Ty.Val .string) (buf rest : List UInt8) (k : Na
   · next xs n hp =>
       split at h
       · next t hus =>
-          injection (Option.some.inj h) with ht' hrest'
-          injection ht' with ht
-          injection hrest' with hk hrest
+          obtain ⟨ht, hk, hrest⟩ : t = s ∧ n = k ∧ buf.drop n = rest := by grind
           subst ht
           obtain ⟨htake, hlen⟩ := take_eq_encodeBytes_of_decodeBytesPrefix buf xs n hp
           have hxs : xs = t.toUTF8.data.toList := by
-            have hutf : t.toUTF8 = xs.toByteArray := toUTF8_of_fromUTF8? hus
-            rw [hutf, List.data_toByteArray]
+            rw [toUTF8_of_fromUTF8? hus, List.data_toByteArray]
           refine ⟨?_, ?_⟩
           · simp only [encode, put, toList_putString, encodeString]
             rw [← hrest, ← hxs, ← htake, List.take_append_drop n buf]
@@ -296,8 +271,7 @@ theorem decode_sound_tuple_aux
       rw [← hd1, hd0, List.drop_drop]
     have htailRest : buf.drop (head.headSize + headSizeSum tail) =
         encodeTails (partOf head v' :: partsOfTuple tail vs') ++ rest := by
-      rw [htail, hsnd.2.1, hrest]
-      rw [partOf_dynamic head v' hsf, encodeTails_cons_dynamic]
+      rw [htail, hsnd.2.1, hrest, partOf_dynamic head v' hsf, encodeTails_cons_dynamic]
       simp [List.append_assoc, encode]
     have hinner : encodeHeads (head.headSize + headSizeSum tail)
           (partOf head v' :: partsOfTuple tail vs') ++
@@ -328,8 +302,7 @@ theorem decode_sound_tuple_aux
       rw [← hd1, hd0, List.drop_drop]
     have htailRest : buf.drop (head.headSize + headSizeSum tail) =
         encodeTails (partOf head v' :: partsOfTuple tail vs') ++ rest := by
-      rw [← htl0, hsnd.2.1, hrest]
-      rw [partOf_static head v' hst, encodeTails_cons_static]
+      rw [← htl0, hsnd.2.1, hrest, partOf_static head v' hst, encodeTails_cons_static]
     have hinner : encodeHeads (head.headSize + headSizeSum tail)
           (partOf head v' :: partsOfTuple tail vs') ++
         (encodeTails (partOf head v' :: partsOfTuple tail vs') ++ rest) = buf := by
@@ -359,11 +332,8 @@ theorem decodeElem_sound_static (t : Ty) (v : t.Val)
   | some p =>
       obtain ⟨v', k', rest'⟩ := p
       simp only [ht] at h
-      have hpair := Option.some.inj h
-      have hv' : v' = v := congrArg (fun p => p.val) hpair
-      have hhd : rest' = head' := congrArg (fun p => p.head) hpair
-      have htl : tails = tails' := congrArg (fun p => p.tails) hpair
-      have hE' : E = E' := congrArg (fun p => p.frontier) hpair
+      obtain ⟨hv', hhd, htl, hE'⟩ : v' = v ∧ rest' = head' ∧ tails = tails' ∧ E = E' := by
+        grind
       subst hv'
       rw [← hhd, ← htl, ← hE']
       constructor
@@ -391,11 +361,8 @@ theorem decodeElem_sound_dynamic (t : Ty) (v : t.Val)
         | some p =>
             obtain ⟨v', k', rest'⟩ := p
             simp only [ht] at h
-            have hpair := Option.some.inj h
-            have hv' : v' = v := congrArg (fun p => p.val) hpair
-            have hhd : head.drop 32 = head' := congrArg (fun p => p.head) hpair
-            have hrt : rest' = tails' := congrArg (fun p => p.tails) hpair
-            have hE' : E + k' = E' := congrArg (fun p => p.frontier) hpair
+            obtain ⟨hv', hhd, hrt, hE'⟩ : v' = v ∧ head.drop 32 = head' ∧ rest' = tails' ∧
+                E + k' = E' := by grind
             have hsnd := decode_sound t v' tails rest' k' ht
             rw [hv'] at hsnd
             have hword : head.take 32 = encodeUint E :=
@@ -424,14 +391,11 @@ theorem decodeElems_sound (t : Ty) (vs : List t.Val) (k : Nat)
       subst hk
       change (decodeElems t 0).run head tails E = some ⟨⟨[], rfl⟩, head', tails', E'⟩ at h
       simp only [decodeElems, Get2.pure_run] at h
-      have hhd : head = head' := congrArg (fun p => p.head) (Option.some.inj h)
-      have htl : tails = tails' := congrArg (fun p => p.tails) (Option.some.inj h)
-      have hE' : E = E' := congrArg (fun p => p.frontier) (Option.some.inj h)
+      obtain ⟨hhd, htl, hE'⟩ : head = head' ∧ tails = tails' ∧ E = E' := by grind
       rw [hhd, htl, ← hE']
       simp [encodeHeads, encodeTails, putHeads, putTails, tailSizes, Builder.toList_empty]
   | cons w ws ih =>
-      have hk' : k = ws.length + 1 := by rw [← hk, List.length_cons]
-      subst hk'
+      obtain rfl : k = ws.length + 1 := by rw [← hk, List.length_cons]
       simp only [List.map_cons, decodeElems, Get2.bind_run, Get2.pure_run] at h ⊢
       cases he : (decodeElem t).run head tails E with
       | none => simp only [he] at h; contradiction
@@ -443,14 +407,10 @@ theorem decodeElems_sound (t : Ty) (vs : List t.Val) (k : Nat)
           | some q =>
               obtain ⟨⟨ws', hws'⟩, head1, tails1, E1⟩ := q
               simp only [hi] at h
-              have hpair := Option.some.inj h
-              have hvs' : v :: ws' = w :: ws := congrArg (fun p => p.val.val) hpair
-              have hhd1 : head1 = head' := congrArg (fun p => p.head) hpair
-              have htl1 : tails1 = tails' := congrArg (fun p => p.tails) hpair
-              injection hvs' with hv hws''
+              obtain ⟨hv, hws'', hhd1, htl1, hE1⟩ : v = w ∧ ws' = ws ∧ head1 = head' ∧
+                  tails1 = tails' ∧ E1 = E' := by grind
               subst hv
               subst hws''
-              have hE1 : E1 = E' := congrArg (fun p => p.frontier) hpair
               rw [hhd1, htl1, hE1] at hi
               have hih : head0 = encodeHeads E0 (ws'.map (partOf t)) ++ head' ∧
                   tails0 = encodeTails (ws'.map (partOf t)) ++ tails' ∧
@@ -461,25 +421,22 @@ theorem decodeElems_sound (t : Ty) (vs : List t.Val) (k : Nat)
                 obtain ⟨hhead, htail, hE0'⟩ :=
                   decodeElem_sound_dynamic t v head tails E hsf he
                 refine ⟨?_, ?_, ?_⟩
-                · rw [hhead, hih.1, hE0']
-                  rw [partOf_dynamic t v hsf, encodeHeads_cons_dynamic]
+                · rw [hhead, hih.1, hE0', partOf_dynamic t v hsf, encodeHeads_cons_dynamic]
                   simp [Part.tailSize]
                 · rw [htail, hih.2.1]
                   rw [partOf_dynamic t v hsf, encodeTails_cons_dynamic, List.append_assoc]
                   rfl
-                · rw [hih.2.2, hE0']
-                  simp [tailSizes, Nat.add_assoc]
+                · grind [tailSizes, Nat.add_assoc]
               · have hst : t.isStatic = true := hs0
                 obtain ⟨hhead, htl0, hE0⟩ :=
                   decodeElem_sound_static t v head tails E hst he
                 refine ⟨?_, ?_, ?_⟩
-                · rw [hhead, hih.1, hE0]
-                  rw [partOf_static t v hst, encodeHeads_cons_static, List.append_assoc]
+                · rw [hhead, hih.1, hE0, partOf_static t v hst, encodeHeads_cons_static,
+                    List.append_assoc]
                   rfl
                 · rw [← htl0, hih.2.1]
                   rw [partOf_static t v hst, encodeTails_cons_static]
-                · rw [hih.2.2, hE0]
-                  simp [tailSizes, tailSize_partOf_static t v hst]
+                · grind [tailSizes, tailSize_partOf_static]
 termination_by 8 * sizeOf t + 2
 
 /-- **Soundness, tuples**: a canonical tuple that reads back has consumed
@@ -492,9 +449,7 @@ theorem decodeTuple_sound : (ts : List Ty) → (vs : TupleVal ts) →
     E' = E + tailSizes (partsOfTuple ts vs)
   | [], vs, E, head, tails, h => by
       simp only [decodeTuple, Get2.pure_run] at h
-      have hhd : head = head' := congrArg (fun p => p.head) (Option.some.inj h)
-      have htl : tails = tails' := congrArg (fun p => p.tails) (Option.some.inj h)
-      have hE' : E = E' := congrArg (fun p => p.frontier) (Option.some.inj h)
+      obtain ⟨hhd, htl, hE'⟩ : head = head' ∧ tails = tails' ∧ E = E' := by grind
       rw [hhd, htl, ← hE']
       simp [partsOfTuple, encodeHeads, encodeTails, putHeads, putTails, tailSizes,
         Builder.toList_empty]
@@ -510,14 +465,10 @@ theorem decodeTuple_sound : (ts : List Ty) → (vs : TupleVal ts) →
           | some q =>
               obtain ⟨vs', head1, tails1, E1⟩ := q
               simp only [hi] at h
-              have hpair := Option.some.inj h
-              have hv' : v' = v := congrArg (fun p => p.val.1) hpair
-              have hvs' : vs' = vs := congrArg (fun p => p.val.2) hpair
-              have hhd1 : head1 = head' := congrArg (fun p => p.head) hpair
-              have htl1 : tails1 = tails' := congrArg (fun p => p.tails) hpair
+              obtain ⟨hv', hvs', hhd1, htl1, hE1⟩ : v' = v ∧ vs' = vs ∧ head1 = head' ∧
+                  tails1 = tails' ∧ E1 = E' := by grind
               subst hv'
               subst hvs'
-              have hE1 : E1 = E' := congrArg (fun p => p.frontier) hpair
               have hih : head0 = encodeHeads E0 (partsOfTuple ts vs') ++ head1 ∧
                   tails0 = encodeTails (partsOfTuple ts vs') ++ tails1 ∧
                   E1 = E0 + tailSizes (partsOfTuple ts vs') :=
@@ -571,10 +522,7 @@ theorem decode_sound (t : Ty) (v : t.Val) (buf rest : List UInt8) (c : Nat)
       · contradiction
       · next k hk =>
           -- a decoded array has a length word below `2 ^ 64`, or `decode` rejected it
-          have hkb : k < 2 ^ 64 := by
-            by_cases hc : k < 2 ^ 64
-            · exact hc
-            · rw [dif_neg hc] at h; contradiction
+          have hkb : k < 2 ^ 64 := by by_cases hc : k < 2 ^ 64 <;> grind
           rw [dif_pos hkb] at h
           cases he : (decodeElems t k).run (buf.drop 32) (buf.drop (32 + k * t.headSize))
             (k * t.headSize) with
@@ -582,10 +530,7 @@ theorem decode_sound (t : Ty) (v : t.Val) (buf rest : List UInt8) (c : Nat)
           | some q =>
               obtain ⟨⟨vs', hvs'⟩, head0, tails0, E0⟩ := q
               simp only [he] at h
-              have hpair := Option.some.inj h
-              have hvs'eq : vs' = vs := congrArg (fun p => p.1.val) hpair
-              have hcnt : 32 + E0 = c := congrArg (fun p => p.2.1) hpair
-              have hrt : tails0 = rest := congrArg (fun p => p.2.2) hpair
+              obtain ⟨hvs'eq, hcnt, hrt⟩ : vs' = vs ∧ 32 + E0 = c ∧ tails0 = rest := by grind
               have hsnd := decodeElems_sound t vs' k hvs' (k * t.headSize)
                 (buf.drop 32) (buf.drop (32 + k * t.headSize)) he
               have hlenH : headSizes (vs'.map (partOf t)) = vs'.length * t.headSize :=
@@ -593,16 +538,12 @@ theorem decode_sound (t : Ty) (v : t.Val) (buf rest : List UInt8) (c : Nat)
               have htake : buf.take 32 = encodeUint k :=
                 buf_take_32_eq_encodeUint_of_decodeUint buf k hk
               have hhead0 : head0 = encodeTails (vs'.map (partOf t)) ++ tails0 := by
-                have hlen : (encodeHeads (k * t.headSize) (vs'.map (partOf t))).length =
-                    k * t.headSize := by
-                  rw [length_encodeHeads, hlenH, hvs']
                 have hd := congrArg (fun x => x.drop (k * t.headSize)) hsnd.1
-                rw [drop_append_of_length hlen] at hd
-                rw [List.drop_drop] at hd
+                rw [drop_append_of_length (by rw [length_encodeHeads, hlenH, hvs']),
+                  List.drop_drop] at hd
                 rw [← hd, hsnd.2.1]
               have hinner : encodeHeads (k * t.headSize) (vs'.map (partOf t)) ++
-                  (encodeTails (vs'.map (partOf t)) ++ rest) = buf.drop 32 := by
-                rw [hsnd.1, hhead0, hrt]
+                  (encodeTails (vs'.map (partOf t)) ++ rest) = buf.drop 32 := by grind
               refine ⟨?_, ?_⟩
               · simp only [encode, put, toList_putUint, toList_append]
                 rw [← hvs'eq, hvs', ← htake, ← encodeParts, encodeParts_unfold, hlenH, hvs',
@@ -619,21 +560,13 @@ theorem decode_sound (t : Ty) (v : t.Val) (buf rest : List UInt8) (c : Nat)
       | some q =>
           obtain ⟨⟨vs', hvs'⟩, head0, tails0, E0⟩ := q
           simp only [he] at h
-          have hpair := Option.some.inj h
-          have hvs'eq : vs' = vs := congrArg (fun p => p.1.val) hpair
-          have hcnt : E0 = c := congrArg (fun p => p.2.1) hpair
-          have hrt : tails0 = rest := congrArg (fun p => p.2.2) hpair
+          obtain ⟨hvs'eq, hcnt, hrt⟩ : vs' = vs ∧ E0 = c ∧ tails0 = rest := by grind
           have hsnd := decodeElems_sound t vs' n hvs' (n * t.headSize) buf
             (buf.drop (n * t.headSize)) he
           have hlenH : headSizes (vs'.map (partOf t)) = n * t.headSize := by
             rw [headSizes_map_partOf_any t vs', hvs']
           have hhead0 : head0 = encodeTails (vs'.map (partOf t)) ++ tails0 := by
-            have hlen : (encodeHeads (n * t.headSize) (vs'.map (partOf t))).length =
-                n * t.headSize := by
-              rw [length_encodeHeads, hlenH]
-            have hd := congrArg (fun x => x.drop (n * t.headSize)) hsnd.1
-            rw [drop_append_of_length hlen] at hd
-            rw [← hd, hsnd.2.1]
+            grind [drop_append_of_length, length_encodeHeads]
           refine ⟨?_, ?_⟩
           · simp only [encode, put]
             rw [← hvs'eq, ← encodeParts, encodeParts_unfold, hlenH, hsnd.1, hhead0, hrt,
@@ -655,11 +588,8 @@ theorem decode_sound (t : Ty) (v : t.Val) (buf rest : List UInt8) (c : Nat)
           | some q =>
               obtain ⟨vs', head1, tails1, E1⟩ := q
               simp only [hi] at h
-              have hpair := Option.some.inj h
-              have hv' : v' = vh := congrArg (fun p => p.1.1) hpair
-              have hvs' : vs' = vtail := congrArg (fun p => p.1.2) hpair
-              have hrest : tails1 = rest := congrArg (fun p => p.2.2) hpair
-              have hcnt : E1 = c := congrArg (fun p => p.2.1) hpair
+              obtain ⟨hv', hvs', hrest, hcnt⟩ : v' = vh ∧ vs' = vtail ∧ tails1 = rest ∧
+                  E1 = c := by grind
               subst hv'
               subst hvs'
               have hsnd := decodeTuple_sound tail vs' E0 head0 tails0 hi

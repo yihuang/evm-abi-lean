@@ -129,8 +129,7 @@ theorem Inv.static {H : Nat} {s : Acc} {ps : List Part} (h : Inv H s ps)
     rw [Builder.toList_append, h1, hp, encodeHeads_append, encodeHeads_cons_static, hb]
     simp [encodeHeads, putHeads]
   · show s.off = _
-    rw [h2, hp, tailSizes_append]
-    simp [tailSizes, Part.tailSize]
+    grind [tailSizes_append, tailSizes, Part.tailSize]
   · show s.tail.toList = _
     rw [h3, hp, encodeTails_append, encodeTails_cons_static]
     simp [encodeTails, putTails]
@@ -151,8 +150,7 @@ theorem Inv.dyn {H : Nat} {s : Acc} {ps : List Part} (h : Inv H s ps)
       encodeHeads_cons_dynamic]
     simp [encodeHeads, putHeads]
   · show s.off + b.size = _
-    rw [hsz, h2, hp, tailSizes_append]
-    simp [tailSizes, Part.tailSize, Builder.size_eq_length_toList, Nat.add_assoc]
+    grind [tailSizes_append, tailSizes, Part.tailSize, Builder.size_eq_length_toList]
   · show (s.tail ++ b).toList = _
     rw [Builder.toList_append, h3, hb, hp, encodeTails_append, encodeTails_cons_dynamic]
     simp [encodeTails, putTails]
@@ -163,8 +161,7 @@ theorem Inv.finish_toList {H : Nat} {s : Acc} {ps : List Part} (h : Inv H s ps)
     (hH : H = headSizes ps) : s.finish.toList = (putParts ps).toList := by
   obtain ⟨h1, h2, h3⟩ := h
   show (s.head ++ s.tail).toList = _
-  rw [Builder.toList_append, h1, h3, hH]
-  rfl
+  grind [Builder.toList_append, putParts, encodeHeads, encodeTails, putHeads, putTails]
 
 end Acc
 
@@ -177,8 +174,8 @@ the head section.  These are the `ValBA` counterparts of the `Spec` lemmas in
 /-- A static component's builder occupies exactly its type's head size. -/
 theorem size_putBA_static (t : Ty) (hs : t.isStatic = true) (v : ValBA t) :
     (putBA t v).size = t.headSize := by
-  rw [Builder.size_eq_length_toList, toList_putBA]
-  exact Spec.encode_length_static t hs _
+  simpa [Builder.size_eq_length_toList, toList_putBA] using
+    Spec.encode_length_static t hs (ValBA.toList t v)
 
 /-- A component's part occupies exactly its type's head size: its own
 encoding when static, one offset word when dynamic. -/
@@ -308,9 +305,7 @@ theorem toList_tuple {head : Ty} {tail : List Ty} {s : Acc} (v : ValBA head × T
       (partOfBA head v.1 :: partsOfTupleBA tail v.2)) :
     s.finish.toList = (putBA (.tuple head tail) v).toList := by
   rw [putBA.eq_10]
-  exact h.finish_toList (by
-    simp only [headSizes, headSize_partOfBA head v.1]
-    rw [headSizes_partsOfTupleBA tail v.2])
+  exact h.finish_toList (by simp [headSizes, headSize_partOfBA, headSizes_partsOfTupleBA])
 
 /-- The tuple's part list, one rewrite per component. -/
 theorem partsOfTupleBA_nil (v : TupleValBA []) : partsOfTupleBA [] v = [] :=

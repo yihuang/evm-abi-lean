@@ -31,8 +31,7 @@ private theorem toList_putHeads_static {t : Ty} (h : t.isStatic = true)
   induction vs generalizing acc with
   | nil => rfl
   | cons v vs ih =>
-      simp only [List.map_cons, partOfBA, h, putHeads, Builder.toList_append, ih acc,
-        List.flatten_cons]
+      grind [partOfBA, putHeads, Builder.toList_append, List.flatten_cons]
 
 private theorem toList_putTails_static {t : Ty} (h : t.isStatic = true)
     (vs : List (ValBA t)) :
@@ -46,8 +45,7 @@ the tail section is empty. -/
 theorem toList_putParts_static {t : Ty} (h : t.isStatic = true) (vs : List (ValBA t)) :
     (putParts (vs.map (partOfBA t))).toList
       = (vs.map fun v => (putBA t v).toList).flatten := by
-  rw [putParts, Builder.toList_append, toList_putHeads_static h, toList_putTails_static h,
-    List.append_nil]
+  grind [putParts, Builder.toList_append, toList_putHeads_static, toList_putTails_static]
 
 /-- The components' encodings, concatenated — what a static tuple's parts
 lay out as. -/
@@ -80,8 +78,8 @@ sibling of `toList_putParts_static`. -/
 theorem toList_putParts_tupleStatic {ts : List Ty} (ht : Ty.allStatic ts = true)
     (vs : TupleValBA ts) :
     (putParts (partsOfTupleBA ts vs)).toList = tupleEncodings ts vs := by
-  rw [putParts, Builder.toList_append, toList_putHeads_tupleStatic ht,
-    toList_putTails_tupleStatic ht, List.append_nil]
+  grind [putParts, Builder.toList_append, toList_putHeads_tupleStatic,
+    toList_putTails_tupleStatic]
 
 /-- Write one `uint` word from a `Nat`, without ever building a `UInt256`:
 `UInt256.ofNat` goes through `BitVec.ofNat 256`, which is bignum work even
@@ -217,14 +215,12 @@ theorem data_toList_emitVal :
   | .uint _, ht, acc, ⟨w, hw⟩ => by
       rw [emitVal, emitPrim, Chunks.data_toList_emitWord, putBA, toList_putWord]
   | .int _, ht, acc, ⟨i, hi⟩ => by
-      rw [emitVal, emitPrim, data_toList_emitUintWord, putBA]
-      simp only [toList_putInt, encodeInt]
+      grind [emitVal, emitPrim, data_toList_emitUintWord, putBA, toList_putInt, encodeInt]
   | .bool, ht, acc, b => by
-      rw [emitVal, emitPrim, data_toList_emitUintWord, putBA]
-      simp only [toList_putBool, encodeBool]
+      grind [emitVal, emitPrim, data_toList_emitUintWord, putBA, toList_putBool, encodeBool]
   | .address, ht, acc, ⟨bs, hbs⟩ => by
-      rw [emitVal, emitPrim, data_toList_emitUintWord, putBA, toList_putAddressBA]
-      simp [encodeAddress]
+      grind [emitVal, emitPrim, data_toList_emitUintWord, putBA, toList_putAddressBA,
+        encodeAddress]
   | .bytesN _, ht, acc, ⟨bs, hbs⟩ => by
       rw [emitVal, emitPrim, putBA, toList_putBytesNBA]
       split
@@ -255,8 +251,8 @@ theorem data_toList_emitVals {t : Ty} (ht : t.isStatic = true) (acc : ByteArray)
         = acc.data.toList ++ (vs.map fun v => (putBA t v).toList).flatten
   | [] => by simp [emitVals]
   | v :: vs => by
-      rw [emitVals, data_toList_emitVals ht (emitVal acc t v) vs,
-        data_toList_emitVal ht acc v, List.map_cons, List.flatten_cons, List.append_assoc]
+      grind [emitVals, data_toList_emitVals ht (emitVal acc t v) vs,
+        data_toList_emitVal ht acc v, List.flatten_cons, List.append_assoc]
 termination_by vs => (tyMeasure t, 1 + vs.length)
 
 theorem data_toList_emitTupleVals :
@@ -266,8 +262,8 @@ theorem data_toList_emitTupleVals :
   | t :: ts, ht, acc, (v, vs) => by
       obtain ⟨ht1, ht2⟩ : Ty.isStatic t = true ∧ Ty.allStatic ts = true := by
         simpa [Ty.allStatic] using ht
-      rw [emitTupleVals, data_toList_emitTupleVals ht2 (emitVal acc t v) vs,
-        data_toList_emitVal ht1 acc v, tupleEncodings, List.append_assoc]
+      grind [emitTupleVals, tupleEncodings, data_toList_emitTupleVals ht2 (emitVal acc t v) vs,
+        data_toList_emitVal ht1 acc v, List.append_assoc]
 termination_by ts => (tyListMeasure ts, 1)
 end
 
@@ -296,9 +292,7 @@ private theorem headSizes_dynamic {t : Ty} (hd : t.isStatic = false)
   induction vs with
   | nil => rfl
   | cons v vs ih =>
-      simp only [List.map_cons, partOfBA, hd, headSizes, Part.headSize, ih,
-        List.length_cons]
-      omega
+      grind [partOfBA, headSizes, Part.headSize, List.length_cons]
 
 /-- Write the offset words: `off` starts at the head section's size and
 steps by each tail, sized by `sizeF` without materializing the payload. -/
@@ -411,7 +405,7 @@ private theorem size_putUint (n : Nat) : (putUint n).size = 32 := by
 private theorem size_putBytesNBA (bs : ByteArray) :
     (putBytesNBA bs).size = bs.size + (32 - bs.size) := by
   rw [Builder.size_eq_length_toList, toList_putBytesNBA]
-  simp [encodeBytesN]
+  grind [encodeBytesN, List.length_append, ByteArray.size_eq_toList_length]
 
 /-! ### static sizes
 
@@ -550,8 +544,7 @@ private theorem heads_tails_dyn : ∀ (t : Ty), t.isStatic = false →
   | t, hst, v :: vs, acc => by
       rw [sizesOfList, sumDyn, total_sizesOf t v]
       simp only [List.map_cons, partOfBA, hst, putHeads, putTails, size_append, size_putUint]
-      have ih := heads_tails_dyn t hst vs (acc + (putBA t v).size)
-      omega
+      grind [heads_tails_dyn t hst vs (acc + (putBA t v).size)]
 termination_by t _ vs _ => (tyMeasure t, 1 + vs.length)
 
 private theorem size_parts_static : ∀ {t : Ty}, t.isStatic = true → ∀ (vs : List (ValBA t)),
@@ -568,9 +561,7 @@ private theorem heads_tails_static : ∀ {t : Ty}, t.isStatic = true →
   | t, hst, v :: vs, acc => by
       simp only [List.map_cons, partOfBA, hst, putHeads, putTails, size_append,
         List.length_cons, Nat.add_mul, Nat.one_mul]
-      rw [size_static hst v]
-      have ih := heads_tails_static hst vs acc
-      omega
+      grind [size_static hst v, heads_tails_static hst vs acc]
 termination_by t _ vs _ => (tyMeasure t, 1 + vs.length)
 
 private theorem size_parts_tuple : ∀ (ts : List Ty) (vs : TupleValBA ts),
@@ -588,13 +579,11 @@ private theorem heads_tails_tuple : ∀ (ts : List Ty) (vs : TupleValBA ts) (acc
       by_cases hst : t.isStatic
       · rw [if_pos hst]
         simp only [partOfBA, hst, putHeads, putTails, size_append]
-        have ih := heads_tails_tuple ts vs acc
-        omega
+        grind [heads_tails_tuple ts vs acc]
       · rw [if_neg hst]
         have hst' : t.isStatic = false := by simpa using hst
         simp only [partOfBA, hst', putHeads, putTails, size_append, size_putUint]
-        have ih := heads_tails_tuple ts vs (acc + (putBA t v).size)
-        omega
+        grind [heads_tails_tuple ts vs (acc + (putBA t v).size)]
 termination_by ts _ _ => (tyListMeasure ts, 1)
 
 private theorem size_parts_tupleStatic : ∀ {ts : List Ty}, Ty.allStatic ts = true →
@@ -614,9 +603,7 @@ private theorem heads_tails_tupleStatic : ∀ {ts : List Ty}, Ty.allStatic ts = 
         simpa [Ty.allStatic] using ht
       rw [partsOfTupleBA, staticSizeSum]
       simp only [partOfBA, h1, putHeads, putTails, size_append]
-      rw [size_static h1 v]
-      have ih := heads_tails_tupleStatic h2 vs acc
-      omega
+      grind [size_static h1 v, heads_tails_tupleStatic h2 vs acc]
 termination_by ts _ _ _ => (tyListMeasure ts, 1)
 
 /-- A static value's size is its type's. -/
@@ -627,9 +614,7 @@ private theorem size_static : ∀ {t : Ty}, t.isStatic = true → ∀ v : ValBA 
   | .bool, _, _ => by rw [putBA, staticSize]; exact size_putUint _
   | .address, _, ⟨_, _⟩ => by rw [putBA, staticSize]; exact size_putUint _
   | .bytesN m, _, ⟨bs, hbs⟩ => by
-      rw [putBA, staticSize, size_putBytesNBA, hbs]
-      have : m.bytes ≤ 32 := by unfold Width.bytes; omega
-      omega
+      grind [putBA, staticSize, size_putBytesNBA, Width.bytes]
   | .fixedArray t n hn, ht, ⟨vs, hvs⟩ => by
       rw [putBA_fixedArray hn vs hvs, staticSize, size_parts_static (t := t) ht vs, hvs]
   | .tuple head tail, ht, (v, vs) => by
@@ -730,8 +715,8 @@ private theorem data_toList_emitOffsets (t : Ty) (hst : t.isStatic = false) :
   | cons v vs ih =>
       intro acc off
       rw [sizesOfList, emitOffsets, ih, data_toList_emitUintWord, total_sizesOf t v]
-      simp only [List.map_cons, partOfBA, hst, putHeads, Builder.toList_append,
-        toList_putUint, List.append_assoc]
+      grind [partOfBA, putHeads, Builder.toList_append, toList_putUint,
+        List.append_assoc]
 
 private theorem data_toList_emitTupleHeads :
     ∀ {ts : List Ty} (vs : TupleValBA ts) (acc : ByteArray) (off : Nat),
@@ -742,13 +727,12 @@ private theorem data_toList_emitTupleHeads :
       rw [sizesOfTuple, emitTupleHeads]
       by_cases hst : t.isStatic
       · rw [if_pos hst, data_toList_emitTupleHeads vs, data_toList_emitVal hst]
-        simp only [partsOfTupleBA, partOfBA, hst, putHeads, Builder.toList_append,
-          List.append_assoc]
+        grind [partsOfTupleBA, partOfBA, putHeads, Builder.toList_append, List.append_assoc]
       · have hst' : t.isStatic = false := by simpa using hst
         rw [if_neg hst, data_toList_emitTupleHeads vs, data_toList_emitUintWord,
           total_sizesOf t v]
-        simp only [partsOfTupleBA, partOfBA, hst', putHeads, Builder.toList_append,
-          toList_putUint, List.append_assoc]
+        grind [partsOfTupleBA, partOfBA, putHeads, Builder.toList_append, toList_putUint,
+          List.append_assoc]
 
 private theorem tupleBase_eq : ∀ (ts : List Ty) (vs : TupleValBA ts),
     tupleBase ts (sizesOfTuple ts vs) = headSizes (partsOfTupleBA ts vs)
@@ -757,10 +741,10 @@ private theorem tupleBase_eq : ∀ (ts : List Ty) (vs : TupleValBA ts),
       rw [sizesOfTuple, tupleBase, partsOfTupleBA]
       by_cases hst : t.isStatic
       · rw [if_pos hst, total_sizesOf t v, tupleBase_eq ts vs]
-        simp only [partOfBA, hst, headSizes, Part.headSize]
+        grind [partOfBA, headSizes, Part.headSize]
       · rw [if_neg hst, tupleBase_eq ts vs]
         have hst' : t.isStatic = false := by simpa using hst
-        simp only [partOfBA, hst', headSizes, Part.headSize]
+        grind [partOfBA, headSizes, Part.headSize]
 
 mutual
 theorem data_toList_emitAny : ∀ {t : Ty} (acc : ByteArray) (v : ValBA t),
@@ -782,9 +766,9 @@ theorem data_toList_emitAny : ∀ {t : Ty} (acc : ByteArray) (v : ValBA t),
           List.append_assoc]
       · have hst' : t.isStatic = false := by simpa using hst
         rw [if_neg hst]
-        have hch : (sizesOf (.array t) ⟨vs, h⟩).children = sizesOfList t vs := by
-          rw [sizesOf, if_neg hst]
-        rw [hch, data_toList_emitAnyTails t hst', data_toList_emitOffsets t hst',
+        rw [show (sizesOf (.array t) ⟨vs, h⟩).children = sizesOfList t vs by
+            rw [sizesOf, if_neg hst],
+          data_toList_emitAnyTails t hst', data_toList_emitOffsets t hst',
           data_toList_emitUintWord]
         rw [putBA_array vs h, Builder.toList_append, toList_putUint, putParts, Builder.toList_append,
           headSizes_dynamic hst']
@@ -796,18 +780,16 @@ theorem data_toList_emitAny : ∀ {t : Ty} (acc : ByteArray) (v : ValBA t),
         rw [putBA_fixedArray hn vs h, toList_putParts_static hst]
       · have hst' : t.isStatic = false := by simpa using hst
         rw [if_neg hst]
-        have hch : (sizesOf (.fixedArray t n hn) ⟨vs, h⟩).children = sizesOfList t vs := by
-          rw [sizesOf, if_neg hst]
-        rw [hch, data_toList_emitAnyTails t hst', data_toList_emitOffsets t hst']
+        rw [show (sizesOf (.fixedArray t n hn) ⟨vs, h⟩).children = sizesOfList t vs by
+            rw [sizesOf, if_neg hst],
+          data_toList_emitAnyTails t hst', data_toList_emitOffsets t hst']
         rw [putBA_fixedArray hn vs h, putParts, Builder.toList_append, headSizes_dynamic hst']
         simp only [List.append_assoc]
   | .tuple head tail, acc, (v, vs) => by
       rw [emitAny]
-      have hch : (sizesOf (.tuple head tail) (v, vs)).children = sizesOfTuple (head :: tail) (v, vs) := by
-        rw [sizesOf]
-        simp [sizesOfTuple]
-      rw [hch, data_toList_emitAnyTupleTails, data_toList_emitTupleHeads,
-        tupleBase_eq]
+      rw [show (sizesOf (.tuple head tail) (v, vs)).children =
+            sizesOfTuple (head :: tail) (v, vs) by rw [sizesOf]; simp [sizesOfTuple],
+        data_toList_emitAnyTupleTails, data_toList_emitTupleHeads, tupleBase_eq]
       rw [putBA_tuple v vs, putParts, Builder.toList_append]
       simp only [List.append_assoc]
 termination_by t _ _ => (tyMeasure t, 0)
@@ -820,8 +802,7 @@ theorem data_toList_emitAnyTails :
   | t, hst, acc, v :: vs => by
       rw [sizesOfList, emitAnyTails, data_toList_emitAnyTails t hst _ vs,
         data_toList_emitAny acc v]
-      simp only [List.map_cons, partOfBA, hst, putTails, Builder.toList_append,
-        List.append_assoc]
+      grind [partOfBA, putTails, Builder.toList_append, List.append_assoc]
 termination_by t _ _ vs => (tyMeasure t, 1 + vs.length)
 
 theorem data_toList_emitAnyTupleTails :
@@ -833,11 +814,10 @@ theorem data_toList_emitAnyTupleTails :
       rw [sizesOfTuple, emitAnyTupleTails]
       by_cases hst : t.isStatic
       · rw [if_pos hst, data_toList_emitAnyTupleTails acc vs]
-        simp only [partsOfTupleBA, partOfBA, hst, putTails]
+        grind [partsOfTupleBA, partOfBA, putTails]
       · have hst' : t.isStatic = false := by simpa using hst
         rw [if_neg hst, data_toList_emitAnyTupleTails _ vs, data_toList_emitAny acc v]
-        simp only [partsOfTupleBA, partOfBA, hst', putTails, Builder.toList_append,
-          List.append_assoc]
+        grind [partsOfTupleBA, partOfBA, putTails, Builder.toList_append, List.append_assoc]
 termination_by ts _ _ => (tyListMeasure ts, 1)
 end
 
@@ -883,8 +863,7 @@ private theorem encode_static_arm {t : Ty} (v : ValBA t) (ht : t.isStatic = true
     encode t v = emitVal (ByteArray.emptyWithCapacity (staticSize t)) t v := by
   apply ByteArray.data_inj
   rw [← Array.toList_inj]
-  rw [encode, Builder.data_toList_run, data_toList_emitVal ht, toList_emptyWithCapacity,
-    List.nil_append]
+  grind [encode, Builder.data_toList_run, data_toList_emitVal ht, toList_emptyWithCapacity]
 
 /-- Any value at all: `encode` is the size pass plus the one write pass. -/
 private theorem encode_emitAny (t : Ty) (v : ValBA t) :
