@@ -25,8 +25,8 @@ on:
 env:
   # Pinned to a commit, not a branch: the harness decides what the numbers mean,
   # so it should move only when someone bumps this deliberately.
-  HARNESS_REPO: mmsqe/evm-abi-benchmarks
-  HARNESS_REF: 4e143ba3dab1521d637829646bbdb9ff63b4c239
+  HARNESS_REPO: yihuang/evm-abi-benchmarks
+  HARNESS_REF: 39e405c5ffbb8faec7f8a197c64f25f2ed075354
 
 jobs:
   refcount:
