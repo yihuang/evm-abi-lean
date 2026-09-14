@@ -3,6 +3,7 @@ import EvmAbi.Align
 import EvmAbi.Word
 import EvmAbi.Ty
 import EvmAbi.Builder
+import EvmAbi.Prefix
 import EvmAbi.Static
 import EvmAbi.Dynamic
 import EvmAbi.Spec
@@ -37,6 +38,10 @@ the historical build order, nodes 1–8):
                   denotation the proofs see; and the dual-cursor `Get2`
                   prefix-reader monad.  Decouples ABI layout logic from byte
                   plumbing at both ends
+* `EvmAbi.Prefix`  — `PrefixCodec`, the shared statement of the primitive
+                  decoders' suffix tolerance: one `roundtrip_append`
+                  consequence per atom instead of a hand-copied `_append`
+                  proof
 * `EvmAbi.Static`  — static primitives: `uintM`, `intM`, `bool`, `address`,
                   `bytesN`, with roundtrips
 * `EvmAbi.Dynamic` — dynamic `bytes` / `string` with roundtrips, prefix decoder

@@ -71,6 +71,10 @@ complete type grammar.
    (`decodeUint_append` and friends).  This property is essential for
    decoding compound types: a component's encoding is embedded inside a
    larger buffer, and the decoder must not be confused by data that follows.
+   It is one fact per atom, recorded as a `PrefixCodec` (`EvmAbi.Prefix`):
+   the decoder reads no more than a fixed-size prefix, so
+   `PrefixCodec.roundtrip_append` derives the suffix-tolerant read-back from
+   the plain roundtrip and the encoder's width.
 
 6. **The linear canonical decoder.**  The decoder `Spec.decode` walks a buffer
    with two monotonic cursors (the head section and the tails), threading
@@ -269,7 +273,7 @@ were moved to sibling modules: `Spec.Roundtrip`, `Spec.Sound`,
 | Section | Module | Content |
 |---|---|---|
 | Encoder packages A/B | `Spec` | Head sizes, static encoding lengths, alignment (`encode_length_static`, `wf_map_partOf`) |
-| Package C | `Spec` | Appended-buffer read lemmas (`decodeUint_append`, …) and the layout lemmas `drop_headPartOf_static` |
+| Package C | `Spec` | Appended-buffer read lemmas (`decodeUint_append`, …), one line each off the atom's `PrefixCodec`; and the layout lemmas `drop_headPartOf_static` |
 | Package D | `Spec` | Locating dynamic tails (`drop_tail_partOf_dynamic`, `natAt_offset_partOf_dynamic`) |
 | Decoder helpers | `Spec` | Head-size and word-recovery lemmas the decoder proofs need |
 | **Static delegation** | `Spec` | `decode_static_append` family — static types carry no offset words, so the roundtrips are bound-free |
@@ -642,6 +646,8 @@ values, and the `decreasing_tactic` discharges every goal.
     │ Static.lean  │  │ Parts.lean    │
     │ Dynamic.lean │  │ (head/tail)   │
     │ (primitives) │  │               │
+    │ Prefix.lean  │  │               │
+    │ (atom codecs)│  │               │
     └──────┬───────┘  └───┬───────────┘
            │              │
     ┌──────▼──────┐  ┌───▼──────────┐

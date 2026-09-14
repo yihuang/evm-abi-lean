@@ -359,61 +359,34 @@ end
 
 /-! ## Package C: appended-buffer read lemmas -/
 
-/- Every primitive decoder reads through a suffix it does not care about;
-`drop_head_partOf_static` locates a static part's head at its head offset.
-The linear decoder's bound-free static roundtrip
-(`decode_static_append` below) is the bound-free static roundtrip. -/
+/- Every primitive decoder reads through a suffix it does not care about.
+That is one fact per atom, recorded as its `PrefixCodec` in
+`EvmAbi.Static` (`uintPrefix`, `intPrefix`, …): each read-back below is
+`PrefixCodec.roundtrip_append` at that codec, so no atom repeats the
+word-layer argument.  `drop_head_partOf_static` locates a static part's
+head at its head offset, for the linear decoder's bound-free static
+roundtrip (`decode_static_append` below). -/
 
 /-- `uintM` read-back over an appended suffix. -/
 theorem decodeUint_append (n : Nat) (rest : List UInt8) (h : n < 2 ^ 256) :
-    decodeUint (encodeUint n ++ rest) = some n := by
-  unfold decodeUint encodeUint
-  have hw := natAt_append ([] : List UInt8) rest (UInt256.ofNat n) 0 (by simp)
-  rw [List.nil_append] at hw
-  rw [hw, UInt256.toNat_ofNat, Nat.mod_eq_of_lt (show n < UInt256.size from h)]
+    decodeUint (encodeUint n ++ rest) = some n :=
+  uintPrefix.roundtrip_append n h rest
 
 /-- `intM` read-back over an appended suffix. -/
 theorem decodeInt_append {M : Nat} (hM0 : 0 < M) (hM : M ≤ 256)
     (hl : -((2 ^ (M - 1) : Nat) : Int) ≤ i) (hu : i < ((2 ^ (M - 1) : Nat) : Int))
-    (rest : List UInt8) : decodeInt (encodeInt i ++ rest) = some i := by
-  have hcast : ((2 ^ (M - 1) : Nat) : Int) = (2 : Int) ^ (M - 1) := Int.natCast_pow 2 (M - 1)
-  rw [hcast] at hl hu
-  obtain ⟨hlb, hub⟩ := intM_bounds_lt_255 (M := M) hM0 hM hl hu
-  by_cases hi : 0 ≤ i
-  · have hn : i.toNat < 2 ^ 256 := by omega
-    rw [encodeInt, if_pos hi, decodeInt, decodeUint_append _ rest hn, Option.map_some,
-      if_pos (show i.toNat < 2 ^ 255 by omega), Int.toNat_of_nonneg hi]
-  · have hn1 : 2 ^ 256 - (-i).toNat ≥ 2 ^ 255 ∧ 2 ^ 256 - (-i).toNat < 2 ^ 256 := by
-      omega
-    rw [encodeInt, if_neg hi, decodeInt, decodeUint_append _ rest hn1.2, Option.map_some,
-      if_neg (show ¬ 2 ^ 256 - (-i).toNat < 2 ^ 255 by omega)]
-    rw [show ((2 ^ 256 - (-i).toNat : Nat) : Int) - 2 ^ 256 = i by omega]
+    (rest : List UInt8) : decodeInt (encodeInt i ++ rest) = some i :=
+  (intPrefix M hM0 hM).roundtrip_append i ⟨hl, hu⟩ rest
 
 /-- `bool` read-back over an appended suffix. -/
 theorem decodeBool_append (b : Bool) (rest : List UInt8) :
-    decodeBool (encodeBool b ++ rest) = some b := by
-  cases b
-  · show decodeBool (encodeUint 0 ++ rest) = some false
-    unfold decodeBool
-    rw [decodeUint_append 0 rest (by decide)]
-    rfl
-  · show decodeBool (encodeUint 1 ++ rest) = some true
-    unfold decodeBool
-    rw [decodeUint_append 1 rest (by decide)]
-    rfl
+    decodeBool (encodeBool b ++ rest) = some b :=
+  boolPrefix.roundtrip_append b trivial rest
 
 /-- `address` read-back over an appended suffix. -/
 theorem decodeAddress_append (a : List UInt8) (rest : List UInt8) (h : a.length = 20) :
-    decodeAddress (encodeAddress a ++ rest) = some a := by
-  unfold decodeAddress encodeAddress
-  have hn : Binary.decodeBEU a < 2 ^ 160 := by
-    simpa [h, show 256 ^ 20 = 2 ^ 160 by native_decide] using Binary.decodeBEU_lt a
-  have hlt256 : Binary.decodeBEU a < 2 ^ 256 :=
-    Nat.lt_of_lt_of_le hn (by decide)
-  have hdu := decodeUint_append (Binary.decodeBEU a) rest hlt256
-  rw [hdu]
-  simp [hn, show Binary.encodeBEU 20 (Binary.decodeBEU a) = a by
-    simpa [h] using (Binary.encodeBEU_decodeBEU a)]
+    decodeAddress (encodeAddress a ++ rest) = some a :=
+  addressPrefix.roundtrip_append a h rest
 
 /-- A successful `decodeAddress` is a successful `decodeUint` of a 160-bit
 value, re-expanded to its canonical 20 bytes. -/
@@ -432,13 +405,8 @@ theorem decodeAddress_spec {buf : List UInt8} {bs : List UInt8}
 /-- `bytesN` read-back over an appended suffix. -/
 theorem decodeBytesN_append {n : Nat} (h32 : n ≤ 32) (h : bs.length = n)
     (rest : List UInt8) :
-    decodeBytesN n (encodeBytesN bs ++ rest) = some bs := by
-  unfold decodeBytesN encodeBytesN
-  have hlen : (bs ++ List.replicate (32 - bs.length) 0).length = 32 := by
-    rw [List.length_append, List.length_replicate]; omega
-  have htk : ((bs ++ List.replicate (32 - bs.length) 0) ++ rest).take 32 =
-      bs ++ List.replicate (32 - bs.length) 0 := take_append_of_length hlen
-  rw [htk, take_append_of_length h, drop_append_of_length h, if_pos ⟨h, by rw [h]⟩]
+    decodeBytesN n (encodeBytesN bs ++ rest) = some bs :=
+  (bytesNPrefix n h32).roundtrip_append bs h rest
 
 /-- A static part's encoding sits at its head offset, even with further
 parts and a trailing suffix after it. -/
