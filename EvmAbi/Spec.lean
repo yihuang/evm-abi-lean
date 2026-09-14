@@ -264,6 +264,22 @@ theorem headSize_partOf (t : Ty) (v : t.Val) :
 
 /-! ## Package B: alignment and well-formedness -/
 
+/-- A static component's part is well-formed: its head is its own
+32-byte-aligned encoding and its tail is empty. -/
+theorem wf_head_partOf_static {t : Ty} (v : t.Val) (hs : t.isStatic = true) :
+    32 ∣ (partOf t v).head.toList.length ∧ 32 ∣ (partOf t v).tail.toList.length := by
+  rw [partOf_static t v hs]
+  refine ⟨?_, ⟨0, rfl⟩⟩
+  simpa [encode, ← encode_length_static t hs v] using dvd_headSize_static t hs
+
+/-- A dynamic component's part is well-formed: its head is one aligned offset
+word and its tail is its own encoding, aligned by the caller's hypothesis. -/
+theorem wf_head_partOf_dynamic {t : Ty} (v : t.Val) (hs : t.isStatic = false)
+    (hal : Aligned (encode t v).length) :
+    32 ∣ (partOf t v).head.toList.length ∧ 32 ∣ (partOf t v).tail.toList.length := by
+  rw [partOf_dynamic t v hs]
+  exact ⟨⟨0, rfl⟩, by simpa [Aligned, encode] using hal⟩
+
 /- Every encoding is 32-byte aligned; equivalently every part list produced
 by `partOf`/`partsOfTuple` is well-formed.  The three theorems are mutual:
 alignment of a compound encoding reduces to well-formedness of its part
@@ -300,12 +316,9 @@ theorem encode_length_aligned (t : Ty) (v : t.Val) :
         have hpart : 32 ∣ (partOf head v).head.toList.length ∧
             32 ∣ (partOf head v).tail.toList.length := by
           by_cases hs : head.isStatic
-          · rw [partOf_static head v hs]
-            refine ⟨?_, ⟨0, rfl⟩⟩
-            simpa [encode, ← encode_length_static head hs v] using dvd_headSize_static head hs
+          · exact wf_head_partOf_static v hs
           · have hsf : head.isStatic = false := by simpa using hs
-            rw [partOf_dynamic head v hsf]
-            exact ⟨⟨0, rfl⟩, by simpa [Aligned, encode] using encode_length_aligned head v⟩
+            exact wf_head_partOf_dynamic v hsf (encode_length_aligned head v)
         simp only [encode, put]
         exact dvd_length_encodeParts (wf_cons hpart (wf_partsOfTuple tail vs))
 termination_by 4 * sizeOf t
@@ -321,12 +334,9 @@ theorem wf_map_partOf (t : Ty) (vs : List t.Val) :
       rw [List.map_cons]
       apply wf_cons
       · by_cases hs : t.isStatic
-        · rw [partOf_static t w hs]
-          refine ⟨?_, ⟨0, rfl⟩⟩
-          simpa [encode, ← encode_length_static t hs w] using dvd_headSize_static t hs
+        · exact wf_head_partOf_static w hs
         · have hsf : t.isStatic = false := by simpa using hs
-          rw [partOf_dynamic t w hsf]
-          exact ⟨⟨0, rfl⟩, by simpa [Aligned, encode] using encode_length_aligned t w⟩
+          exact wf_head_partOf_dynamic w hsf (encode_length_aligned t w)
       · exact ih
 termination_by 4 * sizeOf t + 1
 
@@ -340,12 +350,9 @@ theorem wf_partsOfTuple : (ts : List Ty) → (vs : TupleVal ts) →
       simp only [partsOfTuple]
       apply wf_cons
       · by_cases hs : t.isStatic
-        · rw [partOf_static t v hs]
-          refine ⟨?_, ⟨0, rfl⟩⟩
-          simpa [encode, ← encode_length_static t hs v] using dvd_headSize_static t hs
+        · exact wf_head_partOf_static v hs
         · have hsf : t.isStatic = false := by simpa using hs
-          rw [partOf_dynamic t v hsf]
-          exact ⟨⟨0, rfl⟩, by simpa [Aligned, encode] using encode_length_aligned t v⟩
+          exact wf_head_partOf_dynamic v hsf (encode_length_aligned t v)
       · exact wf_partsOfTuple ts vs
 termination_by ts => 4 * sizeOf ts + 2
 end
@@ -582,9 +589,7 @@ theorem decodeBool_eq_some_iff (buf : List UInt8) (b : Bool) :
   cases hdu : decodeUint buf with
   | none => simp
   | some x =>
-      cases x with
-      | zero => cases b <;> simp
-      | succ x => cases x <;> cases b <;> simp <;> omega
+      cases x <;> cases b <;> grind
 
 /-- A successful `decodeBytesN` pins the front word to the encoding. -/
 theorem buf_take_32_eq_encodeBytesN_of_decodeBytesN {m : Nat} {buf bs : List UInt8}

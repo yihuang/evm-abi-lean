@@ -328,9 +328,7 @@ theorem decodeIntPacked_append (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
       rw [encodeIntPacked, if_pos hi]
     rw [h_enc, decodeIntPacked]
     have hdec := decodeUintPacked_append m i.toNat hm h8 hn rest
-    rw [hdec]
-    dsimp
-    apply Option.some.inj
+    rw [hdec]; dsimp
     have hlt_int : (i.toNat : Int) < (2 ^ (m - 1) : Int) := by
       have hp : ((2 ^ (m - 1) : Nat) : Int) = (2 : Int) ^ (m - 1) := by
         simp [Int.natCast_pow]
@@ -344,9 +342,7 @@ theorem decodeIntPacked_append (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
       rw [encodeIntPacked, if_neg hi]
     rw [h_enc, decodeIntPacked]
     have hdec := decodeUintPacked_append m (2 ^ m - (-i).toNat) hm h8 hrng.1 rest
-    rw [hdec]
-    dsimp
-    apply Option.some.inj
+    rw [hdec]; dsimp
     have h_not_lt_int : ¬ (↑(2 ^ m - (-i).toNat) < (2 ^ (m - 1) : Int)) := by
       have hp : ((2 ^ (m - 1) : Nat) : Int) = (2 : Int) ^ (m - 1) := by
         simp [Int.natCast_pow]

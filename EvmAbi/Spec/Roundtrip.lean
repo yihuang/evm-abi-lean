@@ -144,9 +144,9 @@ theorem decodeElems_roundtrip (t : Ty) (vs : List t.Val) (k : Nat)
       have helem := decodeElem_roundtrip t w xs (ws.map (partOf t) ++ ys) off hoff E hE rest hwf hb
       rw [helem]
       dsimp only []
-      rw [hre,
-        ih (ws.length) rfl (xs ++ [partOf t w]) (off + t.headSize) hoff'
-          (E + (partOf t w).tailSize) hE' (hre ▸ hwf) (hre ▸ hb)]
+      have hih := ih (ws.length) rfl (xs ++ [partOf t w]) (off + t.headSize) hoff'
+        (E + (partOf t w).tailSize) hE' (hre ▸ hwf) (hre ▸ hb)
+      rw [hre, hih]
       grind [tailSizes, Nat.add_assoc]
 termination_by 8 * sizeOf t + 2
 
@@ -184,9 +184,9 @@ theorem decodeTuple_roundtrip : (ts : List Ty) → (vs : TupleVal ts) →
       have helem := decodeElem_roundtrip t v xs (partsOfTuple ts vs ++ ys) off hoff E hE rest hwf hb
       rw [helem]
       dsimp only []
-      rw [hre,
-        decodeTuple_roundtrip ts vs (xs ++ [partOf t v]) ys (off + t.headSize) hoff'
-          (E + (partOf t v).tailSize) hE' rest (hre ▸ hwf) (hre ▸ hb)]
+      have hrec := decodeTuple_roundtrip ts vs (xs ++ [partOf t v]) ys (off + t.headSize) hoff'
+        (E + (partOf t v).tailSize) hE' rest (hre ▸ hwf) (hre ▸ hb)
+      rw [hre, hrec]
       dsimp only []
       simp only [tailSizes, Nat.add_assoc]
       rfl

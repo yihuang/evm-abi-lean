@@ -627,18 +627,18 @@ theorem decodeBA_eq (t : Ty) (ba : ByteArray) (off : Nat) :
           have hkl : natAt (ba.data.toList.drop off) 0 = some k := by rw [← hne, hk]
           by_cases hb : k < 2 ^ 64
           case neg => rw [decodeBA_array_big hk hb, decode_array_big hkl hb]; rfl
-          grind [decodeBA_array_pos hk hb, decode_array_pos hkl hb,
-            decodeElemsBA_eq t k ba (off + 32) (off + 32 + k * t.headSize) (k * t.headSize),
-            drop_drop_ba, GetBA.Result.toList]
+          have hcs := decodeElemsBA_eq t k ba (off + 32) (off + 32 + k * t.headSize) (k * t.headSize)
+          grind [decodeBA_array_pos hk hb, decode_array_pos hkl hb, drop_drop_ba,
+            GetBA.Result.toList]
   | fixedArray t n _ =>
       simp only [decodeBA, decode]
-      grind [decodeElemsBA_eq t n ba off (off + n * t.headSize) (n * t.headSize), drop_drop_ba,
-        GetBA.Result.toList]
+      have hcs := decodeElemsBA_eq t n ba off (off + n * t.headSize) (n * t.headSize)
+      grind [drop_drop_ba, GetBA.Result.toList]
   | tuple head tail =>
       rw [decodeBA, decode]
-      rw [drop_drop_ba]
-      rw [← decodeElemBA_eq head ba off (off + (head.headSize + headSizeSum tail))
-        (head.headSize + headSizeSum tail)]
+      have hde := decodeElemBA_eq head ba off (off + (head.headSize + headSizeSum tail))
+        (head.headSize + headSizeSum tail)
+      rw [drop_drop_ba, ← hde]
       cases h1 : (decodeElemBA head).run ba off (off + (head.headSize + headSizeSum tail))
           (head.headSize + headSizeSum tail) with
       | none => simp
@@ -961,9 +961,9 @@ theorem decodeBAVal_eq (t : Ty) (ba : ByteArray) (off : Nat) :
       simp only [decodeBAVal, decodeBA]
       grind [decodeElemsBAVal_eq t n ba off (off + n * t.headSize) (n * t.headSize), ValBA.toList]
   | tuple head tail =>
-      rw [decodeBAVal, decodeBA]
-      rw [← decodeElemBAVal_eq head ba off (off + (head.headSize + headSizeSum tail))
-        (head.headSize + headSizeSum tail)]
+      have hde := decodeElemBAVal_eq head ba off (off + (head.headSize + headSizeSum tail))
+        (head.headSize + headSizeSum tail)
+      rw [decodeBAVal, decodeBA, ← hde]
       cases h1 : (decodeElemBAVal head).run ba off (off + (head.headSize + headSizeSum tail))
           (head.headSize + headSizeSum tail) with
       | none => grind

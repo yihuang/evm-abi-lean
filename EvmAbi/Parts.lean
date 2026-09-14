@@ -149,7 +149,7 @@ theorem encodeTails_cons_dynamic (head tail : Builder) (ys : List Part) :
 @[simp] theorem length_putHeads (acc : Nat) (ps : List Part) :
     ((putHeads acc ps).toList).length = headSizes ps := by
   induction ps generalizing acc with
-  | nil => grind [putHeads, headSizes, Builder.toList_empty]
+  | nil => rfl
   | cons p ps ih =>
       obtain ⟨head, tail, isDyn⟩ := p
       cases isDyn <;>
@@ -162,7 +162,7 @@ theorem encodeTails_cons_dynamic (head tail : Builder) (ys : List Part) :
 @[simp] theorem length_putTails (ps : List Part) :
     ((putTails ps).toList).length = tailSizes ps := by
   induction ps with
-  | nil => grind [putTails, tailSizes, Builder.toList_empty]
+  | nil => rfl
   | cons p ps ih =>
       obtain ⟨head, tail, isDyn⟩ := p
       cases isDyn <;>
@@ -223,7 +223,7 @@ def WF (ps : List Part) : Prop :=
 
 theorem dvd_headSizes (hwf : WF ps) : 32 ∣ headSizes ps := by
   induction ps with
-  | nil => grind [headSizes]
+  | nil => exact ⟨0, rfl⟩
   | cons p ps ih =>
       have hp := hwf p List.mem_cons_self
       have hih := ih (fun q hq => hwf q (List.mem_cons_of_mem p hq))
@@ -234,7 +234,7 @@ theorem dvd_headSizes (hwf : WF ps) : 32 ∣ headSizes ps := by
 
 theorem dvd_tailSizes (hwf : WF ps) : 32 ∣ tailSizes ps := by
   induction ps with
-  | nil => grind [tailSizes]
+  | nil => exact ⟨0, rfl⟩
   | cons p ps ih =>
       have hp := hwf p List.mem_cons_self
       have hih := ih (fun q hq => hwf q (List.mem_cons_of_mem p hq))
