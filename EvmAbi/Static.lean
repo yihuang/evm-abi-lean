@@ -1,6 +1,7 @@
 import Binary.UInt256
 import EvmAbi.Word
 import EvmAbi.Builder
+import EvmAbi.Prefix
 
 /-!
 # EvmAbi.Static
@@ -53,7 +54,7 @@ def decodeInt (buf : List UInt8) : Option Int :=
 
 /-- The `M`-bit two's-complement value bounds fit inside the full
 256-bit range, so the `M`-bit encoding decodes back through the 256-bit
-word decoder.  Shared by `decodeInt_encodeInt` and `decodeInt_append`. -/
+word decoder.  Shared by `decodeInt_encodeInt` and the `intPrefix` codec. -/
 theorem intM_bounds_lt_255 {M : Nat} (hM0 : 0 < M) (hM : M ≤ 256)
     (hl : -(2 ^ (M - 1)) ≤ i) (hu : i < 2 ^ (M - 1)) :
     -(2 : Int) ^ 255 ≤ i ∧ i < (2 : Int) ^ 255 := by
@@ -122,6 +123,114 @@ theorem decodeBytesN_length {n : Nat} {buf bs : List UInt8}
     (h : decodeBytesN n buf = some bs) : bs.length = n := by
   unfold decodeBytesN at h
   grind
+
+/-! ## Prefix codecs
+
+Each standard atom is a `PrefixCodec` (`EvmAbi.Prefix`): its decoder reads
+the 32-byte word at the front and ignores the rest, so the suffix-tolerant
+read-backs (`decodeUint_append` and friends) are all the generic
+`PrefixCodec.roundtrip_append` rather than a hand-written argument over the
+word layer.  What stays per atom is only the three obligations of the
+structure: `dec_take` (locality), `enc_length` (the encoder's width) and
+`dec_enc` (the plain roundtrip). -/
+
+/-- `decodeUint` only reads the first word. -/
+theorem decodeUint_take (buf : List UInt8) :
+    decodeUint buf = decodeUint (buf.take 32) := by
+  simp only [decodeUint]
+  exact (natAt_take_zero buf).symm
+
+/-- `decodeInt` only reads the first word. -/
+theorem decodeInt_take (buf : List UInt8) :
+    decodeInt buf = decodeInt (buf.take 32) := by
+  simp only [decodeInt]
+  rw [decodeUint_take]
+
+/-- `decodeBool` only reads the first word. -/
+theorem decodeBool_take (buf : List UInt8) :
+    decodeBool buf = decodeBool (buf.take 32) := by
+  grind [decodeBool, decodeUint_take]
+
+/-- `decodeAddress` only reads the first word. -/
+theorem decodeAddress_take (buf : List UInt8) :
+    decodeAddress buf = decodeAddress (buf.take 32) := by
+  grind [decodeAddress, decodeUint_take]
+
+/-- `decodeBytesN n` only reads the first word, whatever `n` is. -/
+theorem decodeBytesN_take (n : Nat) (buf : List UInt8) :
+    decodeBytesN n buf = decodeBytesN n (buf.take 32) := by
+  grind [decodeBytesN]
+
+/-- The `uintM` codec, at the full 256-bit bound `decodeUint` promises —
+the per-width bound is applied by the `Ty`-level decoder on top. -/
+def uintPrefix : PrefixCodec Nat where
+  size := 32
+  P n := n < 2 ^ 256
+  enc := encodeUint
+  dec := decodeUint
+  dec_take := decodeUint_take
+  enc_length := fun n _ => length_encodeUint n
+  dec_enc := fun _ h => decodeUint_encodeUint h
+
+/-- The `intM` codec, likewise at the full 256-bit (signed) range.  The
+width hypotheses are the ones the range in `P` is expressed over. -/
+def intPrefix (M : Nat) (hM0 : 0 < M) (hM : M ≤ 256) : PrefixCodec Int where
+  size := 32
+  P i := -((2 ^ (M - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (M - 1) : Nat) : Int)
+  enc := encodeInt
+  dec := decodeInt
+  dec_take := decodeInt_take
+  enc_length := fun _ _ => by simp [encodeInt]
+  dec_enc := fun i h => decodeInt_encodeInt hM0 hM h.1 h.2
+
+/-- The `bool` codec. -/
+def boolPrefix : PrefixCodec Bool where
+  size := 32
+  P _ := True
+  enc := encodeBool
+  dec := decodeBool
+  dec_take := decodeBool_take
+  enc_length := fun _ _ => by simp [encodeBool]
+  dec_enc := fun b _ => by cases b <;> simp [encodeBool, decodeBool, decodeUint_encodeUint]
+
+/-- The `address` codec: 20 raw bytes, encoded in a word. -/
+def addressPrefix : PrefixCodec (List UInt8) where
+  size := 32
+  P a := a.length = 20
+  enc := encodeAddress
+  dec := decodeAddress
+  dec_take := decodeAddress_take
+  enc_length := fun _ _ => by simp [encodeAddress]
+  dec_enc := fun a h => by
+    unfold decodeAddress encodeAddress
+    have hn : Binary.decodeBEU a < 2 ^ 160 := by
+      simpa [h, show 256 ^ 20 = 2 ^ 160 by native_decide] using Binary.decodeBEU_lt a
+    have hlt256 : Binary.decodeBEU a < 2 ^ 256 :=
+      Nat.lt_of_lt_of_le hn (by decide)
+    rw [decodeUint_encodeUint hlt256]
+    simp [hn, show Binary.encodeBEU 20 (Binary.decodeBEU a) = a by
+      simpa [h] using (Binary.encodeBEU_decodeBEU a)]
+
+/-- The `bytesN n` codec: `n` raw bytes, left-aligned in a word.  The width
+must be legal (`n ≤ 32`), which the caller carries as a hypothesis — `Ty`
+keeps `bytesN` widths in `Width` for the same reason. -/
+def bytesNPrefix (n : Nat) (h32 : n ≤ 32) : PrefixCodec (List UInt8) where
+  size := 32
+  P bs := bs.length = n
+  enc := encodeBytesN
+  dec := decodeBytesN n
+  dec_take := fun buf => decodeBytesN_take n buf
+  enc_length := fun bs h => by
+    simp [encodeBytesN, List.length_append, List.length_replicate]
+    omega
+  dec_enc := fun bs h => by
+    unfold decodeBytesN encodeBytesN
+    have hlen : (bs ++ List.replicate (32 - bs.length) 0).length = 32 := by
+      rw [List.length_append, List.length_replicate]; omega
+    have htk := take_append_of_length
+      (xs := bs ++ List.replicate (32 - bs.length) 0) (ys := []) hlen
+    rw [List.append_nil] at htk
+    rw [htk, take_append_of_length h, drop_append_of_length h, if_pos ⟨h, by rw [h]⟩]
 
 /-! ## Builder form (roadmap node 9)
 

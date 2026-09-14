@@ -126,6 +126,140 @@ private theorem twoComp_neg_range {m : Nat} (hm : 0 < m) (i : Int) (hi : ¬ 0 �
 tolerant `_append` forms below with `rest := []`, so each read-back fact
 is proved exactly once. -/
 
+/-! ## Packed prefix codecs
+
+Same story as the standard atoms (`EvmAbi.Static`): each packed decoder
+reads a fixed-size prefix, so its suffix-tolerant read-back below is
+`PrefixCodec.roundtrip_append` at the codec rather than a fresh argument. -/
+
+/-- `decodeUintPacked m` only reads its own width. -/
+theorem decodeUintPacked_take (m : Nat) (buf : List UInt8) :
+    decodeUintPacked m buf = decodeUintPacked m (buf.take (m / 8)) := by
+  grind [decodeUintPacked]
+
+/-- `decodeIntPacked m` only reads its own width. -/
+theorem decodeIntPacked_take (m : Nat) (buf : List UInt8) :
+    decodeIntPacked m buf = decodeIntPacked m (buf.take (m / 8)) := by
+  grind [decodeIntPacked, decodeUintPacked]
+
+/-- `decodeBoolPacked` only reads its first byte. -/
+theorem decodeBoolPacked_take (buf : List UInt8) :
+    decodeBoolPacked buf = decodeBoolPacked (buf.take 1) := by
+  cases buf with
+  | nil => rfl
+  | cons a l =>
+    rw [show List.take 1 (a :: l) = [a] from rfl]
+    simp only [decodeBoolPacked]
+    split <;> (try split) <;> simp_all
+
+/-- `decodeAddressPacked` only reads its first 20 bytes. -/
+theorem decodeAddressPacked_take (buf : List UInt8) :
+    decodeAddressPacked buf = decodeAddressPacked (buf.take 20) := by
+  grind [decodeAddressPacked]
+
+/-- `decodeBytesNPacked n` only reads its first `n` bytes. -/
+theorem decodeBytesNPacked_take (n : Nat) (buf : List UInt8) :
+    decodeBytesNPacked n buf = decodeBytesNPacked n (buf.take n) := by
+  grind [decodeBytesNPacked]
+
+/-- The packed `uintM` codec.  A width that is not byte-aligned is rejected
+by the decoder itself (`P` still bounds the value by `2 ^ m`). -/
+def uintPackedPrefix (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m) : PrefixCodec Nat where
+  size := m / 8
+  P n := n < 2 ^ m
+  enc := encodeUintPacked m
+  dec := decodeUintPacked m
+  dec_take := decodeUintPacked_take m
+  enc_length := fun _ _ => length_encodeBEU _ _
+  dec_enc := fun n hn => by
+    unfold decodeUintPacked encodeUintPacked
+    have hlen : (encodeBEU (m / 8) n).length = m / 8 := length_encodeBEU _ _
+    have htake : (encodeBEU (m / 8) n).take (m / 8) = encodeBEU (m / 8) n :=
+      List.take_of_length_le (by omega)
+    rw [if_pos ⟨hm, by omega, by rw [htake, hlen]⟩, htake,
+      decodeBEU_encodeBEU (by rw [← pow_eq_256 m h8]; exact hn)]
+
+/-- The packed `intM` codec. -/
+def intPackedPrefix (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m) : PrefixCodec Int where
+  size := m / 8
+  P i := -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int)
+  enc := encodeIntPacked m
+  dec := decodeIntPacked m
+  dec_take := decodeIntPacked_take m
+  enc_length := fun _ _ => by
+    rw [encodeIntPacked, encodeUintPacked]; exact length_encodeBEU _ _
+  dec_enc := fun i hi => by
+    by_cases hi0 : 0 ≤ i
+    · have hn : i.toNat < 2 ^ m := by
+        have hlt_nat : i.toNat < 2 ^ (m - 1) := by omega
+        exact Nat.lt_of_lt_of_le hlt_nat (Nat.pow_le_pow_right (by decide) (by omega))
+      have h_enc : encodeIntPacked m i = encodeUintPacked m i.toNat := by
+        rw [encodeIntPacked, if_pos hi0]
+      rw [h_enc, decodeIntPacked]
+      have hdec : decodeUintPacked m (encodeUintPacked m i.toNat) = some i.toNat :=
+        (uintPackedPrefix m hm h8).dec_enc i.toNat hn
+      rw [hdec]; dsimp
+      have hlt_int : (i.toNat : Int) < (2 ^ (m - 1) : Int) := by
+        have hp : ((2 ^ (m - 1) : Nat) : Int) = (2 : Int) ^ (m - 1) := by
+          simp [Int.natCast_pow]
+        omega
+      rw [if_pos hlt_int, Int.toNat_of_nonneg hi0]
+    · have hpos_neg : 0 ≤ -i := by omega
+      have heq_toNat : ((-i).toNat : Int) = -i := Int.toNat_of_nonneg hpos_neg
+      have h_abs : (-i).toNat ≤ 2 ^ (m - 1) := by omega
+      have hrng := twoComp_neg_range (m := m) hm i hi0 h_abs
+      have h_enc : encodeIntPacked m i = encodeUintPacked m (2 ^ m - (-i).toNat) := by
+        rw [encodeIntPacked, if_neg hi0]
+      rw [h_enc, decodeIntPacked]
+      have hdec : decodeUintPacked m (encodeUintPacked m (2 ^ m - (-i).toNat)) =
+          some (2 ^ m - (-i).toNat) :=
+        (uintPackedPrefix m hm h8).dec_enc (2 ^ m - (-i).toNat) hrng.1
+      rw [hdec]; dsimp
+      have h_not_lt_int : ¬ (↑(2 ^ m - (-i).toNat) < (2 ^ (m - 1) : Int)) := by
+        have hp : ((2 ^ (m - 1) : Nat) : Int) = (2 : Int) ^ (m - 1) := by
+          simp [Int.natCast_pow]
+        omega
+      rw [if_neg h_not_lt_int]
+      have hle : (-i).toNat ≤ 2 ^ m :=
+        Nat.le_trans h_abs (Nat.pow_le_pow_right (by decide) (by omega))
+      have hgoal : (↑(2 ^ m - (-i).toNat) : Int) - ((2 ^ m : Nat) : Int) = i := by
+        omega
+      simpa using hgoal
+
+/-- The packed `bool` codec: one byte `0`/`1`. -/
+def boolPackedPrefix : PrefixCodec Bool where
+  size := 1
+  P _ := True
+  enc := encodeBoolPacked
+  dec := decodeBoolPacked
+  dec_take := decodeBoolPacked_take
+  enc_length := fun b _ => by cases b <;> simp [encodeBoolPacked]
+  dec_enc := fun b _ => by cases b <;> simp [encodeBoolPacked, decodeBoolPacked]
+
+/-- The packed `address` codec: 20 raw bytes. -/
+def addressPackedPrefix : PrefixCodec (List UInt8) where
+  size := 20
+  P a := a.length = 20
+  enc := encodeAddressPacked
+  dec := decodeAddressPacked
+  dec_take := decodeAddressPacked_take
+  enc_length := fun _ h => by simp [encodeAddressPacked, h]
+  dec_enc := fun a h => by
+    simp [encodeAddressPacked, decodeAddressPacked,
+      List.take_of_length_le (by omega : a.length ≤ 20), h]
+
+/-- The packed `bytesN n` codec: `n` raw bytes. -/
+def bytesNPackedPrefix (n : Nat) : PrefixCodec (List UInt8) where
+  size := n
+  P bs := bs.length = n
+  enc := encodeBytesNPacked
+  dec := decodeBytesNPacked n
+  dec_take := fun buf => decodeBytesNPacked_take n buf
+  enc_length := fun _ h => by simp [encodeBytesNPacked, h]
+  dec_enc := fun bs h => by
+    simp [encodeBytesNPacked, decodeBytesNPacked,
+      List.take_of_length_le (by omega : bs.length ≤ n), h]
+
 /-! ## Type-indexed packed codec -/
 
 /- The packed encoder lives in builder form, mirroring the standard codec:
@@ -305,71 +439,37 @@ end
 
 /-! ## Prefix-tolerant primitive roundtrips -/
 
+/- Each packed atom records its prefix locality as a `PrefixCodec` above;
+the read-backs below are `PrefixCodec.roundtrip_append` at that codec, so
+the width/word algebra is written once per codec and not per read-back. -/
+
 /-- `uintM` packed read-back over an appended suffix. -/
 theorem decodeUintPacked_append (m : Nat) (n : Nat) (hm : 0 < m) (h8 : 8 ∣ m) (hn : n < 2 ^ m)
     (rest : List UInt8) :
-    decodeUintPacked m (encodeUintPacked m n ++ rest) = some n := by
-  unfold decodeUintPacked encodeUintPacked
-  have hlen : (encodeBEU (m / 8) n).length = m / 8 := length_encodeBEU _ _
-  rw [if_pos ⟨hm, by omega, by rw [take_append_of_length hlen, hlen]⟩,
-    take_append_of_length hlen,
-    decodeBEU_encodeBEU (by rw [← pow_eq_256 m h8]; exact hn)]
+    decodeUintPacked m (encodeUintPacked m n ++ rest) = some n :=
+  (uintPackedPrefix m hm h8).roundtrip_append n hn rest
 
 /-- `intM` packed read-back over an appended suffix. -/
 theorem decodeIntPacked_append (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m)
     (hl : -((2 ^ (m - 1) : Nat) : Int) ≤ i) (hu : i < ((2 ^ (m - 1) : Nat) : Int))
     (rest : List UInt8) :
-    decodeIntPacked m (encodeIntPacked m i ++ rest) = some i := by
-  by_cases hi : 0 ≤ i
-  · have hn : i.toNat < 2 ^ m := by
-      have hlt_nat : i.toNat < 2 ^ (m - 1) := by omega
-      exact Nat.lt_of_lt_of_le hlt_nat (Nat.pow_le_pow_right (by decide) (by omega))
-    have h_enc : encodeIntPacked m i = encodeUintPacked m i.toNat := by
-      rw [encodeIntPacked, if_pos hi]
-    rw [h_enc, decodeIntPacked]
-    have hdec := decodeUintPacked_append m i.toNat hm h8 hn rest
-    rw [hdec]; dsimp
-    have hlt_int : (i.toNat : Int) < (2 ^ (m - 1) : Int) := by
-      have hp : ((2 ^ (m - 1) : Nat) : Int) = (2 : Int) ^ (m - 1) := by
-        simp [Int.natCast_pow]
-      omega
-    rw [if_pos hlt_int, Int.toNat_of_nonneg hi]
-  · have hpos_neg : 0 ≤ -i := by omega
-    have heq_toNat : ((-i).toNat : Int) = -i := Int.toNat_of_nonneg hpos_neg
-    have h_abs : (-i).toNat ≤ 2 ^ (m - 1) := by omega
-    have hrng := twoComp_neg_range (m := m) hm i hi h_abs
-    have h_enc : encodeIntPacked m i = encodeUintPacked m (2 ^ m - (-i).toNat) := by
-      rw [encodeIntPacked, if_neg hi]
-    rw [h_enc, decodeIntPacked]
-    have hdec := decodeUintPacked_append m (2 ^ m - (-i).toNat) hm h8 hrng.1 rest
-    rw [hdec]; dsimp
-    have h_not_lt_int : ¬ (↑(2 ^ m - (-i).toNat) < (2 ^ (m - 1) : Int)) := by
-      have hp : ((2 ^ (m - 1) : Nat) : Int) = (2 : Int) ^ (m - 1) := by
-        simp [Int.natCast_pow]
-      omega
-    rw [if_neg h_not_lt_int]
-    have hle : (-i).toNat ≤ 2 ^ m :=
-      Nat.le_trans h_abs (Nat.pow_le_pow_right (by decide) (by omega))
-    have hgoal : (↑(2 ^ m - (-i).toNat) : Int) - ((2 ^ m : Nat) : Int) = i := by
-      omega
-    simpa using hgoal
+    decodeIntPacked m (encodeIntPacked m i ++ rest) = some i :=
+  (intPackedPrefix m hm h8).roundtrip_append i ⟨hl, hu⟩ rest
 
 /-- `bool` packed read-back over an appended suffix. -/
 theorem decodeBoolPacked_append (b : Bool) (rest : List UInt8) :
-    decodeBoolPacked (encodeBoolPacked b ++ rest) = some b := by
-  cases b <;> simp [encodeBoolPacked, decodeBoolPacked]
+    decodeBoolPacked (encodeBoolPacked b ++ rest) = some b :=
+  boolPackedPrefix.roundtrip_append b trivial rest
 
 /-- `address` packed read-back over an appended suffix. -/
 theorem decodeAddressPacked_append (a : List UInt8) (h : a.length = 20) (rest : List UInt8) :
-    decodeAddressPacked (encodeAddressPacked a ++ rest) = some a := by
-  unfold decodeAddressPacked encodeAddressPacked
-  rw [if_pos (by rw [take_append_of_length h, h]), take_append_of_length h]
+    decodeAddressPacked (encodeAddressPacked a ++ rest) = some a :=
+  addressPackedPrefix.roundtrip_append a h rest
 
 /-- `bytesN` packed read-back over an appended suffix. -/
 theorem decodeBytesNPacked_append (bs : List UInt8) (h : bs.length = n) (rest : List UInt8) :
-    decodeBytesNPacked n (encodeBytesNPacked bs ++ rest) = some bs := by
-  unfold decodeBytesNPacked encodeBytesNPacked
-  rw [if_pos (by rw [take_append_of_length h, h]), take_append_of_length h]
+    decodeBytesNPacked n (encodeBytesNPacked bs ++ rest) = some bs :=
+  (bytesNPackedPrefix n).roundtrip_append bs h rest
 
 /-! ## Static packed roundtrip -/
 
