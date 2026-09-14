@@ -47,12 +47,6 @@ theorem natAt_append (buf rest : List UInt8) (w : UInt256) (i : Nat)
     natAt (buf ++ (bytesOfWord w ++ rest)) i = some w.toNat := by
   grind [natAt, wordAt_append]
 
-/-- The word reader at offset 0 reads no more than the first word, so a
-suffix appended anywhere past `32` bytes is invisible to it.  This is the
-prefix-locality of every decoder built on `decodeUint` (`EvmAbi.Prefix`). -/
-theorem natAt_take_zero (buf : List UInt8) : natAt (buf.take 32) 0 = natAt buf 0 := by
-  grind [natAt, wordAt]
-
 /-- Anything `natAt` reads back is below `2 ^ 256`: it came out of a
 32-byte word. -/
 theorem natAt_lt {buf : List UInt8} {i n : Nat} (h : natAt buf i = some n) :

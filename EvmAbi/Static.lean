@@ -132,31 +132,25 @@ read-backs (`decodeUint_append` and friends) are all the generic
 `PrefixCodec.roundtrip_append` rather than a hand-written argument over the
 word layer.  What stays per atom is only the three obligations of the
 structure: `dec_take` (locality), `enc_length` (the encoder's width) and
-`dec_enc` (the plain roundtrip). -/
+`dec_enc` (the plain roundtrip).
 
-/-- `decodeUint` only reads the first word. -/
+The two locality facts worth stating on their own are `decodeUint_take` —
+the word decoder is where `uint`, `int`, `bool` and `address` get their
+locality from — and `decodeBytesN_take`, whose locality does not depend on
+the width `n`.  The remaining atoms' locality is a one-line `grind` and
+is written inline at the codec that uses it. -/
+
+/-- **Prefix locality of the word decoder**: `decodeUint` reads at most the
+first 32 bytes, so anything appended past the word is invisible to it.
+Every suffix-tolerant read-back built on `decodeUint` (`uint`, `int`,
+`bool`, `address`) reduces to this via `PrefixCodec.roundtrip_append`. -/
 theorem decodeUint_take (buf : List UInt8) :
     decodeUint buf = decodeUint (buf.take 32) := by
   simp only [decodeUint]
-  exact (natAt_take_zero buf).symm
+  grind [natAt, wordAt]
 
-/-- `decodeInt` only reads the first word. -/
-theorem decodeInt_take (buf : List UInt8) :
-    decodeInt buf = decodeInt (buf.take 32) := by
-  simp only [decodeInt]
-  rw [decodeUint_take]
-
-/-- `decodeBool` only reads the first word. -/
-theorem decodeBool_take (buf : List UInt8) :
-    decodeBool buf = decodeBool (buf.take 32) := by
-  grind [decodeBool, decodeUint_take]
-
-/-- `decodeAddress` only reads the first word. -/
-theorem decodeAddress_take (buf : List UInt8) :
-    decodeAddress buf = decodeAddress (buf.take 32) := by
-  grind [decodeAddress, decodeUint_take]
-
-/-- `decodeBytesN n` only reads the first word, whatever `n` is. -/
+/-- **`decodeBytesN` is width-independent**: it reads at most the first word
+whatever `n` is. -/
 theorem decodeBytesN_take (n : Nat) (buf : List UInt8) :
     decodeBytesN n buf = decodeBytesN n (buf.take 32) := by
   grind [decodeBytesN]
@@ -179,7 +173,7 @@ def intPrefix (M : Nat) (hM0 : 0 < M) (hM : M ≤ 256) : PrefixCodec Int where
   P i := -((2 ^ (M - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (M - 1) : Nat) : Int)
   enc := encodeInt
   dec := decodeInt
-  dec_take := decodeInt_take
+  dec_take := fun buf => by simp only [decodeInt]; rw [decodeUint_take]
   enc_length := fun _ _ => by simp [encodeInt]
   dec_enc := fun i h => decodeInt_encodeInt hM0 hM h.1 h.2
 
@@ -189,7 +183,7 @@ def boolPrefix : PrefixCodec Bool where
   P _ := True
   enc := encodeBool
   dec := decodeBool
-  dec_take := decodeBool_take
+  dec_take := fun buf => by grind [decodeBool, decodeUint_take]
   enc_length := fun _ _ => by simp [encodeBool]
   dec_enc := fun b _ => by cases b <;> simp [encodeBool, decodeBool, decodeUint_encodeUint]
 
@@ -199,7 +193,7 @@ def addressPrefix : PrefixCodec (List UInt8) where
   P a := a.length = 20
   enc := encodeAddress
   dec := decodeAddress
-  dec_take := decodeAddress_take
+  dec_take := fun buf => by grind [decodeAddress, decodeUint_take]
   enc_length := fun _ _ => by simp [encodeAddress]
   dec_enc := fun a h => by
     unfold decodeAddress encodeAddress
@@ -219,7 +213,7 @@ def bytesNPrefix (n : Nat) (h32 : n ≤ 32) : PrefixCodec (List UInt8) where
   P bs := bs.length = n
   enc := encodeBytesN
   dec := decodeBytesN n
-  dec_take := fun buf => decodeBytesN_take n buf
+  dec_take := decodeBytesN_take n
   enc_length := fun bs h => by
     simp [encodeBytesN, List.length_append, List.length_replicate]
     omega

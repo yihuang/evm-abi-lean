@@ -130,19 +130,22 @@ is proved exactly once. -/
 
 Same story as the standard atoms (`EvmAbi.Static`): each packed decoder
 reads a fixed-size prefix, so its suffix-tolerant read-back below is
-`PrefixCodec.roundtrip_append` at the codec rather than a fresh argument. -/
+`PrefixCodec.roundtrip_append` at the codec rather than a fresh argument.
+`decodeUintPacked_take` is stated on its own because the `uint` and `int`
+codecs share it, and `decodeBoolPacked_take` because matching the list head
+is not definitionally the same as matching `take 1` — the rest is a
+one-line `grind` written inline at the codec that uses it. -/
 
-/-- `decodeUintPacked m` only reads its own width. -/
+/-- **Prefix locality of the packed word reader**: `decodeUintPacked m`
+reads at most its own `m / 8` bytes, so appending past the scalar is
+invisible to it.  Both the packed `uint` and packed `int` codecs use it. -/
 theorem decodeUintPacked_take (m : Nat) (buf : List UInt8) :
     decodeUintPacked m buf = decodeUintPacked m (buf.take (m / 8)) := by
   grind [decodeUintPacked]
 
-/-- `decodeIntPacked m` only reads its own width. -/
-theorem decodeIntPacked_take (m : Nat) (buf : List UInt8) :
-    decodeIntPacked m buf = decodeIntPacked m (buf.take (m / 8)) := by
-  grind [decodeIntPacked, decodeUintPacked]
-
-/-- `decodeBoolPacked` only reads its first byte. -/
+/-- **Prefix locality of the packed `bool` reader**: `decodeBoolPacked`
+match-reads the list head, so this is not `rfl`-level `take 1` — stated
+once here rather than repeated in the codec. -/
 theorem decodeBoolPacked_take (buf : List UInt8) :
     decodeBoolPacked buf = decodeBoolPacked (buf.take 1) := by
   cases buf with
@@ -152,12 +155,8 @@ theorem decodeBoolPacked_take (buf : List UInt8) :
     simp only [decodeBoolPacked]
     split <;> (try split) <;> simp_all
 
-/-- `decodeAddressPacked` only reads its first 20 bytes. -/
-theorem decodeAddressPacked_take (buf : List UInt8) :
-    decodeAddressPacked buf = decodeAddressPacked (buf.take 20) := by
-  grind [decodeAddressPacked]
-
-/-- `decodeBytesNPacked n` only reads its first `n` bytes. -/
+/-- **`decodeBytesNPacked` is width-independent**: it reads at most the
+first `n` bytes whatever `n` is. -/
 theorem decodeBytesNPacked_take (n : Nat) (buf : List UInt8) :
     decodeBytesNPacked n buf = decodeBytesNPacked n (buf.take n) := by
   grind [decodeBytesNPacked]
@@ -185,7 +184,7 @@ def intPackedPrefix (m : Nat) (hm : 0 < m) (h8 : 8 ∣ m) : PrefixCodec Int wher
   P i := -((2 ^ (m - 1) : Nat) : Int) ≤ i ∧ i < ((2 ^ (m - 1) : Nat) : Int)
   enc := encodeIntPacked m
   dec := decodeIntPacked m
-  dec_take := decodeIntPacked_take m
+  dec_take := fun buf => by simp only [decodeIntPacked]; rw [decodeUintPacked_take m]
   enc_length := fun _ _ => by
     rw [encodeIntPacked, encodeUintPacked]; exact length_encodeBEU _ _
   dec_enc := fun i hi => by
@@ -242,7 +241,7 @@ def addressPackedPrefix : PrefixCodec (List UInt8) where
   P a := a.length = 20
   enc := encodeAddressPacked
   dec := decodeAddressPacked
-  dec_take := decodeAddressPacked_take
+  dec_take := fun buf => by grind [decodeAddressPacked]
   enc_length := fun _ h => by simp [encodeAddressPacked, h]
   dec_enc := fun a h => by
     simp [encodeAddressPacked, decodeAddressPacked,
@@ -254,7 +253,7 @@ def bytesNPackedPrefix (n : Nat) : PrefixCodec (List UInt8) where
   P bs := bs.length = n
   enc := encodeBytesNPacked
   dec := decodeBytesNPacked n
-  dec_take := fun buf => decodeBytesNPacked_take n buf
+  dec_take := decodeBytesNPacked_take n
   enc_length := fun _ h => by simp [encodeBytesNPacked, h]
   dec_enc := fun bs h => by
     simp [encodeBytesNPacked, decodeBytesNPacked,
