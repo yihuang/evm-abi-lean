@@ -12,3 +12,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: leanprover/lean-action@v1
+
+  # Opt-in, via the `proof-only` label: a pull request that only rewrites proof
+  # bodies must not touch a declaration line.  Ordinary pull requests add
+  # declarations, so this must not run for them -- see CONTRIBUTING.md.
+  proof-only:
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'proof-only')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Fetch the base branch
+        run: git fetch --no-tags origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+      - name: Check the diff touches no declaration
+        run: scripts/check-proof-only-diff.sh "origin/${{ github.base_ref }}"

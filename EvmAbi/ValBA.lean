@@ -109,8 +109,7 @@ private theorem map_inj {α β : Type} {f : α → β} (hf : ∀ {a b : α}, f a
 
 /-- A `ByteArray` is determined by the bytes it denotes. -/
 private theorem ba_inj {a b : ByteArray} (h : a.data.toList = b.data.toList) : a = b := by
-  apply Binary.ByteArray.data_inj
-  rwa [← Array.toList_inj]
+  grind [Binary.ByteArray.data_inj, Array.toList_inj]
 
 mutual
 /-- **`ValBA.toList` is injective**: a packed value is determined by its
@@ -120,38 +119,30 @@ theorem ValBA.toList_injective (t : Ty) {v w : ValBA t}
   cases t with
   | uint m =>
       obtain ⟨n, hn⟩ := v; obtain ⟨n', hn'⟩ := w
-      simp only [ValBA.toList, Subtype.mk.injEq] at h
-      exact Subtype.ext (Binary.UInt256.toNat_inj.mp h)
+      grind [ValBA.toList, Binary.UInt256.toNat_inj]
   | int m =>
       obtain ⟨i, hi⟩ := v; obtain ⟨i', hi'⟩ := w
-      simp only [ValBA.toList, Subtype.mk.injEq] at h
-      exact Subtype.ext h
-  | bool => simpa only [ValBA.toList] using h
+      grind [ValBA.toList]
+  | bool => grind [ValBA.toList]
   | address =>
       obtain ⟨a, ha⟩ := v; obtain ⟨b, hb⟩ := w
-      simp only [ValBA.toList, Subtype.mk.injEq] at h
-      exact Subtype.ext (ba_inj h)
+      grind [ValBA.toList, ba_inj]
   | bytesN m =>
       obtain ⟨a, ha⟩ := v; obtain ⟨b, hb⟩ := w
-      simp only [ValBA.toList, Subtype.mk.injEq] at h
-      exact Subtype.ext (ba_inj h)
+      grind [ValBA.toList, ba_inj]
   | bytes =>
       obtain ⟨a, ha⟩ := v; obtain ⟨b, hb⟩ := w
-      simp only [ValBA.toList, Subtype.mk.injEq] at h
-      exact Subtype.ext (ba_inj h)
-  | string => simpa only [ValBA.toList] using h
+      grind [ValBA.toList, ba_inj]
+  | string => grind [ValBA.toList]
   | array t =>
       obtain ⟨vs, hv⟩ := v; obtain ⟨ws, hw⟩ := w
-      simp only [ValBA.toList, Subtype.mk.injEq] at h
-      exact Subtype.ext (map_inj (fun {_ _} hab => ValBA.toList_injective t hab) h)
+      grind [ValBA.toList, map_inj (fun {_ _} hab => ValBA.toList_injective t hab)]
   | fixedArray t n _ =>
       obtain ⟨vs, hv⟩ := v; obtain ⟨ws, hw⟩ := w
-      simp only [ValBA.toList, Subtype.mk.injEq] at h
-      exact Subtype.ext (map_inj (fun {_ _} hab => ValBA.toList_injective t hab) h)
+      grind [ValBA.toList, map_inj (fun {_ _} hab => ValBA.toList_injective t hab)]
   | tuple head tail =>
       obtain ⟨v, vs⟩ := v; obtain ⟨w, ws⟩ := w
-      simp only [ValBA.toList, Prod.mk.injEq] at h
-      rw [ValBA.toList_injective head h.1, TupleValBA.toList_injective tail h.2]
+      grind [ValBA.toList, ValBA.toList_injective head, TupleValBA.toList_injective tail]
 termination_by (sizeOf t, 0)
 
 /-- **`TupleValBA.toList` is injective**, componentwise. -/
@@ -160,9 +151,7 @@ theorem TupleValBA.toList_injective (ts : List Ty) {vs ws : TupleValBA ts}
   cases ts with
   | nil => rfl
   | cons t ts =>
-      obtain ⟨v, vss⟩ := vs; obtain ⟨w, wss⟩ := ws
-      rw [TupleValBA.toList_cons, TupleValBA.toList_cons, Prod.mk.injEq] at h
-      rw [ValBA.toList_injective t h.1, TupleValBA.toList_injective ts h.2]
+      grind [TupleValBA.toList_cons, ValBA.toList_injective t, TupleValBA.toList_injective ts]
 termination_by (sizeOf ts, 1)
 end
 

@@ -109,29 +109,16 @@ the `bytes` and `string` values carry. -/
 theorem size_lt_of_decodeBytesPrefixBAVal {ba : ByteArray} {off : Nat}
     {bs : ByteArray} {n : Nat} (hp : decodeBytesPrefixBAVal ba off = some (bs, n)) :
     bs.size < 2 ^ 64 := by
-  have hma : decodeBytesPrefixBA ba off = some (bs.data.toList, n) := by
-    rw [← decodeBytesPrefixBAVal_eq ba off, hp]
-    rfl
-  have hlist : decodeBytesPrefix (ba.data.toList.drop off) = some (bs.data.toList, n) := by
-    rw [← decodeBytesPrefixBA_eq ba off]
-    exact hma
-  simpa [← Binary.ByteArray.size_eq_toList_length] using length_lt_of_decodeBytesPrefix hlist
+  grind [decodeBytesPrefixBAVal_eq, decodeBytesPrefixBA_eq, length_lt_of_decodeBytesPrefix,
+    Binary.ByteArray.size_eq_toList_length]
 
 /-- The same bound, transported onto a string through the UTF-8 decode. -/
 theorem size_toUTF8_lt_of_decodeBytesPrefixBAVal {ba : ByteArray} {off : Nat}
     {bs : ByteArray} {n : Nat} {s : String}
     (hp : decodeBytesPrefixBAVal ba off = some (bs, n))
     (hs : String.fromUTF8? bs = some s) : s.toUTF8.size < 2 ^ 64 := by
-  have hma : decodeBytesPrefixBA ba off = some (bs.data.toList, n) := by
-    rw [← decodeBytesPrefixBAVal_eq ba off, hp]
-    rfl
-  have hlist : decodeBytesPrefix (ba.data.toList.drop off) = some (bs.data.toList, n) := by
-    rw [← decodeBytesPrefixBA_eq ba off]
-    exact hma
-  have hs' : String.fromUTF8? (bs.data.toList.toByteArray) = some s := by
-    rw [dataToList_toByteArray]
-    exact hs
-  exact size_toUTF8_lt_of_decodeBytesPrefix hlist hs'
+  grind [decodeBytesPrefixBAVal_eq, decodeBytesPrefixBA_eq, dataToList_toByteArray,
+    size_toUTF8_lt_of_decodeBytesPrefix]
 
 /-- Read dynamic `bytes`. -/
 def readBytes (ba : ByteArray) (off : Nat) : Option (ValBA .bytes × Nat) :=
@@ -189,25 +176,13 @@ theorem elemStatic_eq {t : Ty} {d : ByteArray → Nat → Option (ValBA t × Nat
     (hs : t.isStatic = true) (hd : Reads t d) : elemStatic d = decodeElemBAVal t := by
   refine getBA_ext ?_
   funext ba ho to E
-  simp only [elemStatic, decodeElemBAVal, hs, hd ba ho]
-  cases decodeBAVal t ba ho with
-  | none => rfl
-  | some p => obtain ⟨v, n⟩ := p; rfl
+  grind [elemStatic, decodeElemBAVal, hd ba ho]
 
 theorem elemDyn_eq {t : Ty} {d : ByteArray → Nat → Option (ValBA t × Nat)}
     (hs : t.isStatic = false) (hd : Reads t d) : elemDyn d = decodeElemBAVal t := by
   refine getBA_ext ?_
   funext ba ho to E
-  simp only [elemDyn, decodeElemBAVal, hs, hd ba to]
-  cases natAtBA ba ho with
-  | none => rfl
-  | some o =>
-      by_cases hoE : o = E
-      · simp only [if_pos hoE]
-        cases decodeBAVal t ba to with
-        | none => rfl
-        | some p => obtain ⟨v, n⟩ := p; rfl
-      · simp only [if_neg hoE]
+  grind [elemDyn, decodeElemBAVal, hd ba to]
 
 /-! ### the tuple chain -/
 
@@ -243,11 +218,7 @@ theorem cons_eq {t : Ty} {ts : List Ty}
   rw [decodeTupleBAVal.eq_2]
   refine getBA_ext ?_
   funext ba ho to E
-  simp only [cons, he, GetBA.bind_run, GetBA.pure_run]
-  cases (decodeElemBAVal t).run ba ho to E with
-  | none => rfl
-  | some r =>
-      cases hr : (decodeTupleBAVal ts).run ba r.head r.tails r.frontier <;> simp only [hr]
+  grind [cons, GetBA.bind_run, GetBA.pure_run]
 
 /-! ### the element loop -/
 
@@ -330,13 +301,7 @@ theorem reads_tuple {head : Ty} {tail : List Ty} {hss : Nat}
   subst hh; subst hk
   intro ba off
   rw [decodeBAVal.eq_10, readTuple]
-  cases h : (decodeElemBAVal head).run ba off (off + (head.headSize + headSizeSum tail))
-      (head.headSize + headSizeSum tail) with
-  | none => simp [decodeTupleBAVal, GetBA.bind_run, h]
-  | some r =>
-      cases h2 : (decodeTupleBAVal tail).run ba r.head r.tails r.frontier with
-      | none => simp [decodeTupleBAVal, GetBA.bind_run, h, h2]
-      | some s => simp [decodeTupleBAVal, GetBA.bind_run, h, h2]
+  grind [decodeTupleBAVal, GetBA.bind_run, GetBA.pure_run]
 
 /-! ## from reader to the user's decoder -/
 

@@ -50,12 +50,9 @@ instance (t : Ty) (buf : List UInt8) : Decidable (IsCanonical t buf) := by
 theorem decodeStrict_encode (t : Ty) (v : t.Val)
     (hb : (encode t v).length < 2 ^ 256) :
     decodeStrict t (encode t v) = some v := by
-  simp only [decodeStrict]
   have hr := decode_roundtrip t v [] (by rwa [List.append_nil])
-  rw [show decode t (encode t v) = decode t (encode t v ++ []) from by simp]
-  rw [hr]
-  dsimp only []
-  rfl
+  simp only [decodeStrict]
+  grind
 
 /-- The encoder's output is canonical. -/
 theorem isCanonical_encode (t : Ty) (v : t.Val)
@@ -78,9 +75,7 @@ theorem encode_of_decodeStrict (t : Ty) (buf : List UInt8) (v : t.Val)
       · rw [if_pos hrest] at h
         have hv' : v' = v := Option.some.inj h
         subst hv'
-        have hsnd := (decode_sound t v' buf rest c hg).1
-        rw [hrest, List.append_nil] at hsnd
-        exact hsnd
+        grind [decode_sound t v' buf rest c hg]
       · rw [if_neg hrest] at h; contradiction
 
 /-- **Image characterization** (capstone): under the buffer bound, the
@@ -91,14 +86,10 @@ theorem isCanonical_iff (t : Ty) (buf : List UInt8)
     IsCanonical t buf ↔ ∃ v, encode t v = buf := by
   constructor
   · intro h
-    have hdec : ∃ v, decodeStrict t buf = some v := by
-      cases hd : decodeStrict t buf with
-      | none => simp [IsCanonical, hd] at h
-      | some v => exact ⟨v, rfl⟩
-    obtain ⟨v, hd⟩ := hdec
+    obtain ⟨v, hd⟩ : ∃ v, decodeStrict t buf = some v := by
+      cases hd : decodeStrict t buf <;> grind [IsCanonical]
     exact ⟨v, encode_of_decodeStrict t buf v hd⟩
   · rintro ⟨v, he⟩
-    show (decodeStrict t buf).isSome = true
     rw [← he]
     exact isCanonical_encode t v (by rw [he]; exact hb)
 
@@ -109,8 +100,7 @@ theorem decodeStrict_eq_some_iff (t : Ty) (buf : List UInt8)
     (v : t.Val) (hb : buf.length < 2 ^ 256) :
     decodeStrict t buf = some v ↔ encode t v = buf := by
   constructor
-  · intro h
-    exact encode_of_decodeStrict t buf v h
+  · exact encode_of_decodeStrict t buf v
   · intro he
     rw [← he]
     exact decodeStrict_encode t v (by rw [he]; exact hb)
@@ -127,23 +117,20 @@ theorem decode_encodeByteArray (t : Ty) (v : t.Val)
     (hb : (encodeByteArray t v).size < 2 ^ 256) :
     decode t (encodeByteArray t v).data.toList = some (v, (encode t v).length, []) := by
   rw [size_encodeByteArray] at hb
-  rw [data_toList_encodeByteArray]
-  simpa using decode_roundtrip t v [] (by simpa using hb)
+  simpa [data_toList_encodeByteArray] using decode_roundtrip t v [] (by simpa using hb)
 
 /-- **Static roundtrip for the executable encoder** — no size hypothesis,
 since static types carry no offset words. -/
 theorem decode_encodeByteArray_static (t : Ty) (hs : t.isStatic = true) (v : t.Val) :
     decode t (encodeByteArray t v).data.toList = some (v, t.headSize, []) := by
-  rw [data_toList_encodeByteArray]
-  simpa using decode_static_append t hs v []
+  simpa [data_toList_encodeByteArray] using decode_static_append t hs v []
 
 /-- The executable encoder's output is canonical. -/
 theorem isCanonical_encodeByteArray (t : Ty) (v : t.Val)
     (hb : (encodeByteArray t v).size < 2 ^ 256) :
     IsCanonical t (encodeByteArray t v).data.toList := by
   rw [size_encodeByteArray] at hb
-  rw [data_toList_encodeByteArray]
-  exact isCanonical_encode t v hb
+  simpa [data_toList_encodeByteArray] using isCanonical_encode t v hb
 
 /-- **Strict roundtrip for the executable encoder**, inherited from
 `decodeStrict_encode`. -/
@@ -151,8 +138,7 @@ theorem decodeStrict_encodeByteArray (t : Ty) (v : t.Val)
     (hb : (encodeByteArray t v).size < 2 ^ 256) :
     decodeStrict t (encodeByteArray t v).data.toList = some v := by
   rw [size_encodeByteArray] at hb
-  rw [data_toList_encodeByteArray]
-  exact decodeStrict_encode t v hb
+  simpa [data_toList_encodeByteArray] using decodeStrict_encode t v hb
 
 end Spec
 end EvmAbi

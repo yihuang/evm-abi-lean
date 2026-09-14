@@ -111,8 +111,8 @@ def emitBytes (acc : ByteArray) : List UInt8 → ByteArray
 theorem data_toList_emitBytes (acc : ByteArray) (bs : List UInt8) :
     (emitBytes acc bs).data.toList = acc.data.toList ++ bs := by
   induction bs generalizing acc with
-  | nil => simp [emitBytes]
-  | cons b bs ih => simp [emitBytes, ih, ByteArray.data_push]
+  | nil => grind [emitBytes]
+  | cons b bs ih => grind [emitBytes, ByteArray.data_push]
 
 /-- Push `n` zero bytes onto the accumulator. -/
 def emitZeros (acc : ByteArray) : Nat → ByteArray
@@ -122,8 +122,8 @@ def emitZeros (acc : ByteArray) : Nat → ByteArray
 theorem data_toList_emitZeros (acc : ByteArray) (n : Nat) :
     (emitZeros acc n).data.toList = acc.data.toList ++ List.replicate n 0 := by
   induction n generalizing acc with
-  | zero => simp [emitZeros]
-  | succ n ih => simp [emitZeros, ih, ByteArray.data_push, List.replicate_succ]
+  | zero => grind [emitZeros]
+  | succ n ih => grind [emitZeros, ByteArray.data_push]
 
 /-- Push one 32-byte word onto the accumulator, most significant limb
 first — no per-word scratch buffer, no `copySlice`. -/
@@ -195,16 +195,15 @@ theorem data_toList_emitZerosFast (acc : ByteArray) (n : Nat) :
   induction acc, n using emitZerosFast.induct with
   | case1 acc n h => rw [emitZerosFast, if_pos h, data_toList_pushZeros32 acc h]
   | case2 acc n h ih =>
-      rw [emitZerosFast, if_neg h, ih, data_toList_pushZeros32 acc (Nat.le_refl 32),
-        List.append_assoc, List.replicate_append_replicate,
-        show 32 + (n - 32) = n from by omega]
+      grind [emitZerosFast, data_toList_pushZeros32, List.append_assoc,
+        List.replicate_append_replicate]
 
 /-- The swap.  A `Prop`-level equation between the two implementations, so
 the compiled encoder copies its padding while the proofs keep pushing it. -/
 @[csimp] theorem emitZeros_eq_fast : @emitZeros = @emitZerosFast := by
   funext acc n
-  apply ByteArray.data_inj
-  rw [← Array.toList_inj, data_toList_emitZeros, data_toList_emitZerosFast]
+  grind [data_toList_emitZeros, data_toList_emitZerosFast, ByteArray.data_inj,
+    Array.toList_inj]
 
 /-- Append a chunk tree onto an accumulator. -/
 def emit (acc : ByteArray) : Chunks → ByteArray
@@ -370,8 +369,7 @@ Every `List UInt8` statement about `b.toList` transports to `b.run`. -/
 /-- The other direction: `run` is `List.toByteArray` of the denotation, so a
 builder and the list it denotes are interchangeable at the I/O boundary. -/
 theorem run_eq_toByteArray (b : Builder) : b.run = b.toList.toByteArray := by
-  apply ByteArray.data_inj
-  rw [← Array.toList_inj, data_toList_run, List.toList_data_toByteArray]
+  grind [ByteArray.data_inj, Array.toList_inj, data_toList_run, List.toList_data_toByteArray]
 
 end Builder
 

@@ -97,8 +97,7 @@ theorem headSizes_eq_of_equiv : ∀ {ps ps' : List Part},
   | [], [], _ => rfl
   | p :: ps, q :: qs, h => by
       obtain ⟨hd, htl⟩ := h
-      have hh : Part.headSize p = Part.headSize q := Part.headSize_eq_of_equiv hd
-      simp [headSizes, hh, headSizes_eq_of_equiv htl]
+      grind [headSizes, Part.headSize_eq_of_equiv hd, headSizes_eq_of_equiv htl]
 
 /-- Equivalent part lists have equal tail sections. -/
 theorem tailSizes_eq_of_equiv : ∀ {ps ps' : List Part},
@@ -106,8 +105,7 @@ theorem tailSizes_eq_of_equiv : ∀ {ps ps' : List Part},
   | [], [], _ => rfl
   | p :: ps, q :: qs, h => by
       obtain ⟨hd, htl⟩ := h
-      have hh : Part.tailSize p = Part.tailSize q := Part.tailSize_eq_of_equiv hd
-      simp [tailSizes, hh, tailSizes_eq_of_equiv htl]
+      grind [tailSizes, Part.tailSize_eq_of_equiv hd, tailSizes_eq_of_equiv htl]
 
 /-- Equivalent part lists have equal head encodings. -/
 theorem encodeHeads_eq_of_equiv (acc : Nat) : ∀ {ps ps' : List Part},
@@ -120,22 +118,9 @@ theorem encodeHeads_eq_of_equiv (acc : Nat) : ∀ {ps ps' : List Part},
       | mk ph pt pd =>
         cases q with
         | mk qh qt qd =>
-          cases pd with
-          | false =>
-            cases qd with
-            | false =>
-                rw [encodeHeads_cons_static, encodeHeads_cons_static]
-                rw [hhead]
-                rw [encodeHeads_eq_of_equiv acc htl]
-            | true => exact False.elim (Bool.noConfusion hdyn)
-          | true =>
-            cases qd with
-            | false => exact False.elim (Bool.noConfusion hdyn)
-            | true =>
-                rw [encodeHeads_cons_dynamic, encodeHeads_cons_dynamic]
-                have hlen : pt.toList.length = qt.toList.length := congrArg List.length htail
-                rw [hlen]
-                rw [encodeHeads_eq_of_equiv (acc + qt.toList.length) htl]
+          cases pd <;> cases qd <;> grind [encodeHeads_cons_static, encodeHeads_cons_dynamic,
+            encodeHeads_eq_of_equiv acc htl,
+            encodeHeads_eq_of_equiv (acc + qt.toList.length) htl]
 
 /-- Equivalent part lists have equal tail encodings. -/
 theorem encodeTails_eq_of_equiv : ∀ {ps ps' : List Part},
@@ -148,20 +133,8 @@ theorem encodeTails_eq_of_equiv : ∀ {ps ps' : List Part},
       | mk ph pt pd =>
         cases q with
         | mk qh qt qd =>
-          cases pd with
-          | false =>
-            cases qd with
-            | false =>
-                rw [encodeTails_cons_static, encodeTails_cons_static]
-                exact encodeTails_eq_of_equiv htl
-            | true => exact False.elim (Bool.noConfusion hdyn)
-          | true =>
-            cases qd with
-            | false => exact False.elim (Bool.noConfusion hdyn)
-            | true =>
-                rw [encodeTails_cons_dynamic, encodeTails_cons_dynamic]
-                rw [htail]
-                rw [encodeTails_eq_of_equiv htl]
+          cases pd <;> cases qd <;> grind [encodeTails_cons_static, encodeTails_cons_dynamic,
+            encodeTails_eq_of_equiv htl]
 
 /-- Equivalent part lists have equal full encodings. -/
 theorem encodeParts_eq_of_equiv : ∀ {ps ps' : List Part},
@@ -211,18 +184,10 @@ theorem partOfBA_toList (t : Ty) (v : ValBA t)
     (h : (putBA t v).toList = Spec.encode t (ValBA.toList t v)) :
     Part.Equiv (partOfBA t v) (Spec.partOf t (ValBA.toList t v)) := by
   cases hs : t.isStatic
-  · have hba : partOfBA t v = ⟨∅, putBA t v, true⟩ := by simp [partOfBA, hs]
-    have hsp : Spec.partOf t (ValBA.toList t v) =
-        ⟨∅, Spec.put t (ValBA.toList t v), true⟩ := by
-      rw [Spec.partOf_dynamic t (ValBA.toList t v) hs]
-    rw [hba, hsp]
-    simp [Part.Equiv, h, Builder.size_eq_length_toList, Spec.encode]
-  · have hba : partOfBA t v = ⟨putBA t v, ∅, false⟩ := by simp [partOfBA, hs]
-    have hsp : Spec.partOf t (ValBA.toList t v) =
-        ⟨Spec.put t (ValBA.toList t v), ∅, false⟩ := by
-      rw [Spec.partOf_static t (ValBA.toList t v) hs]
-    rw [hba, hsp]
-    simp [Part.Equiv, h, Builder.size_eq_length_toList, Spec.encode]
+  · grind [partOfBA, Spec.partOf_dynamic, Part.Equiv, Builder.size_eq_length_toList,
+      Spec.encode]
+  · grind [partOfBA, Spec.partOf_static, Part.Equiv, Builder.size_eq_length_toList,
+      Spec.encode]
 
 mutual
 /-- The runtime encoder denotes the spec encoder of the same value. -/
@@ -266,12 +231,9 @@ theorem toList_putBA (t : Ty) (v : ValBA t) :
           (ps' := (vs.map (ValBA.toList t)).map (Spec.partOf t)) (by
             clear hvs
             induction vs with
-            | nil => trivial
+            | nil => grind [PartsEquivalent]
             | cons v vs ih =>
-                unfold PartsEquivalent
-                constructor
-                · exact partOfBA_toList t v (toList_putBA t v)
-                · exact ih))
+                grind [PartsEquivalent, partOfBA_toList t v (toList_putBA t v)]))
   | fixedArray t n hn =>
       obtain ⟨vs, hvs⟩ := v
       rw [putBA.eq_9, ValBA.toList.eq_9, Spec.encode, Spec.put.eq_9]
@@ -281,33 +243,26 @@ theorem toList_putBA (t : Ty) (v : ValBA t) :
         (ps' := (vs.map (ValBA.toList t)).map (Spec.partOf t)) (by
           clear hvs
           induction vs with
-          | nil => trivial
+          | nil => grind [PartsEquivalent]
           | cons v vs ih =>
-              unfold PartsEquivalent
-              constructor
-              · exact partOfBA_toList t v (toList_putBA t v)
-              · exact ih)
+              grind [PartsEquivalent, partOfBA_toList t v (toList_putBA t v)])
   | tuple head tail =>
       obtain ⟨v', vs⟩ := v
       rw [putBA.eq_10, ValBA.toList.eq_10, Spec.encode, Spec.put.eq_10]
       change encodeParts (partOfBA head v' :: partsOfTupleBA tail vs) =
         encodeParts (Spec.partOf head (ValBA.toList head v') ::
           Spec.partsOfTuple tail (TupleValBA.toList tail vs))
-      apply encodeParts_eq_of_equiv
-      constructor
-      · exact partOfBA_toList head v' (toList_putBA head v')
-      · exact partsOfTupleBA_equiv tail vs
+      grind [encodeParts_eq_of_equiv, PartsEquivalent, Part.Equiv,
+        partOfBA_toList head v' (toList_putBA head v'), partsOfTupleBA_equiv tail vs]
 termination_by sizeOf t
 
 /-- The runtime tuple parts denote the spec tuple parts. -/
 theorem partsOfTupleBA_equiv : ∀ (ts : List Ty) (vs : TupleValBA ts),
     PartsEquivalent (partsOfTupleBA ts vs) (Spec.partsOfTuple ts (TupleValBA.toList ts vs))
-  | [], vs => by cases vs; rw [partsOfTupleBA.eq_1, Spec.partsOfTuple.eq_1]; trivial
+  | [], vs => by cases vs; grind [partsOfTupleBA, Spec.partsOfTuple, PartsEquivalent]
   | t :: ts, (v, vs) => by
-      rw [partsOfTupleBA.eq_2, Spec.partsOfTuple.eq_2, TupleValBA.toList_cons]
-      constructor
-      · exact partOfBA_toList t v (toList_putBA t v)
-      · exact partsOfTupleBA_equiv ts vs
+      grind [partsOfTupleBA, Spec.partsOfTuple, TupleValBA.toList_cons, PartsEquivalent,
+        partOfBA_toList t v (toList_putBA t v), partsOfTupleBA_equiv ts vs]
 termination_by ts => sizeOf ts
 end
 
@@ -318,20 +273,17 @@ def encode (t : Ty) (v : ValBA t) : ByteArray := (putBA t v).run
 /-- The runtime encoder denotes the spec encoder of the same value. -/
 @[simp] theorem data_toList_encode (t : Ty) (v : ValBA t) :
     (encode t v).data.toList = Spec.encode t (ValBA.toList t v) := by
-  rw [encode, Builder.data_toList_run]
-  exact toList_putBA t v
+  grind [encode, Builder.data_toList_run, toList_putBA]
 
 /-- …equivalently, the runtime encoder is the spec encoding packed into a
 `ByteArray`. -/
 theorem encode_eq (t : Ty) (v : ValBA t) :
     encode t v = (Spec.encode t (ValBA.toList t v)).toByteArray := by
-  rw [encode, Builder.run_eq_toByteArray]
-  rw [toList_putBA t v]
+  grind [encode, Builder.run_eq_toByteArray, toList_putBA]
 
 @[simp] theorem size_encode (t : Ty) (v : ValBA t) :
     (encode t v).size = (Spec.encode t (ValBA.toList t v)).length := by
-  rw [encode, Builder.size_run, Builder.size_eq_length_toList]
-  rw [toList_putBA t v]
+  grind [encode, Builder.size_run, Builder.size_eq_length_toList, toList_putBA]
 
 /-! ## the runtime decoder -/
 
@@ -380,8 +332,8 @@ theorem decodeStrict_encode (t : Ty) (v : ValBA t)
     (hb : (encode t v).size < 2 ^ 256) :
     decodeStrict t (encode t v) = some v := by
   refine eq_some_of_map_eq (fun {_ _} hab => ValBA.toList_injective t hab) ?_
-  rw [decodeStrict, decodeStrictBAVal_eq t, encode_eq_encodeByteArray]
-  exact decodeStrictBA_encodeByteArray t _ (by rwa [← encode_eq_encodeByteArray])
+  grind [decodeStrict, decodeStrictBAVal_eq t, encode_eq_encodeByteArray,
+    decodeStrictBA_encodeByteArray]
 
 /-- **Runtime uniqueness** (capstone): a strictly decodable buffer *is* the
 encoding of its decoded value. -/
