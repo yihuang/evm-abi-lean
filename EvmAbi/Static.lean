@@ -198,7 +198,7 @@ def addressPrefix : PrefixCodec (List UInt8) where
   dec_enc := fun a h => by
     unfold decodeAddress encodeAddress
     have hn : Binary.decodeBEU a < 2 ^ 160 := by
-      simpa [h, show 256 ^ 20 = 2 ^ 160 by native_decide] using Binary.decodeBEU_lt a
+      simpa [h, show 256 ^ 20 = 2 ^ 160 by decide] using Binary.decodeBEU_lt a
     have hlt256 : Binary.decodeBEU a < 2 ^ 256 :=
       Nat.lt_of_lt_of_le hn (by decide)
     rw [decodeUint_encodeUint hlt256]
@@ -240,6 +240,97 @@ theorem encodeUint_eq (n : Nat) : encodeUint n = encodeBEU 32 n := by
   have h : 256 ^ 32 ∣ 2 ^ 256 := by omega
   simp [encodeUint, bytesOfWord, UInt256.toBEBytes, UInt256.toNat_ofNat,
     UInt256.byteSize, UInt256.size, encodeBEU_mod_of_dvd h]
+
+/-- **An `address` word is twelve zeros and the address itself.**
+
+`encodeAddress` is stated through the value (`encodeUint (decodeBEU a)`),
+which reads the 20 bytes into a number so the encoder can write them back
+out.  They come back unchanged: the value fits in 20 bytes, so the width-32
+encoding is the width-20 encoding under twelve zero bytes, and the width-20
+encoding of `decodeBEU a` is `a`.
+
+The runtime encoder uses this to skip the round trip entirely -- see
+`emitPrim`'s `.address` arm, which copies the bytes rather than rebuilding
+them, and never touches a bignum even for a full 160-bit address. -/
+theorem encodeAddress_eq (a : List UInt8) (h : a.length = 20) :
+    encodeAddress a = List.replicate 12 0 ++ a := by
+  have hlt : decodeBEU a < 256 ^ 20 := h ▸ decodeBEU_lt a
+  have hback : encodeBEU 20 (decodeBEU a) = a := by
+    rw [← h]; exact encodeBEU_decodeBEU a
+  rw [encodeAddress, encodeUint_eq, show (32 : Nat) = 20 + 12 from rfl,
+    encodeBEU_pad hlt 12, hback]
+
+/-- Only the all-zero byte string decodes to zero. -/
+theorem decodeBEU_replicate_zero (k : Nat) : decodeBEU (List.replicate k 0) = 0 := by
+  rw [← encodeBEU_zero k]
+  exact decodeBEU_encodeBEU (Nat.pow_pos (by decide))
+
+/-- An address word splits at its twelfth byte: twelve bytes of leading
+padding weighted by `256 ^ 20`, and the twenty the address occupies. -/
+private theorem address_split {w : List UInt8} (h : w.length = 32) :
+    decodeBEU w = decodeBEU (w.take 12) * 256 ^ 20 + decodeBEU (w.drop 12) := by
+  have hd : (w.drop 12).length = 20 := by simp [h]
+  rw [← hd, ← decodeBEU_append, List.take_append_drop]
+
+/-- **A word holds an address exactly when its first twelve bytes are zero.**
+The `< 2 ^ 160` bound the decoder checks is a statement about the value; this
+says it is equally one about the bytes, which is what lets the runtime decoder
+check it without building the value. -/
+theorem address_zero_prefix_iff {w : List UInt8} (h : w.length = 32) :
+    decodeBEU w < 2 ^ 160 ↔ w.take 12 = List.replicate 12 0 := by
+  have hsplit := address_split h
+  have hlt : decodeBEU (w.drop 12) < 256 ^ 20 := by
+    have hd : (w.drop 12).length = 20 := by simp [h]
+    have := decodeBEU_lt (w.drop 12); rwa [hd] at this
+  have hpow : (256 : Nat) ^ 20 = 2 ^ 160 := by decide
+  constructor
+  · intro hb
+    have hz : decodeBEU (w.take 12) = 0 := by rw [hpow] at hsplit hlt; omega
+    have hrep := encodeBEU_decodeBEU (w.take 12)
+    rw [hz, encodeBEU_zero] at hrep
+    rw [← hrep]; simp [h]
+  · intro hz
+    rw [hz, decodeBEU_replicate_zero] at hsplit
+    omega
+
+/-- `decodeUint` reads the first word and nothing else. -/
+theorem decodeUint_eq_window (buf : List UInt8) :
+    decodeUint buf = if 32 ≤ buf.length then some (decodeBEU (buf.take 32)) else none := by
+  rw [decodeUint, natAt, wordAt]
+  by_cases hb : 32 ≤ buf.length
+  · have hl : ((buf.drop (32 * 0)).take 32).length = 32 := by simp; omega
+    rw [if_pos hl, if_pos hb]
+    simp only [Option.map_some, Nat.mul_zero, List.drop_zero]
+    rw [UInt256.toNat_ofBEBytes_of_length (by simpa using hl)]
+  · have hl : ¬ ((buf.drop (32 * 0)).take 32).length = 32 := by simp; omega
+    rw [if_neg hl, if_neg hb]; rfl
+
+/-- **`decodeAddress` is a byte test and a slice.**  Both of the decoder's
+steps -- the `< 2 ^ 160` guard and the `encodeBEU 20` re-expansion -- are
+statements about the word's bytes, so a decoder that already holds the bytes
+need not build the value at all.  `decodeAddressBAVal` is this equation. -/
+theorem decodeAddress_eq_window (buf : List UInt8) :
+    decodeAddress buf =
+      if 32 ≤ buf.length ∧ (buf.take 32).take 12 = List.replicate 12 0 then
+        some ((buf.take 32).drop 12)
+      else none := by
+  rw [decodeAddress, decodeUint_eq_window]
+  by_cases hb : 32 ≤ buf.length
+  · have h32 : (buf.take 32).length = 32 := by simp; omega
+    have hd : ((buf.take 32).drop 12).length = 20 := by simp [h32]
+    rw [if_pos hb]
+    dsimp only
+    by_cases hz : (buf.take 32).take 12 = List.replicate 12 0
+    · -- the guard holds, and the re-expansion returns the bytes it read
+      have hsplit := address_split h32
+      rw [hz, decodeBEU_replicate_zero, Nat.zero_mul, Nat.zero_add] at hsplit
+      rw [dif_pos ((address_zero_prefix_iff h32).mpr hz), hsplit, ← hd,
+        encodeBEU_decodeBEU, if_pos ⟨hb, hz⟩]
+    · rw [dif_neg (fun hc => hz ((address_zero_prefix_iff h32).mp hc)),
+        if_neg (fun h => hz h.2)]
+  · rw [if_neg hb]
+    dsimp only
+    rw [if_neg (fun h => hb h.1)]
 
 theorem toList_chunk_encodeBEBytes (k n : Nat) :
     (Builder.chunk (encodeBEBytes k n)).toList = encodeBEU k n := by

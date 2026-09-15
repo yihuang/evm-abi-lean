@@ -54,30 +54,16 @@ the description, as a reviewer cannot tell the two apart from the diff alone.
 
 ### Measure, do not estimate
 
-Proof length is measured in proof-body lines: the line carrying a `by` token,
-plus every following line indented past it, excluding blank and comment lines.
-State the file in the branch against the same file at the merge base; a
-whole-file line count is not a substitute, since a refactor can hide in a
-comment.  Run
+Proof length is measured in proof-body lines: the line carrying a `by` token
+plus the tactic block it opens, blanks and comments excluded.  Run
 
 ```bash
 scripts/proof-body-lines.py --base origin/main
 ```
 
-which counts every file the branch touches on both sides, so the number in a
-description is one a reviewer can reproduce rather than take on trust.
+so a reviewer can reproduce the number.
 
-Two things the metric deliberately does **not** let you do.
-
-The anchor is the `by` token, not `:= by`.  A `structure` instance written
-with `where` carries no `:= by` on its declaration line, so anchoring there
-would score every tactic in its fields as zero -- and a refactor could then
-post a large reduction purely by moving proofs out of `theorem foo := by` and
-into the fields of a `def foo … where`, having deleted no tactic text at all.
-
-A proof rewritten from a tactic block into a term (`:= lemma a b`) drops to
-zero under any tactic-line count.  That is a real improvement, but a much
-smaller one than a saving of the whole former body, so the script reports the
-count of term-mode theorems beside the line delta.  Quote both: "-40 lines,
-and six proofs became terms" says what happened where "-40 lines" alone does
-not.
+The anchor is `by`, not `:= by`: a `where` instance has no `:= by`, so
+anchoring there scores its fields as zero and a refactor can post a reduction
+by moving proofs into them.  The script also counts term-mode theorems, which
+score zero under any tactic-line count — quote both.
