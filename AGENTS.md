@@ -28,17 +28,18 @@ The **runtime layer** (`EvmAbi.Codec`) is what users run: `encode`
 over `ValBA` values into a `ByteArray`, `decode` / `decodeStrict` over a
 `ByteArray` into `ValBA` values, and `IsCanonical`.  It is tied to the spec
 by `toList_putBA` (runtime encoder denotes the spec encoder of the
-denotation), `ValBA.toList`, and the decoder agreement family in
-`EvmAbi.Codec.ByteArray`; a private `decodeBA` walker there is a proof
-bridge and is not public API.
+denotation) and `ValBA.toList`; the runtime decoder is *defined* as
+`Spec.decode` at the offset (`ValBA.ofList` materialises the payloads), and
+the offset walker that compiled code runs is swapped in by `@[csimp]` with
+one agreement family against that definition as its proof.
 `EvmAbi.Packed` (`decodePacked`) mirrors the codec shape — a `Builder`
 encoder (`putPacked`) and `Get2` walkers (`decodePackedElem` /
 `decodePackedTuple`) — and reads array elements via the bound-free static
 delegation (`Spec.decodeElems` / `Spec.decode_static_append`).
 `EvmAbi.Codec.ByteArray` mirrors the decoder over offsets — `GetBA` is
 `Get2` with the two cursors as naturals into one buffer — and pairs every
-definition with an agreement lemma under `off ↦ ba.data.toList.drop off`,
-so the list families transport rather than being restated.  Reads there go
+primitive with an agreement lemma under `off ↦ ba.data.toList.drop off`, so
+the list primitives transport rather than being restated.  Reads there go
 through `natAtBA` / `windowList`, never through a slice.  `EvmAbi.Spec`
 holds the spec codec proper (defs, helper packages, static delegation); the
 theorem families live in `EvmAbi.Spec.Roundtrip` / `EvmAbi.Spec.Sound` /

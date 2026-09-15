@@ -1250,4 +1250,86 @@ example : streamsLikeBuilder (.array .bytes) ⟨[], by decide⟩ := by native_de
 
 example : streamsLikeBuilder (.array (.uint 32)) ⟨[], by decide⟩ := by native_decide
 
+/-! ## the swapped decoder against the specification
+
+`decodeBAValFast_eq_spec` proves the offset walker and the specification
+composition equal for every type, and `decodeBAValFast_eq` folds that into
+"the walker *is* the definition"; the compile step — the `@[csimp]` swap
+`decodeBAVal_eq_fused`, which is what compiled code acts on — is what these
+rows run.  `decode` counts the bytes the
+runtime decoder consumed and `Spec.decode` the bytes the specification consumed
+on the same buffer, so a fused `uint` arm that stops at the wrong place, or a
+payload read that skips its padding, shows up here. -/
+
+/-- The runtime decoder's consumed-byte count against the specification's, on
+the same buffer. -/
+private def decodesLikeSpec (t : Ty) (ba : ByteArray) : Bool :=
+  (decode t ba).map (fun p => p.2) == (Spec.decode t ba.data.toList).map (fun p => p.2.1)
+
+/-- The fused `uint` array arm at a width where every word is in range, and the
+generic arm below it. -/
+example : decodesLikeSpec (.array (.uint 32))
+    (encode (.array (.uint 32)) ⟨[⟨7, by decide⟩, ⟨8, by decide⟩, ⟨9, by decide⟩], by decide⟩) := by
+  native_decide
+
+example : decodesLikeSpec (.array (.uint 8))
+    (encode (.array (.uint 8)) ⟨[⟨1, by decide⟩, ⟨255, by decide⟩], by decide⟩) := by
+  native_decide
+
+/-- A payload that fills its word skips the padding run; one that does not
+takes it; and the empty containers are every walker's base case. -/
+example : decodesLikeSpec (.array .bytes)
+    (encode (.array .bytes)
+      ⟨[⟨⟨Array.replicate 32 7⟩, by decide⟩, ⟨⟨#[1, 2, 3]⟩, by decide⟩,
+        ⟨⟨#[]⟩, by decide⟩], by decide⟩) := by native_decide
+
+example : decodesLikeSpec (.array (.uint 32)) (encode (.array (.uint 32)) ⟨[], by decide⟩) := by
+  native_decide
+
+/-- `string` decodes through the UTF-8 check, and a nested dynamic value
+through the head/tail cursors. -/
+example : decodesLikeSpec (.tuple .bytes [.array (.uint 32)])
+    (encode (.tuple .bytes [.array (.uint 32)])
+      (⟨⟨#[1, 2, 3]⟩, by decide⟩,
+       ⟨[⟨7, by decide⟩, ⟨8, by decide⟩, ⟨9, by decide⟩], by decide⟩, ())) := by native_decide
+
+example : decodesLikeSpec (.array .string)
+    (encode (.array .string)
+      ⟨[⟨"", by native_decide⟩, ⟨"hi", by native_decide⟩,
+        ⟨"héllo wörld", by native_decide⟩], by decide⟩) := by native_decide
+
+/-! ### the strict swap
+
+`decodeStrictBA_eq_fast` is the other `@[csimp]` swap.  Its exact-consumption
+check (`n = ba.size`) is a branch `decodesLikeSpec` never reaches, so it gets
+its own rows: the runtime strict decoder against the specification on a
+canonical encoding, and trailing garbage, which only that branch rejects. -/
+
+/-- The strict runtime decoder against the specification on the same encoding:
+the same value, not merely the same success bit.  Compared under
+`ValBA.toList` — `t.Val`'s payloads are lists and strings, so it is decidable
+where `ValBA`'s `ByteArray` payloads are not. -/
+private def strictLikeSpec (t : Ty) [DecidableEq t.Val] (v : ValBA t) : Bool :=
+  decide ((decodeStrict t (encode t v)).map (ValBA.toList t)
+    = Spec.decodeStrict t (encode t v).data.toList)
+
+/-- The fused `uint` array arm, behind the strict wrapper. -/
+example : strictLikeSpec (.array (.uint 32))
+    ⟨[⟨7, by decide⟩, ⟨8, by decide⟩], by decide⟩ := by native_decide
+
+/-- A payload that fills its word and one that does not, so both padding arms
+are read and then checked against the byte count. -/
+example : strictLikeSpec (.array .bytes)
+    ⟨[⟨⟨#[1, 2, 3]⟩, by decide⟩, ⟨⟨Array.replicate 32 7⟩, by decide⟩], by decide⟩ := by
+  native_decide
+
+/-- Trailing garbage: rejected by the exact-consumption check. -/
+example : (decodeStrict (.uint 32) ((encode (.uint 32) ⟨7, by decide⟩).push 0)).isNone := by
+  native_decide
+
+example :
+    (decodeStrict (.array (.uint 32))
+      (((encode (.array (.uint 32)) ⟨[⟨7, by decide⟩], by decide⟩).push 0).push 0)).isNone := by
+  native_decide
+
 end EvmAbi

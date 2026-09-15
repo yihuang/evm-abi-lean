@@ -71,8 +71,9 @@ the historical build order, nodes 1–8):
 * `EvmAbi.Compile.Decode` — the same for the decoder: the component readers
                   (`elemStatic`/`elemDyn`), the chain `cons` and loop `elems`
                   built on them, and the three compound clauses — all proved
-                  against `decodeBAVal` — plus `Reads`, the contract a compiled
-                  decoder satisfies
+                  against the offset walker `decodeBAValFast`, which is what
+                  `@[csimp]` runs for `decodeBAVal` — plus `Reads`, the
+                  contract a compiled decoder satisfies
 * `EvmAbi.HumanReadable` — parser for Solidity-style human-readable ABI
                   signatures into `Ty` and `AbiItem` representations
 

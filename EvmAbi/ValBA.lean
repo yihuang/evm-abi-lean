@@ -88,6 +88,104 @@ end
     TupleValBA.toList (t :: ts) (v, vs) = (ValBA.toList t v, TupleValBA.toList ts vs) := by
   rw [TupleValBA.toList.eq_2]
 
+mutual
+/-- Materialize a specification value with packed payloads: the inverse of
+`ValBA.toList` on the nose.  Only the payload-carrying clauses do anything —
+the numeric ones are the identity and `string` is already packed — which is
+what lets the runtime codec be *defined* as the spec decoder composed with
+this, instead of being a second hand-written walk.
+
+This is a proof- and definition-side function, not a runtime path: the
+`@[csimp]` swap on `decodeBAVal` means no caller ever walks it. -/
+def ValBA.ofList : (t : Ty) → t.Val → ValBA t
+  | uint m, ⟨n, h⟩ => ⟨Binary.UInt256.ofNat n, by
+      rw [Binary.UInt256.toNat_ofNat, Nat.mod_eq_of_lt]
+      · exact h
+      · exact Nat.lt_of_lt_of_le h
+          (Nat.pow_le_pow_right (by omega) (by simp [Width.bits]; omega))⟩
+  | int m, ⟨i, h⟩ => ⟨i, h⟩
+  | .bool, b => b
+  | address, ⟨bs, h⟩ => ⟨bs.toByteArray, by rw [List.size_toByteArray]; exact h⟩
+  | bytesN m, ⟨bs, h⟩ => ⟨bs.toByteArray, by rw [List.size_toByteArray]; exact h⟩
+  | bytes, ⟨bs, h⟩ => ⟨bs.toByteArray, by rw [List.size_toByteArray]; exact h⟩
+  | string, s => s
+  | array t, ⟨vs, h⟩ => ⟨vs.map (ValBA.ofList t), by simpa using h⟩
+  | fixedArray t n _, ⟨vs, h⟩ => ⟨vs.map (ValBA.ofList t), by simpa using h⟩
+  | tuple head tail, (v, vs) => (ValBA.ofList head v, TupleValBA.ofList tail vs)
+termination_by t => (sizeOf t, 0)
+
+/-- Tuple values materialize componentwise. -/
+def TupleValBA.ofList : (ts : List Ty) → TupleVal ts → TupleValBA ts
+  | [], _ => ()
+  | t :: ts, (v, vs) => (ValBA.ofList t v, TupleValBA.ofList ts vs)
+termination_by ts => (sizeOf ts, 1)
+end
+
+/-- A `List.map` whose function is pointwise the identity is the identity —
+the `ofList` roundtrip applied elementwise. -/
+private theorem map_eq_self_of {α : Type} {f : α → α} (h : ∀ a, f a = a) :
+    ∀ l : List α, l.map f = l
+  | [] => rfl
+  | a :: l => by simp [h a, map_eq_self_of h l]
+
+mutual
+/-- **`ofList` is a section of `toList`**: materializing a spec value and
+denoting it back gives the same value.  This is the half of the roundtrip the
+`@[csimp]` swap needs — the other half is `toList_injective` below. -/
+theorem ValBA.toList_ofList (t : Ty) (v : t.Val) :
+    ValBA.toList t (ValBA.ofList t v) = v := by
+  cases t with
+  | uint m =>
+      obtain ⟨n, h⟩ := v
+      refine Subtype.ext ?_
+      rw [ValBA.ofList.eq_1, ValBA.toList.eq_1]
+      show (Binary.UInt256.ofNat n).toNat = n
+      rw [Binary.UInt256.toNat_ofNat, Nat.mod_eq_of_lt]
+      exact Nat.lt_of_lt_of_le h
+        (Nat.pow_le_pow_right (by omega) (by simp [Width.bits]; omega))
+  | int m =>
+      obtain ⟨i, h⟩ := v
+      rw [ValBA.ofList.eq_2, ValBA.toList.eq_2]
+  | bool => rw [ValBA.ofList.eq_3, ValBA.toList.eq_3]
+  | address =>
+      obtain ⟨bs, h⟩ := v
+      grind [ValBA.ofList, ValBA.toList, List.data_toByteArray, List.size_toByteArray,
+        Binary.ByteArray.size_eq_toList_length]
+  | bytesN m =>
+      obtain ⟨bs, h⟩ := v
+      grind [ValBA.ofList, ValBA.toList, List.data_toByteArray, List.size_toByteArray,
+        Binary.ByteArray.size_eq_toList_length]
+  | bytes =>
+      obtain ⟨bs, h⟩ := v
+      grind [ValBA.ofList, ValBA.toList, List.data_toByteArray, List.size_toByteArray,
+        Binary.ByteArray.size_eq_toList_length]
+  | string => grind [ValBA.ofList, ValBA.toList]
+  | array t =>
+      obtain ⟨vs, h⟩ := v
+      refine Subtype.ext ?_
+      simp only [ValBA.ofList.eq_8, ValBA.toList.eq_8, List.map_map]
+      exact map_eq_self_of (fun v => ValBA.toList_ofList t v) vs
+  | fixedArray t n _ =>
+      obtain ⟨vs, h⟩ := v
+      refine Subtype.ext ?_
+      simp only [ValBA.ofList.eq_9, ValBA.toList.eq_9, List.map_map]
+      exact map_eq_self_of (fun v => ValBA.toList_ofList t v) vs
+  | tuple head tail =>
+      obtain ⟨v', vs⟩ := v
+      rw [ValBA.ofList.eq_10, ValBA.toList.eq_10, ValBA.toList_ofList head v',
+        TupleValBA.toList_ofList tail vs]
+termination_by (sizeOf t, 0)
+
+/-- …and componentwise for tuples. -/
+theorem TupleValBA.toList_ofList : (ts : List Ty) → (vs : TupleVal ts) →
+    TupleValBA.toList ts (TupleValBA.ofList ts vs) = vs
+  | [], vs => by cases vs; rw [TupleValBA.ofList.eq_1, TupleValBA.toList.eq_1]
+  | t :: ts, (v, vs) => by
+      rw [TupleValBA.ofList.eq_2, TupleValBA.toList_cons, ValBA.toList_ofList t v,
+        TupleValBA.toList_ofList ts vs]
+termination_by ts => (sizeOf ts, 1)
+end
+
 /-! ## injectivity
 
 The two families carry the same information: the clauses differ only in the

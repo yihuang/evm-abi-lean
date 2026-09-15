@@ -464,7 +464,7 @@ private def emitDecoder (root : Name) (trace : Bool) (t : Ty) (tyId : Ident) (de
       fun ba => $readId ba 0))
     elabCommand (← `(theorem $(mkIdent (root ++ `decode_eq)) :
       ∀ (ba : ByteArray), $preId ba = EvmAbi.Codec.decode $tyId ba :=
-        fun ba => $readThmId ba 0))
+        fun ba => EvmAbi.Compile.Decode.reads_decode $readThmId ba))
     elabCommand (← `(def $canId : ByteArray → Bool := fun ba => ($decId ba).isSome))
     elabCommand (← `(theorem $(mkIdent (root ++ `isCanonical_eq)) :
       ∀ (ba : ByteArray), $canId ba = true ↔ EvmAbi.Codec.IsCanonical $tyId ba := by
