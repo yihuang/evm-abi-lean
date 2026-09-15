@@ -375,22 +375,23 @@ end Builder
 
 /-! ## Get2: the dual-cursor reader -/
 
-namespace Get2
-
-/-- The result of a `Get2` run: the decoded value together with the
-advanced head and tail cursors and the new expected tail frontier. -/
+/-- The result of a dual-cursor run: the decoded value, the advanced head and
+tail cursors, and the new expected tail frontier.  `C` is how a cursor is
+represented — `Get2` carries `List UInt8` suffixes, `GetBA` offsets into a
+shared `ByteArray` — so both readers share these four fields. -/
 @[ext]
-structure Result (α : Type) where
+structure Cursor.Result (C : Type) (α : Type) where
   /-- The decoded value. -/
   val : α
   /-- Remaining head cursor. -/
-  head : List UInt8
+  head : C
   /-- Remaining tail cursor. -/
-  tails : List UInt8
+  tails : C
   /-- New expected tail frontier. -/
   frontier : Nat
 
-end Get2
+/-- The `Get2` result: cursors are `List UInt8` suffixes. -/
+abbrev Get2.Result (α : Type) := Cursor.Result (List UInt8) α
 
 /-- A dual-cursor prefix reader: consumes from a *head cursor* (the head
 section of a canonical layout) and a *tail cursor* (the tails), threading
@@ -431,17 +432,8 @@ end Get2
 
 namespace GetBA
 
-/-- The result of a `GetBA` run: the value, the advanced cursor *offsets*,
-and the new expected tail frontier. -/
-structure Result (α : Type) where
-  /-- The decoded value. -/
-  val : α
-  /-- Remaining head cursor, as an offset. -/
-  head : Nat
-  /-- Remaining tail cursor, as an offset. -/
-  tails : Nat
-  /-- New expected tail frontier. -/
-  frontier : Nat
+/-- The `GetBA` result: cursors are offsets into the shared buffer. -/
+abbrev Result (α : Type) := Cursor.Result Nat α
 
 /-- The offsets read as the sub-lists they stand for — the translation the
 agreement lemmas are stated over. -/
