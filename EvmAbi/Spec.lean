@@ -280,6 +280,15 @@ theorem wf_head_partOf_dynamic {t : Ty} (v : t.Val) (hs : t.isStatic = false)
   rw [partOf_dynamic t v hs]
   exact ⟨⟨0, rfl⟩, by simpa [Aligned, encode] using hal⟩
 
+/-- Either way, a component's part is well-formed.  Taking the alignment as a
+hypothesis rather than calling `encode_length_aligned` keeps this outside the
+mutual block below. -/
+theorem wf_head_partOf {t : Ty} (v : t.Val) (hal : Aligned (encode t v).length) :
+    32 ∣ (partOf t v).head.toList.length ∧ 32 ∣ (partOf t v).tail.toList.length := by
+  by_cases hs : t.isStatic
+  · exact wf_head_partOf_static v hs
+  · exact wf_head_partOf_dynamic v (by simpa using hs) hal
+
 /- Every encoding is 32-byte aligned; equivalently every part list produced
 by `partOf`/`partsOfTuple` is well-formed.  The three theorems are mutual:
 alignment of a compound encoding reduces to well-formedness of its part
@@ -313,12 +322,7 @@ theorem encode_length_aligned (t : Ty) (v : t.Val) :
         exact dvd_length_encodeParts (wf_map_partOf t vs)
     | tuple head tail =>
         obtain ⟨v, vs⟩ := v
-        have hpart : 32 ∣ (partOf head v).head.toList.length ∧
-            32 ∣ (partOf head v).tail.toList.length := by
-          by_cases hs : head.isStatic
-          · exact wf_head_partOf_static v hs
-          · have hsf : head.isStatic = false := by simpa using hs
-            exact wf_head_partOf_dynamic v hsf (encode_length_aligned head v)
+        have hpart := wf_head_partOf v (encode_length_aligned head v)
         simp only [encode, put]
         exact dvd_length_encodeParts (wf_cons hpart (wf_partsOfTuple tail vs))
 termination_by 4 * sizeOf t
@@ -333,10 +337,7 @@ theorem wf_map_partOf (t : Ty) (vs : List t.Val) :
   | cons w ws ih =>
       rw [List.map_cons]
       apply wf_cons
-      · by_cases hs : t.isStatic
-        · exact wf_head_partOf_static w hs
-        · have hsf : t.isStatic = false := by simpa using hs
-          exact wf_head_partOf_dynamic w hsf (encode_length_aligned t w)
+      · exact wf_head_partOf w (encode_length_aligned t w)
       · exact ih
 termination_by 4 * sizeOf t + 1
 
@@ -349,10 +350,7 @@ theorem wf_partsOfTuple : (ts : List Ty) → (vs : TupleVal ts) →
   | t :: ts, (v, vs) => by
       simp only [partsOfTuple]
       apply wf_cons
-      · by_cases hs : t.isStatic
-        · exact wf_head_partOf_static v hs
-        · have hsf : t.isStatic = false := by simpa using hs
-          exact wf_head_partOf_dynamic v hsf (encode_length_aligned t v)
+      · exact wf_head_partOf v (encode_length_aligned t v)
       · exact wf_partsOfTuple ts vs
 termination_by ts => 4 * sizeOf ts + 2
 end
