@@ -1,18 +1,21 @@
 name: Perf
 
-# Two views of the same question, "did this commit move the encoder", because
-# neither answers it alone.
+# Two jobs, because neither answers "did this commit move the encoder" alone.
 #
-# `refcount` is exact: Lean's ownership inference reacts to the shape of the
-# types a function scrutinises, not only to its own source, so a `Ty` change can
-# add a `lean_dec` to a per-element walker with the body untouched.  The count
-# is machine-independent, so it is worth reading on a shared runner.
+# `refcount` counts `lean_inc`/`lean_dec` in the generated C.  Lean's ownership
+# inference reacts to the shape of the types a function scrutinises, not only
+# to its own source, so a `Ty` change can add a `lean_dec` to a per-element
+# walker with the body untouched.  Exact and cheap,
+# but it counts occurrences rather than executions, so it reports.
 #
-# `bench` is what a caller actually pays, and is advisory only.  Row medians
-# drift 10-30% between runs on an idle machine and more on a shared runner, so a
-# threshold on a single pair of runs would invent regressions.  What survives
-# that is building both revisions up front and interleaving them, which is what
-# the harness does.
+# `bench` measures `BenchRegress.lean`, one row per `encodeFast` arm, against
+# the merge base.  Instruction counts under callgrind are deterministic, so
+# they carry the threshold and this is the job that fails; wall clock runs
+# alongside because instructions are not time, and is advisory.
+#
+# Both rows and scripts live here.  They used to come from the cross-language
+# harness, whose rows cover neither `address` nor several encoder arms, so a
+# regression in one of them was invisible.
 #
 # A verdict never blocks the merge; a check that cannot run does.  Swallowing
 # both looks the same from the outside -- green -- and a perf check nobody can
@@ -21,12 +24,6 @@ name: Perf
 on:
   pull_request:
   workflow_dispatch:
-
-env:
-  # Pinned to a commit, not a branch: the harness decides what the numbers mean,
-  # so it should move only when someone bumps this deliberately.
-  HARNESS_REPO: yihuang/evm-abi-benchmarks
-  HARNESS_REF: 39e405c5ffbb8faec7f8a197c64f25f2ed075354
 
 jobs:
   refcount:
@@ -73,55 +70,95 @@ jobs:
 
   bench:
     runs-on: ubuntu-latest
+    env:
+      # `cg_counts.py` also requires an absolute rise, since startup does not
+      # cancel exactly between builds.  A real regression on these rows runs
+      # to three and four figures.
+      THRESHOLD: "0.02"
+      ACK: ${{ contains(github.event.pull_request.labels.*.name, 'perf-ack') }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      # Installs the toolchain, and builds the head the bench then reuses.
       - uses: leanprover/lean-action@v1
         with:
           build-args: EvmAbi
 
-      - uses: actions/checkout@v5
-        with:
-          repository: ${{ env.HARNESS_REPO }}
-          ref: ${{ env.HARNESS_REF }}
-          path: harness
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
 
-      # The Lean bench lives in the harness because it is already keyed
-      # (`BENCH <key> <µs/op> <bytes>`); this repo's Bench.lean prints prose
-      # whose labels repeat across sections and cannot be joined on.  Only the
-      # Lean side is built: for a Lean-vs-Lean comparison the go-ethereum column
-      # cancels, and building it would pull in cgo and secp256k1 for nothing.
-      - name: Compare against the merge base
+      # The base builds this revision's bench, not its own: a merge base older
+      # than a row does not have it, and a pull request free to change both
+      # could otherwise report a change in the instrument as one in the code.
+      - name: Build both benches
+        id: build
         run: |
-          if [ ! -x harness/scripts/bench_ab.py ]; then
-            echo "harness ${HARNESS_REF} has no scripts/bench_ab.py" | tee /tmp/ab.txt
-            exit 0
-          fi
           base=$(git merge-base "origin/${{ github.base_ref || 'main' }}" HEAD)
           echo "merge base: $base"
-          # Checkouts, not revisions: a pull request's head is a merge commit
-          # Lake cannot fetch from the URL in the harness lakefile.
+          ./scripts/bench_ab.py --build "$PWD" /tmp/head
           git worktree add /tmp/base "$base"
-          harness/scripts/bench_ab.py --build /tmp/base /tmp/bench_base
-          harness/scripts/bench_ab.py --build "$PWD" /tmp/bench_head
-          harness/scripts/bench_ab.py /tmp/bench_base /tmp/bench_head --runs 30 \
-            2>/dev/null | tee /tmp/ab.txt
+          ./scripts/bench_ab.py --build /tmp/base /tmp/baseline --bench-from "$PWD" ||
+            { echo "base=failed" >> "$GITHUB_OUTPUT"
+              echo "::warning::the merge base does not build this revision's bench"; }
+
+      - name: Instructions per row
+        id: cg
+        if: steps.build.outputs.base != 'failed'
+        run: |
+          ./scripts/cg_counts.py --snapshot /tmp/baseline /tmp/before.json
+          ./scripts/cg_counts.py --snapshot /tmp/head /tmp/after.json
+          # Redirect rather than pipe: the default shell has no `pipefail`, so
+          # `| tee` would report tee's status and the verdict would read clean.
+          if ./scripts/cg_counts.py --diff /tmp/before.json /tmp/after.json \
+               --threshold "$THRESHOLD" > /tmp/cg.txt; then
+            echo "moved=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "moved=yes" >> "$GITHUB_OUTPUT"
+          fi
+          cat /tmp/cg.txt
+
+      # Advisory: instructions are not time, and a row the gate flagged wants
+      # an answer in what a caller actually pays.
+      - name: Wall clock
+        if: always() && steps.build.outputs.base != 'failed'
+        run: ./scripts/bench_ab.py /tmp/baseline /tmp/head --runs 15 2>/dev/null
+          | tee /tmp/ab.txt || true
 
       - name: Summary
         if: always()
         run: |
           {
-            echo '## Lean encode/decode vs the merge base'
+            echo '## Instructions per row vs the merge base'
             echo
-            echo 'Both binaries are built first, then run alternately, so drift'
-            echo 'lands on both columns equally.  Read the verdict column, not'
-            echo 'the percentage: overlapping distributions mean the two builds'
-            echo 'produced runs of equal cost and the median gap is sampling.'
+            echo '```'
+            cat /tmp/cg.txt 2>/dev/null || echo '(did not run)'
+            echo '```'
+            echo
+            echo '## Wall clock vs the merge base'
+            echo
+            echo 'One row per process, alternating.  Read the verdict, not the'
+            echo 'percentage.'
             echo
             echo '```'
             cat /tmp/ab.txt 2>/dev/null || echo '(did not run)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verdict
+        if: always()
+        run: |
+          if [ "$ACK" = true ]; then
+            echo "perf-ack is set: a measured rise on this pull request is intended."
+            exit 0
+          fi
+          if [ "${{ steps.build.outputs.base }}" = failed ]; then
+            echo "The merge base could not build this revision's bench, so nothing"
+            echo "was compared.  Label 'perf-ack' if that gap is intended."
+            exit 1
+          fi
+          if [ "${{ steps.cg.outputs.moved }}" = yes ]; then
+            echo "A row gained more than ${THRESHOLD} -- see the job summary."
+            echo "Label 'perf-ack' if that is the price of a win elsewhere."
+            exit 1
+          fi
+          echo "No row gained more than ${THRESHOLD}."
