@@ -8,8 +8,9 @@ import EvmAbi.ValBA
 The runtime codec users run: `encode` (`ValBA` values into a `ByteArray`),
 `decode` / `decodeStrict` (`ByteArray` into `ValBA` values), and
 `IsCanonical`.  The list-based specification codec lives in
-`EvmAbi.Spec`; every runtime definition here is paired with an agreement
-lemma against it, so nothing is reproved.
+`EvmAbi.Spec`; the runtime decoder *is* a composition of it (see
+`EvmAbi.Codec.ByteArray`), and the encoder is paired with `toList_putBA`, so
+nothing is reproved.
 
 The capstones at the end — `decodeStrict_encode`, `encode_of_decodeStrict`,
 `decodeStrict_eq_some_iff`, `isCanonical_iff` — are the `Spec` capstones

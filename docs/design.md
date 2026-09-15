@@ -280,7 +280,7 @@ were moved to sibling modules: `Spec.Roundtrip`, `Spec.Sound`,
 | **Roundtrip** | `Spec.Roundtrip` | `decode_roundtrip` family — every encoding decodes back, leaving the suffix untouched |
 | **Soundness** | `Spec.Sound` | `decode_sound` family — the decoder only produces encodings |
 | **Strict API** | `Spec.Strict` | `Spec.decodeStrict`, `Spec.IsCanonical`, and the capstones |
-| **Runtime codec** | `Codec` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), the `ValBA` walkers, the private `decodeBA` proof bridge, and the agreement family (`decodeBAVal_eq`, `decodeStrictBAVal_eq`, `decodeStrictBA_eq`) that carries the rows above onto the `ByteArray` side |
+| **Runtime codec** | `Codec` + `Codec.ByteArray` | `encode`/`decode`/`decodeStrict`/`IsCanonical` over `ByteArray` and `ValBA`; the offset primitives (`natAtBA`, `windowList`), `decodeBAVal` *defined* as the `Spec` decoder at the offset (`ValBA.ofList`), the offset walker `@[csimp]` swaps in for it, and the one agreement family (`decodeBAValFast_eq_spec`, `decodeStrictBAVal_eq`) that proves the swap |
 
 **Static delegation** is the first milestone: for static types the frontier
 never moves and the tail cursor is never read, so the roundtrips hold
@@ -439,13 +439,17 @@ appends associate to the left where the generic layout's associate to the
 right.  The two denote the same bytes; they are not the same tree.
 
 The decoder half (`Compile/Decode.lean`) is the mirror image.  `Reads t g`
-says `g` answers what `decodeBAVal t` answers; `elemStatic`/`elemDyn` are the
-two branches of `decodeElemBAVal` with the sub-decoder taken as a parameter,
+says `g` answers what the offset walker `decodeBAValFast t` answers — the
+implementation the runtime `decodeBAVal` (the specification composition) is
+swapped for, and the form its clause equations unfold in; `reads_decode` and
+`runStrict_eq` bridge that to `decode` / `decodeStrict` through the swap lemma.
+`elemStatic`/`elemDyn` are the two branches of `decodeElemBAVal` with the
+sub-decoder taken as a parameter,
 and they are the only place that choice survives compilation — `cons` chains
 one of them onto the reader for the remaining components (so a compiled tuple
 is a nest of combinators with no `Ty` in it) and `elems` runs one per array
 element; `readArray`/`readFixedArray`/`readTuple` are the three recursive
-clauses of `decodeBAVal` with their head sizes taken as *parameters*.  That last point is the decoder's version of the head-size
+clauses of `decodeBAValFast` with their head sizes taken as *parameters*.  That last point is the decoder's version of the head-size
 constant: the emitter passes a numeral and the lemma demands `rfl` against
 `Ty.headSize`, so the constant is checked, not assumed.  `runStrict_eq` then
 lifts a `Reads` to the user's statement about `decodeStrict`.
@@ -690,10 +694,43 @@ and `EvmAbi.Codec` write their runtime walkers against it:
 `chunk` memcpy instead of a per-byte push and never walks a length.
 
 `ValBA.toList` maps every packed value to its `Ty.Val` denotation, and
-the decoder agreement family (`decodeBAVal_eq`, `decodeElemBAVal_eq`, …,
-`decodeStrictBAVal_eq`) says every `ValBA` decode is the corresponding
-`Spec` decode under that map, so the `List` capstones transport by one
-rewrite.  The encoder side is closed too: `toList_putBA` proves `putBA`
+`ValBA.ofList` goes back, so the runtime decoder can be *defined* as the
+`Spec` decoder at the offset (`decodeBAVal`) — the agreement is then the
+definition, and the single family `decodeBAValFast_eq_spec` (with its `GetBA`
+companions) proves the offset walker the compiler runs equal to it.  The same
+shape keeps the `t.Val`-level `decodeStrictBA` on the offset reader: it is
+`Spec.decodeStrict` on the buffer's bytes, with `decodeStrictBAFast` swapped in
+by `@[csimp]`.  The walker has to stay reachable for that last point —
+`decodeStrictBA` is public (the `t.Val` capstones) and is the benchmark's
+baseline, so it gets a fast implementation of its own rather than slicing.
+
+The price is measured and unfavourable on lines: the two hand-written agreement
+families the definition replaces are 193 proof-body lines, the single family
+that replaces them 182, and `ValBA.ofList` — the direction a hand-written
+decoder never needed — another 56.  The merge itself saves 11 lines; the
+increase the file shows is the composition definition's missing direction.  The purchase is drift: `Spec.decode` is now
+the only decoder definition, and no second walk can fall out of step with it by
+hand.  Most clauses of the merged family are a single `grind`: rewriting the
+specification side back to the walker's primitive (`← decodeUintBA_eq`, …) puts
+one discriminant under both matches, and `grind` splits it and reduces both —
+for the packed `uint`/`bytesN` windows, whose walker reads `Option UInt256` /
+`Option ByteArray` against the specification's `Option Nat` /
+`Option (List UInt8)`, that needs the primitive's own definition in the hint
+list so it can meet the bridge's map equality.  What stays explicit is
+`bytes`/`string` (their specification clause is a dependent match on the length
+word, so its scrutinee cannot be rewritten back) and the three compound clauses:
+those are discharged by a sibling's run equality, and the per-component one
+additionally has to `cases` the specification's `(v, n, rest)` triple, because
+`decode_rest`'s hypothesis cannot be instantiated by E-matching from an
+undestructured `decode t buf = some q`.  That reconciliation was 26 lines of
+`decodeElemBA_eq` before this work; the merge moves it, it does not create it.
+
+A cheaper variant was tried and not taken: keep `decodeBA` as a two-line
+`Spec.decode` composition and transport the walker to *it*, as before.  That
+wins back the transport lines, but keeps a proof-only layer standing in for the
+specification — exactly what this work set out to delete — and routes every
+downstream transport through two hops (walker → composition → `Spec.decode`)
+instead of through one definition.  The encoder side is closed too: `toList_putBA` proves `putBA`
 denotes `Spec.put` of the denotation, so the runtime `encode` is byte-for-byte
 the spec encoding of the same value.
 

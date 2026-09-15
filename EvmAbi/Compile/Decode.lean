@@ -5,8 +5,9 @@ import EvmAbi.Compile
 
 The **decoder half of the compiler's target language**, in `namespace
 EvmAbi.Compile.Decode`: readers that a compiled decoder is assembled
-from, each proved once against the generic runtime decoder `decodeBAVal`
-(`EvmAbi.Codec.ByteArray`).
+from, each proved once against the offset walker `decodeBAValFast`
+(`EvmAbi.Codec.ByteArray`) — the implementation `@[csimp]` runs for the
+runtime `decodeBAVal`, which is the specification decoder itself.
 
 The generic decoder is interpretive in exactly the way the encoder was:
 `decodeBAVal` matches on the `Ty` at every value, `decodeElemBAVal` asks
@@ -26,9 +27,10 @@ per array element.
 passes numerals, and the lemmas demand a proof that the numeral is the real
 head size, so nothing is assumed.
 
-`Reads t g` is the contract: `g` answers what `decodeBAVal t` answers.  It
-composes exactly like `Denotes` does on the encoder side, and
-`runStrict_eq` turns it into the user-facing statement about `decodeStrict`.
+`Reads t g` is the contract: `g` answers what the offset walker answers — the
+form its clause equations unfold in, which is what the emitted `rfl` proofs
+need.  `reads_decode` and `runStrict_eq` carry that back to the user-facing
+`decode` / `decodeStrict` through the swap lemma `decodeBAValFast_eq`.
 -/
 
 namespace EvmAbi.Compile.Decode
@@ -39,7 +41,7 @@ open EvmAbi.Codec.ByteArray
 
 /-- A compiled decoder for `t` reads what the generic decoder reads. -/
 def Reads (t : Ty) (g : ByteArray → Nat → Option (ValBA t × Nat)) : Prop :=
-  ∀ ba off, g ba off = decodeBAVal t ba off
+  ∀ ba off, g ba off = decodeBAValFast t ba off
 
 /-- Two `GetBA` programs that run the same are the same. -/
 private theorem getBA_ext {α : Type} {x y : GetBA α} (h : x.run = y.run) : x = y := by
@@ -62,7 +64,7 @@ def readUint (m : Width) (ba : ByteArray) (off : Nat) : Option (ValBA (.uint m) 
   | none => none
 
 theorem reads_uint (m : Width) : Reads (.uint m) (readUint m) := by
-  intro ba off; rw [decodeBAVal.eq_1]; rfl
+  intro ba off; rw [decodeBAValFast.eq_1]; rfl
 
 /-- Read an `intM`. -/
 def readInt (m : Width) (ba : ByteArray) (off : Nat) : Option (ValBA (.int m) × Nat) :=
@@ -73,7 +75,7 @@ def readInt (m : Width) (ba : ByteArray) (off : Nat) : Option (ValBA (.int m) ×
   | none => none
 
 theorem reads_int (m : Width) : Reads (.int m) (readInt m) := by
-  intro ba off; rw [decodeBAVal.eq_2]; rfl
+  intro ba off; rw [decodeBAValFast.eq_2]; rfl
 
 /-- Read a `bool`. -/
 def readBool (ba : ByteArray) (off : Nat) : Option (ValBA .bool × Nat) :=
@@ -82,7 +84,7 @@ def readBool (ba : ByteArray) (off : Nat) : Option (ValBA .bool × Nat) :=
   | none => none
 
 theorem reads_bool : Reads .bool readBool := by
-  intro ba off; rw [decodeBAVal.eq_3]; rfl
+  intro ba off; rw [decodeBAValFast.eq_3]; rfl
 
 /-- Read an `address`. -/
 def readAddress (ba : ByteArray) (off : Nat) : Option (ValBA .address × Nat) :=
@@ -91,7 +93,7 @@ def readAddress (ba : ByteArray) (off : Nat) : Option (ValBA .address × Nat) :=
   | none => none
 
 theorem reads_address : Reads .address readAddress := by
-  intro ba off; rw [decodeBAVal.eq_4]; rfl
+  intro ba off; rw [decodeBAValFast.eq_4]; rfl
 
 /-- Read a `bytesN`. -/
 def readBytesN (m : Width) (ba : ByteArray) (off : Nat) : Option (ValBA (.bytesN m) × Nat) :=
@@ -100,7 +102,7 @@ def readBytesN (m : Width) (ba : ByteArray) (off : Nat) : Option (ValBA (.bytesN
   | none => none
 
 theorem reads_bytesN (m : Width) : Reads (.bytesN m) (readBytesN m) := by
-  intro ba off; rw [decodeBAVal.eq_5]; rfl
+  intro ba off; rw [decodeBAValFast.eq_5]; rfl
 
 /-- A prefix-decoded payload is bounded by its own length word — the bound
 the `bytes` and `string` values carry. -/
@@ -125,7 +127,7 @@ def readBytes (ba : ByteArray) (off : Nat) : Option (ValBA .bytes × Nat) :=
   | none => none
 
 theorem reads_bytes : Reads .bytes readBytes := by
-  intro ba off; rw [decodeBAVal.eq_6]; rfl
+  intro ba off; rw [decodeBAValFast.eq_6]; rfl
 
 /-- Read a `string`. -/
 def readString (ba : ByteArray) (off : Nat) : Option (ValBA .string × Nat) :=
@@ -136,7 +138,7 @@ def readString (ba : ByteArray) (off : Nat) : Option (ValBA .string × Nat) :=
   | none => none
 
 theorem reads_string : Reads .string readString := by
-  intro ba off; rw [decodeBAVal.eq_7]; rfl
+  intro ba off; rw [decodeBAValFast.eq_7]; rfl
 
 /-! ## components
 
@@ -264,7 +266,7 @@ theorem reads_array {t : Ty} {hsz : Nat}
     Reads (.array t) (readArray hsz loop) := by
   subst hh
   intro ba off
-  rw [decodeBAVal.eq_8, readArray]
+  rw [decodeBAValFast.eq_8, readArray]
   simp only [he]
   rfl
 
@@ -282,7 +284,7 @@ theorem reads_fixedArray {t : Ty} {n : Nat} (hn : 0 < n) {hsz : Nat}
     Reads (.fixedArray t n hn) (readFixedArray hn hsz loop) := by
   subst hh
   intro ba off
-  rw [decodeBAVal.eq_9, readFixedArray, he]
+  rw [decodeBAValFast.eq_9, readFixedArray, he]
   rfl
 
 /-- Read a `(T₁, …, Tₙ)`: run the component chain over the two cursors. -/
@@ -298,7 +300,7 @@ theorem reads_tuple {head : Ty} {tail : List Ty} {hss : Nat}
     Reads (.tuple head tail) (readTuple hss k) := by
   subst hh; subst hk
   intro ba off
-  rw [decodeBAVal.eq_10, readTuple]
+  rw [decodeBAValFast.eq_10, readTuple]
   grind [decodeTupleBAVal, GetBA.bind_run, GetBA.pure_run]
 
 /-! ## from reader to the user's decoder -/
@@ -315,8 +317,15 @@ def runStrict {t : Ty} (g : ByteArray → Nat → Option (ValBA t × Nat))
 run strictly *is* `decodeStrict`. -/
 theorem runStrict_eq {t : Ty} {g : ByteArray → Nat → Option (ValBA t × Nat)}
     (hg : Reads t g) (ba : ByteArray) : runStrict g ba = decodeStrict t ba := by
-  rw [runStrict, decodeStrict, decodeStrictBAVal, hg ba 0]
+  rw [runStrict, decodeStrict, decodeStrictBAVal, hg ba 0, ← decodeBAValFast_eq]
   rfl
+
+/-- A compiled reader answers what the user-facing prefix decoder answers:
+`Reads` is stated against the walker, and the walker *is* `decode`'s definition
+(`decodeBAVal` is the specification composition the walker is swapped for). -/
+theorem reads_decode {t : Ty} {g : ByteArray → Nat → Option (ValBA t × Nat)}
+    (hg : Reads t g) (ba : ByteArray) : g ba 0 = decode t ba := by
+  rw [decode, hg ba 0, decodeBAValFast_eq]
 
 /-- The compiled decoder inherits the verified roundtrip: it reads back what
 `encode` wrote, as the very same value. -/
