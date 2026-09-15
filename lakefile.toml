@@ -23,3 +23,9 @@ root = "Bench"
 name = "binary"
 git = "https://github.com/yihuang/lean-binary.git"
 rev = "main"
+
+# The keyed regression rows, one per `encodeFast` arm.  CI diffs these per
+# row against the merge base; `bench` is the exploratory file and prints prose.
+[[lean_exe]]
+name = "bench-regress"
+root = "BenchRegress"

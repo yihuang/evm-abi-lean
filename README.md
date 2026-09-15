@@ -464,6 +464,7 @@ The proof is built in incremental layers, each reusable independently:
 | **15. Compiler** | `Compile.Meta` | `abi_encoder` / `abi_decoder` / `abi_codec` — emit a codec specialised to one type, with its correctness theorems, at elaboration time |
 | **Tests** | `Tests` | Spec-vector encoding checks (sam, f, g), roundtrip regression, positive/negative canonical validation tests, packed encoding checks, builder and executable-encoder checks, offset-decoder checks (including degenerate and truncated buffers), human-readable ABI tests, compiled-codec checks against the same spec vectors, and its negative vectors |
 | **Bench** | `Bench` | `lake build bench` — `Spec.encode` vs `Spec.encodeByteArray` vs runtime `encode`, `Spec.decodeStrict` vs `decodeStrict`, compiled vs generic `encode`/`decodeStrict`, and the word codec against an unboxed-`Nat` and a four-limb ceiling |
+| **BenchRegress** | `BenchRegress` | `lake build bench-regress` — one keyed `BENCH <key> <ns/op> <bytes>` row per `encodeFast` arm; CI diffs these per row against the merge base under callgrind |
 
 The separation of the **head/tail combinator (Parts)** from the **type-indexed codec (Spec)** is the key architectural decision:
 the combinatorial heart of the ABI offset arithmetic is proved once on `List Part`,
@@ -508,7 +509,8 @@ lake build Tests   # compile the test module
 The benchmark is not in `defaultTargets`, so CI does not pay for it:
 
 ```bash
-lake build bench && ./.lake/build/bin/bench
+lake build bench && ./.lake/build/bin/bench                  # exploratory, prose
+lake build bench-regress && ./.lake/build/bin/bench-regress  # keyed rows, ns/op
 ```
 
 See [docs/performance.md](docs/performance.md) for what it measures and the
