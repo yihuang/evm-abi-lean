@@ -308,6 +308,48 @@ theorem decodeBytesNBAVal_eq (n : Nat) (ba : ByteArray) (off : Nat) :
   rw [decodeBytesNBAVal, decodeBytesNBA, decodeBytesN_window_eq]
   split <;> simp [windowBA_data_toList]
 
+/-- `address` as a packed payload: the twelve leading bytes of the word must
+be zero, and the address is the twenty that follow.
+
+The list decoder reads the word into a `Nat` and re-expands it with
+`encodeBEU 20`, to recover bytes the buffer already held.
+`decodeAddress_eq_window` says both of its steps are statements about those
+bytes, so this is a zero check and one `extract`. -/
+def decodeAddressBAVal (ba : ByteArray) (off : Nat) : Option ByteArray :=
+  if off + 32 ≤ ba.size ∧ allZerosBA ba off 12 then
+    some (windowBA ba (off + 12) 20)
+  else none
+
+/-- The spec's `decodeAddress` on the clamped window is the packed, list-free
+condition: the word is present (`off + 32 ≤ ba.size`) and its first twelve
+bytes are zero. -/
+private theorem decodeAddressBA_window_eq (ba : ByteArray) (off : Nat) :
+    decodeAddressBA ba off =
+      if off + 32 ≤ ba.size ∧ allZerosBA ba off 12 then
+        some (windowList ba (off + 12) 20)
+      else none := by
+  have hlen : 32 ≤ (ba.data.toList.drop off).length ↔ off + 32 ≤ ba.size := by
+    rw [List.length_drop, ← Binary.ByteArray.size_eq_toList_length]; omega
+  have hpre : ((ba.data.toList.drop off).take 32).take 12 = windowList ba off 12 := by
+    rw [windowList_eq, List.take_take]; simp
+  have hpay : ((ba.data.toList.drop off).take 32).drop 12
+      = windowList ba (off + 12) 20 := by
+    rw [windowList_eq, List.drop_take, drop_drop_ba]
+  rw [decodeAddressBA_eq, decodeAddress_eq_window, hpre, hpay]
+  by_cases h1 : off + 32 ≤ ba.size
+  · by_cases h2 : allZerosBA ba off 12 = true
+    · rw [if_pos ⟨hlen.mpr h1, (allZerosBA_eq _ _ _).mp h2⟩, if_pos ⟨h1, h2⟩]
+    · rw [if_neg (fun h => h2 ((allZerosBA_eq _ _ _).mpr h.2)),
+        if_neg (fun h => h2 h.2)]
+  · rw [if_neg (fun h => h1 (hlen.mp h.1)), if_neg (fun h => h1 h.1)]
+
+/-- The packed `address` payload denotes the list one. -/
+theorem decodeAddressBAVal_eq (ba : ByteArray) (off : Nat) :
+    (decodeAddressBAVal ba off).map (fun w => w.data.toList) =
+      decodeAddressBA ba off := by
+  rw [decodeAddressBAVal, decodeAddressBA_window_eq]
+  split <;> simp [windowBA_data_toList]
+
 /-! ## the decoder
 
 Clause for clause the same walk as `EvmAbi.Codec.decode`, reading at
@@ -433,10 +475,8 @@ def decodeBAVal : (t : Ty) → ByteArray → Nat → Option (ValBA t × Nat)
   | .bool, ba, off => match decodeBoolBA ba off with
       | some b => some (b, 32)
       | none => none
-  | .address, ba, off => match decodeAddressBA ba off with
-      | some bs => if h : bs.length = 20 then
-          some (⟨bs.toByteArray, by rw [Binary.ByteArray.size_eq_toList_length]; simpa using h⟩, 32)
-        else none
+  | .address, ba, off => match decodeAddressBAVal ba off with
+      | some bs => if h : bs.size = 20 then some (⟨bs, h⟩, 32) else none
       | none => none
   | .bytesN m, ba, off => match decodeBytesNBAVal m.bytes ba off with
       | some bs => if h : bs.size = m.bytes then some (⟨bs, h⟩, 32) else none
@@ -927,7 +967,8 @@ theorem decodeBAVal_eq (t : Ty) (ba : ByteArray) (off : Nat) :
       grind [ValBA.toList]
   | address =>
       simp only [decodeBAVal, decodeBA]
-      grind [ValBA.toList, List.toList_data_toByteArray, Binary.ByteArray.size_eq_toList_length]
+      unfold ValBA.toList
+      grind [decodeAddressBAVal_eq ba off, Binary.ByteArray.size_eq_toList_length]
   | bytesN m =>
       simp only [decodeBAVal, decodeBA]
       unfold ValBA.toList

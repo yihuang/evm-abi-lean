@@ -142,7 +142,11 @@ def emitPrim (t : Ty) (acc : ByteArray) (v : ValBA t) : ByteArray :=
   | .int _, ⟨i, _⟩ =>
       emitUintWord acc (if 0 ≤ i then i.toNat else 2 ^ 256 - (-i).toNat)
   | .bool, b => emitUintWord acc (if b then 1 else 0)
-  | .address, ⟨bs, _⟩ => emitUintWord acc (decodeBEU bs.data.toList)
+  -- Twelve zero bytes and then the address, by `encodeAddress_eq`.  Going
+  -- through the value instead (`emitUintWord acc (decodeBEU bs.data.toList)`)
+  -- builds a 20-element list per address and, for a real 160-bit address,
+  -- a bignum on top: it measured 56 -> 254 ns/op on `(address, uint256)`.
+  | .address, ⟨bs, _⟩ => Chunks.pushZeros32 acc 12 ++ bs
   | .bytesN _, ⟨bs, _⟩ =>
       if bs.size == 32 then acc ++ bs else Chunks.pushZeros32 (acc ++ bs) (32 - bs.size)
   | _, _ => acc
@@ -219,8 +223,11 @@ theorem data_toList_emitVal :
   | .bool, ht, acc, b => by
       grind [emitVal, emitPrim, data_toList_emitUintWord, putBA, toList_putBool, encodeBool]
   | .address, ht, acc, ⟨bs, hbs⟩ => by
-      grind [emitVal, emitPrim, data_toList_emitUintWord, putBA, toList_putAddressBA,
-        encodeAddress]
+      have h20 : bs.data.toList.length = 20 := by
+        rw [← Binary.ByteArray.size_eq_toList_length]; exact hbs
+      rw [emitVal, emitPrim, putBA, toList_putAddressBA, ByteArray.toList_data_append,
+        Chunks.data_toList_pushZeros32 _ (by omega), encodeAddress_eq _ h20,
+        List.append_assoc]
   | .bytesN _, ht, acc, ⟨bs, hbs⟩ => by
       rw [emitVal, emitPrim, putBA, toList_putBytesNBA]
       split

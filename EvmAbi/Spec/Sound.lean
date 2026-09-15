@@ -150,7 +150,7 @@ theorem decode_address_sound (v : Ty.Val .address) (buf rest : List UInt8) (k : 
         obtain ⟨n, hdu, hn, hx'⟩ := decodeAddress_spec hda
         have hdecode : decodeBEU x = n := by
           rw [hx']
-          have hp : 2 ^ 160 = 256 ^ 20 := by native_decide
+          have hp : 2 ^ 160 = 256 ^ 20 := by decide
           exact Binary.decodeBEU_encodeBEU (by rwa [hp] at hn)
         refine ⟨?_, ?_⟩
         · simp only [encode, put, toList_putAddress, encodeAddress]

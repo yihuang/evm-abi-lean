@@ -922,6 +922,27 @@ example : (decodeStrict (.uint 1) (encode (.uint 1) ⟨200, by decide⟩)) =
 example : (decodeStrict .bytes (encode .bytes ⟨"hi".toUTF8, by native_decide⟩)) =
     some ⟨"hi".toUTF8, by native_decide⟩ := by native_decide
 
+-- `address` moves its 20 bytes rather than its value in both directions
+-- (twelve zero bytes, then the address), so the round trip is exercised at
+-- full width, where the old path built a bignum.
+example : (decodeStrict .address
+    (encode .address ⟨((List.range 20).map (fun i => UInt8.ofNat (i + 1))).toByteArray,
+      by decide⟩)) =
+    some ⟨((List.range 20).map (fun i => UInt8.ofNat (i + 1))).toByteArray, by decide⟩ := by
+  native_decide
+
+-- The guard is the twelve leading bytes being zero, which is what
+-- `decodeAddress_eq_window` proves the `< 2 ^ 160` bound to be.  A word with
+-- the byte immediately above the address set is non-canonical and rejected —
+-- the tightest case, since byte 12 onwards is payload and may be anything.
+example : decodeStrict .address
+    (List.replicate 11 (0 : UInt8) ++ [1] ++ List.replicate 20 7).toByteArray
+      = none := by native_decide
+
+example : (decodeStrict .address
+    ((List.replicate 12 (0 : UInt8) ++ List.replicate 20 0xff).toByteArray)).isSome := by
+  native_decide
+
 example : IsCanonical .bool (encode .bool true) := by native_decide
 
 example : (encode .bool true).data.toList = Spec.encode .bool true := by

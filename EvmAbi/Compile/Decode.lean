@@ -86,10 +86,8 @@ theorem reads_bool : Reads .bool readBool := by
 
 /-- Read an `address`. -/
 def readAddress (ba : ByteArray) (off : Nat) : Option (ValBA .address × Nat) :=
-  match decodeAddressBA ba off with
-  | some bs => if h : bs.length = 20 then
-      some (⟨bs.toByteArray, by rw [Binary.ByteArray.size_eq_toList_length]; simpa using h⟩, 32)
-    else none
+  match decodeAddressBAVal ba off with
+  | some bs => if h : bs.size = 20 then some (⟨bs, h⟩, 32) else none
   | none => none
 
 theorem reads_address : Reads .address readAddress := by
