@@ -71,10 +71,9 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     env:
-      # The measurement is deterministic, but a commit that changes codegen
-      # shifts untouched rows slightly -- up to 0.67% observed.  2% clears
-      # that and still catches what matters: a real regression on these rows
-      # runs to three and four figures.
+      # `cg_counts.py` also requires an absolute rise, since startup does not
+      # cancel exactly between builds.  A real regression on these rows runs
+      # to three and four figures.
       THRESHOLD: "0.02"
       ACK: ${{ contains(github.event.pull_request.labels.*.name, 'perf-ack') }}
     steps:

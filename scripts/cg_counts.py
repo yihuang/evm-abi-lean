@@ -76,8 +76,14 @@ def snapshot(binary: Path) -> dict:
     return out
 
 
+# Startup is subtracted from every row but does not cancel exactly between
+# builds -- 1,003 instructions in one run -- and that residual is noise on a
+# 13M-instruction row, 2% on a 50K one.  Rows clear both counts.
+FLOOR = 10_000
+
+
 def diff(before: dict, after: dict, threshold: float) -> int:
-    rows, gone, new = [], [], []
+    rows, new = [], []
     for key, now in after.items():
         if key == "__startup__":
             continue
@@ -89,11 +95,12 @@ def diff(before: dict, after: dict, threshold: float) -> int:
     gone = [k for k in before if k not in after and k != "__startup__"]
 
     rows.sort(reverse=True)
-    worse = [r for r in rows if r[0] > threshold]
+    over = lambda d, was, now: d > threshold and now - was > FLOOR
+    worse = [r for r in rows if over(r[0], r[2], r[3])]
 
     print(f"{'delta':>8}  {'before':>13}  {'after':>13}  row")
     for d, key, was, now in rows:
-        mark = "  <-- over threshold" if d > threshold else ""
+        mark = "  <-- over threshold" if over(d, was, now) else ""
         print(f"{d:>+7.2%}  {was:>13,}  {now:>13,}  {key}{mark}")
     if new:
         print(f"\nnew rows, nothing to compare against: {', '.join(sorted(new))}")
@@ -102,14 +109,16 @@ def diff(before: dict, after: dict, threshold: float) -> int:
 
     startup = after.get("__startup__", 0) - before.get("__startup__", 0)
     if startup:
-        print(f"\nprocess start and module init moved {startup:+,} instructions "
-              f"(subtracted from every row above)")
+        print(f"\nprocess start and module init moved {startup:+,} instructions. "
+              f"It is subtracted from every row, so what it does not cancel "
+              f"lands on all of them; rows must clear {FLOOR:,} as well as "
+              f"{threshold:.0%} to count.")
 
     if worse:
-        print(f"\n{len(worse)} row(s) execute more than {threshold:.0%} more "
-              f"instructions than the base.")
+        print(f"\n{len(worse)} row(s) execute more than {threshold:.0%} and "
+              f"{FLOOR:,} more instructions than the base.")
         return 1
-    print(f"\nNo row gained more than {threshold:.0%}.")
+    print(f"\nNo row gained more than {threshold:.0%} and {FLOOR:,}.")
     return 0
 
 
